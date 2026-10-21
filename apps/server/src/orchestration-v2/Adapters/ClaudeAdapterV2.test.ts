@@ -2460,17 +2460,26 @@ describe("ClaudeAdapterV2 native session identity", () => {
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const path = yield* Path.Path;
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "t3-claude-v2-session-identity-",
         });
+        if (importedNativeThreadId !== undefined) {
+          const projectDir = path.join(attachmentsDir, "projects", "-workspace");
+          yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            path.join(projectDir, `${importedNativeThreadId}.jsonl`),
+            `{"type":"user","message":{"role":"user","content":"hello"},"sessionId":"${importedNativeThreadId}"}\n`,
+          );
+        }
         const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
         const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
           settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: {},
+          environment: { CLAUDE_CONFIG_DIR: attachmentsDir },
           attachmentsDir,
           fileSystem,
-          path: yield* Path.Path,
+          path,
           crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
