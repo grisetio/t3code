@@ -1075,6 +1075,7 @@ export function EnvironmentProviderSettings({
         environmentLabel={environmentLabel}
         sources={settings.usageLimitSources}
         cursorKeychainUsageEnabled={settings.cursorKeychainUsageEnabled}
+        codexAccountUsageEnabled={settings.codexAccountUsageEnabled}
         readOnly={readOnly}
       />
 

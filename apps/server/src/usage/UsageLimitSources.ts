@@ -19,10 +19,12 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
+import { codexAccountUsageConfig, readCodexAccountUsage } from "./codexAccountUsage.ts";
 
 export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
@@ -51,6 +53,7 @@ export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
   const settingsService = yield* Settings.ServerSettingsService;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
@@ -97,7 +100,14 @@ export const make = Effect.gen(function* () {
       ([id, config]) => readSource(id as UsageLimitSourceId, config),
       { concurrency: 4 },
     );
-    yield* publish(snapshots);
+    const codex = settings?.codexAccountUsageEnabled
+      ? [
+          yield* readCodexAccountUsage(codexAccountUsageConfig(settings)).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+        ]
+      : [];
+    yield* publish([...snapshots, ...codex]);
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
 
   // Shares the refresh lock so a stale in-flight read cannot overwrite a redemption.
@@ -121,7 +131,11 @@ export const make = Effect.gen(function* () {
   }, refreshLock.withPermits(1));
 
   yield* settingsService.streamChanges.pipe(
-    Stream.map((settings) => settings.usageLimitSources),
+    Stream.map((settings) => [
+      settings.usageLimitSources,
+      settings.codexAccountUsageEnabled,
+      codexAccountUsageConfig(settings),
+    ]),
     Stream.changes,
     Stream.runForEach(() => refresh),
     Effect.forkScoped,
