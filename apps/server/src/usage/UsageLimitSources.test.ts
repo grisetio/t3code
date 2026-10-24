@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   ServerConfigStreamEvent,
@@ -88,6 +89,7 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         HttpClient.make(() => Effect.die("Unexpected network request")),
       ),
       NodeCrypto.layer,
+      NodeServices.layer,
     ]),
     Effect.scoped,
   ),
@@ -125,6 +127,7 @@ it.effect.each([
             ),
           ),
           NodeCrypto.layer,
+          NodeServices.layer,
         ]),
       );
       yield* sources.streamChanges.pipe(
