@@ -28,7 +28,7 @@ import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-g
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
-import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection, SettingsSidebarContext } from "./components/SettingsSection";
@@ -43,10 +43,6 @@ import { filterSettingsSections } from "./settings-search";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 
 export function SettingsRouteScreen() {
-  const surface = useWorkspaceSurface();
-  const deviceType = useDeviceType();
-  const compactTabs = useCompactWorkspaceTabs();
-  const workspace = useWorkspaceTabs();
   const { layout } = useAdaptiveWorkspaceLayout();
   const inSidebar = use(NativePrimaryColumnContext) !== null && layout.usesSplitView;
   // The page open beside the list: the route right above the Settings tab's route. While
@@ -58,6 +54,19 @@ export function SettingsRouteScreen() {
       ? rememberedSettingsPage(currentWorkspaceSelections())
       : (state.routes[list + 1]?.name ?? null);
   });
+  return <SettingsListScreen sidebar={inSidebar} selected={selected} />;
+}
+
+export function SettingsListScreen(props: {
+  readonly sidebar: boolean;
+  readonly selected: string | null;
+}) {
+  const surface = useWorkspaceSurface();
+  const deviceType = useDeviceType();
+  const compactTabs = useCompactWorkspaceTabs();
+  const workspace = useWorkspaceTabs();
+  const inSidebar = props.sidebar;
+  const selected = props.selected;
   const sidebar = useMemo(() => (inSidebar ? { selected } : null), [inSidebar, selected]);
   const content = hasCloudPublicConfig() ? (
     <ConfiguredSettingsRouteScreen />
@@ -73,6 +82,7 @@ export function SettingsRouteScreen() {
           {Platform.OS === "android" ? (
             <SettingsScreen
               title="Settings"
+              workspaceRoot={inSidebar}
               trailing={<AndroidSettingsEnvironmentFilter />}
               search={
                 workspace
