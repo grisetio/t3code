@@ -377,6 +377,7 @@ const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"
   "run_interrupt_request",
   "run_interrupt_result",
   "secret_request",
+  "elevation_request",
   "subagent",
 ]);
 

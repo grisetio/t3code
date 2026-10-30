@@ -23,6 +23,7 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/integrations"
   | "/settings/scheduled-tasks"
+  | "/settings/device-approval"
   | "/settings/source-control"
   | "/settings/storage"
   | "/settings/connections"
@@ -55,6 +56,7 @@ export interface SettingsSearchItem {
   readonly localEnvironmentOnly?: boolean;
   readonly wslAvailableOnly?: boolean;
   readonly managedTunnelOnly?: boolean;
+  readonly deviceApprovalOnly?: boolean;
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
 }
@@ -69,6 +71,7 @@ export interface SettingsSearchAvailability {
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
   readonly managedTunnelActive?: boolean;
+  readonly hasDeviceApprovalEnvironment?: boolean;
 }
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
@@ -81,6 +84,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/providers": "Providers",
   "/settings/integrations": "Integrations",
   "/settings/scheduled-tasks": "Scheduled Tasks",
+  "/settings/device-approval": "Device Approval",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
@@ -608,6 +612,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   ...KEYBINDING_SEARCH_ITEMS,
   {
+    id: "device-approval",
+    title: "Device approval",
+    to: "/settings/device-approval",
+    searchTerms: ["sudo root phone fingerprint approve pam elevation administrator password"],
+    deviceApprovalOnly: true,
+  },
+  {
     id: "snap-shot-enabled",
     title: "SnapShots",
     searchTerms: ["window capture screenshot"],
@@ -1026,6 +1037,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
   "/settings/scheduled-tasks": null,
+  "/settings/device-approval": null,
   "/settings/archived": "project-defaults",
 };
 
@@ -1139,7 +1151,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
-      (!item.managedTunnelOnly || availability.managedTunnelActive === true),
+      (!item.managedTunnelOnly || availability.managedTunnelActive === true) &&
+      (!item.deviceApprovalOnly || availability.hasDeviceApprovalEnvironment === true),
   );
 }
 

@@ -46,6 +46,8 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/appearance",
   "/settings/snap-shot",
   "/settings/connections",
+  // Lists every machine that offers it, so there is no scope to pick.
+  "/settings/device-approval",
 ]);
 
 interface SettingsScopeMenuProps {

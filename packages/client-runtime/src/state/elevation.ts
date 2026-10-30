@@ -26,7 +26,9 @@ export interface PendingElevationRequest {
 
 const EMPTY_PENDING: readonly PendingElevationRequest[] = [];
 
-export function environmentSupportsDeviceApproval(config: ServerConfig | null | undefined) {
+export function environmentSupportsDeviceApproval(
+  config: Pick<ServerConfig, "environment"> | null | undefined,
+) {
   return config?.environment.capabilities.deviceApproval === true;
 }
 
