@@ -54,6 +54,7 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ElevationService from "../elevation/ElevationService.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -367,6 +368,9 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
+  ElevationService.layer.pipe(
+    Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerOrchestratorProvided)),
+  ),
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(
       Layer.mergeAll(

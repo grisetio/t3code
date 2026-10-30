@@ -212,6 +212,7 @@ it.effect(
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           listActiveSubagentThreadIds: () => Effect.die("unused listActiveSubagentThreadIds"),
+          listLiveRunThreadIds: () => Effect.die("unused listLiveRunThreadIds"),
           readShellSnapshot: () => Effect.die("unused readShellSnapshot"),
           getThreadShell: () => Effect.die("unused getThreadShell"),
           getThread: () => Ref.get(projection).pipe(Effect.map((state) => state.thread)),

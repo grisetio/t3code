@@ -428,6 +428,11 @@ export interface ProjectionStoreV2Shape {
     ReadonlyArray<ThreadId>,
     ProjectionStoreV2Error
   >;
+  /** Threads with a run that hasn't finished; device approval matches a sudo to one. */
+  readonly listLiveRunThreadIds: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
   /**
    * Callers that combine the shell with other reads run this inside their own
    * transaction and the returned decode after it commits, so the shared
@@ -6455,6 +6460,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError(shellSnapshotReadError),
     );
 
+    const listLiveRunThreadIds = Effect.fn("ProjectionStore.listLiveRunThreadIds")(function* () {
+      const rows = yield* sql<{ readonly thread_id: string }>`
+        SELECT DISTINCT thread_id
+        FROM orchestration_v2_projection_runs
+        WHERE status IN ('preparing', 'starting', 'running', 'waiting')
+      `;
+      return rows.map((row) => ThreadId.make(row.thread_id));
+    }, Effect.mapError(shellSnapshotReadError));
+
     const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId) =>
       sql
         .withTransaction(
@@ -6548,6 +6562,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       apply,
       getShellSnapshot: readOnReader(getShellSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
+      listLiveRunThreadIds: readOnReader(listLiveRunThreadIds),
       readShellSnapshot: readOnReader(readShellSnapshot),
       getThreadShell: readOnReader(getThreadShell),
       getThread: readOnReader(getThread),
@@ -6669,6 +6684,16 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .map(({ thread }) => thread.id);
         },
       ),
+      listLiveRunThreadIds: Effect.fn("ProjectionStore.listLiveRunThreadIds")(function* () {
+        const existing = (yield* Ref.get(replayState)).projections;
+        return [...existing.values()]
+          .filter(({ runs }) =>
+            runs.some((run) =>
+              ["preparing", "starting", "running", "waiting"].includes(run.status),
+            ),
+          )
+          .map(({ thread }) => thread.id);
+      }),
       readShellSnapshot: (options) =>
         service.getShellSnapshot(options).pipe(Effect.map(Effect.succeed)),
       getThreadShell: Effect.fn("ProjectionStore.getThreadShell")(function* (threadId) {
