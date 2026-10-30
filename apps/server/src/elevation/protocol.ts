@@ -5,7 +5,7 @@
 import { ElevationBase64Url, type ElevationSignedResponse } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-export const MAX_LINE_BYTES = 262144;
+const MAX_LINE_BYTES = 262144;
 
 const ChainEntry = Schema.Struct({
   pid: Schema.Int,

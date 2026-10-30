@@ -586,7 +586,7 @@ describe("ElevationService helper", () => {
         label: "Pixel",
         publicKey: vectorsJson.keys.newDevice.spkiDer,
         challenge: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
-        attestationChain: ["AAAA"],
+        attestationChain: ["AAAA"] as [string],
       };
       const result = yield* fixture.service.install({ password: "hunter2", device });
       assert.strictEqual(result.type, "installed");
@@ -632,7 +632,7 @@ describe("ElevationService helper", () => {
           label: "Pixel",
           publicKey: vectorsJson.keys.newDevice.spkiDer,
           challenge: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
-          attestationChain: ["AAAA"],
+          attestationChain: ["AAAA"] as [string],
         },
       });
       assert.strictEqual(result.type, "terminal_command");
@@ -666,7 +666,7 @@ describe("ElevationService helper", () => {
         label: "Pixel 2",
         publicKey: vectorsJson.keys.newDevice.spkiDer,
         challenge: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
-        attestationChain: ["AAAA"],
+        attestationChain: ["AAAA"] as [string],
       };
       yield* fixture.service.enroll({ device });
       assert.deepStrictEqual(lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))), [

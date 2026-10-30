@@ -927,7 +927,7 @@ export const instructionsLayer = Layer.sync(DeviceApprovalInstructions, () => {
   };
 });
 
-// TODO(device-approval): point at the helper the desktop and npx packages ship.
+// No package ships the helper yet, so setup needs T3_ELEVATION_HELPER until one does.
 const PACKAGED_HELPER_PATH: string | null = null;
 
 export const layer = Layer.effect(
@@ -935,6 +935,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const platform = yield* HostProcess.Platform;
+    const host = { platform, arch: yield* HostProcess.Architecture };
     return yield* make({
       user: NodeOS.userInfo().username,
       socketPath: NodePath.join(config.stateDir, "elevation.sock"),
@@ -943,10 +944,10 @@ export const layer = Layer.effect(
       sudoPath: "sudo",
       allowDevAttestation: process.env.T3_ELEVATION_ALLOW_DEV_ATTESTATION === "1",
       devicesStatePath: NodePath.join(config.stateDir, "elevation-devices.json"),
-      server: () => ({ pid: process.pid, startTime: processStartTime(process.pid) }),
+      server: () => ({ pid: process.pid, startTime: processStartTime(host, process.pid) }),
       trustedPeerUid: 0,
-      peerUid: socketPeerUid,
-      peerCredentialsSupported,
+      peerUid: (socket) => socketPeerUid(host, socket),
+      peerCredentialsSupported: () => peerCredentialsSupported(host),
     });
   }),
 );

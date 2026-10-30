@@ -20,7 +20,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-export const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 1;
 const MODULE_MARKER = Buffer.from("\0t3-elevation-module protocol=");
 
 export interface HostPaths {
@@ -80,7 +80,7 @@ const isRootOwned = Effect.fn("ElevationHostState.isRootOwned")(function* (
 });
 
 /** The subset of TOML the config uses: top-level `key = value` before any table. */
-export function parseUserConfig(text: string): UserConfig {
+function parseUserConfig(text: string): UserConfig {
   const values = new Map<string, unknown>();
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();

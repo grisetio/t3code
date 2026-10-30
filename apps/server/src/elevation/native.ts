@@ -31,6 +31,12 @@ const KERN_PROC = 14;
 const KERN_PROC_PID = 1;
 const KINFO_PROC_BYTES = 648;
 
+/** Callers pass `HostProcess.Platform` and `HostProcess.Architecture`. */
+export interface NativeHost {
+  readonly platform: NodeJS.Platform;
+  readonly arch: NodeJS.Architecture;
+}
+
 interface NativeCalls {
   readonly peerUid: (fd: number) => number | null;
   readonly startTime: (pid: number) => number | null;
@@ -46,13 +52,13 @@ function openLibc(ffi: FfiModule, definitions: Parameters<FfiModule["dlopen"]>[1
   }
 }
 
-function load(): NativeCalls | null {
-  if (process.platform !== "darwin" && process.platform !== "linux") return null;
-  if (process.platform === "linux" && !LINUX_SO_PEERCRED_ARCHES.has(process.arch)) return null;
+function load(host: NativeHost): NativeCalls | null {
+  if (host.platform !== "darwin" && host.platform !== "linux") return null;
+  if (host.platform === "linux" && !LINUX_SO_PEERCRED_ARCHES.has(host.arch)) return null;
   try {
     const ffi = process.getBuiltinModule("node:ffi") as FfiModule | undefined;
     if (ffi === undefined) return null;
-    if (process.platform === "darwin") {
+    if (host.platform === "darwin") {
       const libc = openLibc(ffi, {
         getpeereid: { arguments: ["int32", "buffer", "buffer"], return: "int32" },
         sysctl: {
@@ -121,21 +127,21 @@ function linuxStartTime(pid: number): number | null {
   }
 }
 
-function calls(): NativeCalls | null {
-  if (native === undefined) native = load();
+function calls(host: NativeHost): NativeCalls | null {
+  if (native === undefined) native = load(host);
   return native;
 }
 
 /** Whether this runtime can verify who connected to the approval socket. */
-export const peerCredentialsSupported = (): boolean => calls() !== null;
+export const peerCredentialsSupported = (host: NativeHost): boolean => calls(host) !== null;
 
 /** The connected peer's effective uid, or null when it can't be read. */
-export function socketPeerUid(socket: NodeNet.Socket): number | null {
+export function socketPeerUid(host: NativeHost, socket: NodeNet.Socket): number | null {
   // `_handle.fd` is internal but stable for Unix sockets; there is no public accessor.
   const fd = (socket as unknown as { readonly _handle?: { readonly fd?: unknown } })._handle?.fd;
   if (typeof fd !== "number" || fd < 0) return null;
   try {
-    return calls()?.peerUid(fd) ?? null;
+    return calls(host)?.peerUid(fd) ?? null;
   } catch {
     return null;
   }
@@ -146,12 +152,16 @@ export function socketPeerUid(socket: NodeNet.Socket): number | null {
  * `onlyIfLoaded`, macOS answers only once device approval has loaded FFI, so
  * spawning a provider never loads it (Node warns when it does).
  */
-export function processStartTime(pid: number, options?: { readonly onlyIfLoaded?: boolean }) {
+export function processStartTime(
+  host: NativeHost,
+  pid: number,
+  options?: { readonly onlyIfLoaded?: boolean },
+) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  if (process.platform === "linux") return linuxStartTime(pid);
+  if (host.platform === "linux") return linuxStartTime(pid);
   if (options?.onlyIfLoaded && native === undefined) return null;
   try {
-    return calls()?.startTime(pid) ?? null;
+    return calls(host)?.startTime(pid) ?? null;
   } catch {
     return null;
   }
