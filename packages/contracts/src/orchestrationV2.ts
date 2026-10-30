@@ -38,6 +38,12 @@ import {
 } from "./baseSchemas.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
+  ElevationBase64Url,
+  ElevationKeyId,
+  ElevationRequestId,
+  ElevationWarning,
+} from "./elevation.ts";
+import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetTurnDiffInput,
@@ -1341,6 +1347,55 @@ const OrchestrationV2SecretRequestFields = {
   secretStatus: OrchestrationV2SecretRequestStatus,
 } as const;
 
+export const OrchestrationV2ElevationRequestStatus = Schema.Literals([
+  "pending",
+  "approved",
+  "denied",
+  "expired",
+  "cancelled",
+]);
+export type OrchestrationV2ElevationRequestStatus =
+  typeof OrchestrationV2ElevationRequestStatus.Type;
+
+/** Why a request ended without an answer from the user. */
+export const OrchestrationV2ElevationRequestFailure = Schema.Literals([
+  "too_large",
+  "invalid_encoding",
+  "bad_signature",
+]);
+export type OrchestrationV2ElevationRequestFailure =
+  typeof OrchestrationV2ElevationRequestFailure.Type;
+
+export const OrchestrationV2ElevationResolvedBy = Schema.Struct({
+  deviceLabel: Schema.String,
+  /** Present for approvals; a deny carries no signature. */
+  keyId: Schema.optionalKey(ElevationKeyId),
+});
+export type OrchestrationV2ElevationResolvedBy = typeof OrchestrationV2ElevationResolvedBy.Type;
+
+/**
+ * Display fields mirror the payload for lists and history. A client that signs
+ * renders from `payload` instead (docs/internals/device-approval.md).
+ */
+const OrchestrationV2ElevationRequestFields = {
+  type: Schema.Literal("elevation_request"),
+  requestId: ElevationRequestId,
+  kind: Schema.Literal("sudo"),
+  argv: Schema.Array(Schema.String),
+  /** Null when no payload was built. */
+  runAs: Schema.NullOr(Schema.String),
+  cwd: Schema.String,
+  host: Schema.String,
+  warnings: Schema.Array(ElevationWarning),
+  /** From the agent's tool call; unverified. */
+  explanation: Schema.NullOr(Schema.String),
+  /** The exact signed bytes, null when the module could not build them (see `failure`). */
+  payload: Schema.NullOr(ElevationBase64Url),
+  elevationStatus: OrchestrationV2ElevationRequestStatus,
+  failure: Schema.optionalKey(OrchestrationV2ElevationRequestFailure),
+  resolvedBy: Schema.NullOr(OrchestrationV2ElevationResolvedBy),
+} as const;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1521,6 +1576,10 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     ...OrchestrationV2SecretRequestFields,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
+    ...OrchestrationV2ElevationRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2284,6 +2343,10 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     ...OrchestrationV2SecretRequestFields,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
+    ...OrchestrationV2ElevationRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -3088,6 +3151,40 @@ const OrchestrationV2InternalCommand = Schema.Union([
     reason: Schema.String,
     placeholder: Schema.optional(Schema.String),
     secretStatus: OrchestrationV2SecretRequestStatus,
+  }),
+  /**
+   * Internal: only ElevationService records requests, from what the PAM
+   * module sent. A request that failed before a payload existed is recorded
+   * already `cancelled` with its `failure`.
+   */
+  Schema.Struct({
+    type: Schema.Literal("elevation_request.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    nodeId: NodeId,
+    turnItemId: TurnItemId,
+    requestId: ElevationRequestId,
+    kind: Schema.Literal("sudo"),
+    argv: Schema.Array(Schema.String),
+    runAs: Schema.NullOr(Schema.String),
+    cwd: Schema.String,
+    host: Schema.String,
+    warnings: Schema.Array(ElevationWarning),
+    explanation: Schema.NullOr(Schema.String),
+    payload: Schema.NullOr(ElevationBase64Url),
+    elevationStatus: Schema.Literals(["pending", "cancelled"]),
+    failure: Schema.optionalKey(OrchestrationV2ElevationRequestFailure),
+  }),
+  /** Fails unless the request is still pending, so the first answer wins. */
+  Schema.Struct({
+    type: Schema.Literal("elevation_request.resolve"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    turnItemId: TurnItemId,
+    elevationStatus: Schema.Literals(["approved", "denied", "expired", "cancelled"]),
+    failure: Schema.optionalKey(OrchestrationV2ElevationRequestFailure),
+    resolvedBy: Schema.NullOr(OrchestrationV2ElevationResolvedBy),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;

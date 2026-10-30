@@ -359,6 +359,17 @@ import {
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
+  ElevationEnrollInput,
+  ElevationError,
+  ElevationInstallInput,
+  ElevationInstallResult,
+  ElevationPendingRequests,
+  ElevationRespondInput,
+  ElevationRevokeInput,
+  ElevationStatus,
+  ElevationUninstallInput,
+} from "./elevation.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -520,6 +531,13 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
+  elevationRespond: "elevation.respond",
+  elevationSubscribe: "elevation.subscribe",
+  elevationStatus: "elevation.status",
+  elevationInstall: "elevation.install",
+  elevationEnroll: "elevation.enroll",
+  elevationRevoke: "elevation.revoke",
+  elevationUninstall: "elevation.uninstall",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -1844,6 +1862,50 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
 
+const ElevationRpcError = Schema.Union([ElevationError, EnvironmentAuthorizationError]);
+
+const WsElevationRespondRpc = Rpc.make(WS_METHODS.elevationRespond, {
+  payload: ElevationRespondInput,
+  error: ElevationRpcError,
+});
+
+const WsElevationSubscribeRpc = Rpc.make(WS_METHODS.elevationSubscribe, {
+  payload: Schema.Struct({}),
+  success: ElevationPendingRequests,
+  error: ElevationRpcError,
+  stream: true,
+});
+
+const WsElevationStatusRpc = Rpc.make(WS_METHODS.elevationStatus, {
+  payload: Schema.Struct({}),
+  success: ElevationStatus,
+  error: ElevationRpcError,
+});
+
+const WsElevationInstallRpc = Rpc.make(WS_METHODS.elevationInstall, {
+  payload: ElevationInstallInput,
+  success: ElevationInstallResult,
+  error: ElevationRpcError,
+});
+
+const WsElevationEnrollRpc = Rpc.make(WS_METHODS.elevationEnroll, {
+  payload: ElevationEnrollInput,
+  success: ElevationStatus,
+  error: ElevationRpcError,
+});
+
+const WsElevationRevokeRpc = Rpc.make(WS_METHODS.elevationRevoke, {
+  payload: ElevationRevokeInput,
+  success: ElevationStatus,
+  error: ElevationRpcError,
+});
+
+const WsElevationUninstallRpc = Rpc.make(WS_METHODS.elevationUninstall, {
+  payload: ElevationUninstallInput,
+  success: ElevationStatus,
+  error: ElevationRpcError,
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -1948,6 +2010,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
+  WsElevationRespondRpc,
+  WsElevationSubscribeRpc,
+  WsElevationStatusRpc,
+  WsElevationInstallRpc,
+  WsElevationEnrollRpc,
+  WsElevationRevokeRpc,
+  WsElevationUninstallRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

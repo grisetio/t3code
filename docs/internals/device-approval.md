@@ -102,7 +102,7 @@ bad answer from one client doesn't consume the request.
 
 ### Display escaping
 
-Every string from the payload is shown through `escapeForDisplay`. It maps each
+Every string from the payload is shown through `escapeElevationDisplayText`. It maps each
 code point and leaves everything else unchanged:
 
 - `\` → `\\`; LF → `\n`; CR → `\r`; TAB → `\t`;

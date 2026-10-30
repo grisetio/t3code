@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -49,6 +50,13 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksRunNow]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
+  [WS_METHODS.elevationRespond]: AuthOrchestrationOperateScope,
+  // These change root-owned system files (PAM, sudoers) and who may approve
+  // root commands, like the host-level changes server updates make.
+  [WS_METHODS.elevationInstall]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.elevationEnroll]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.elevationRevoke]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.elevationUninstall]: AuthEnvironmentMaintainScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
