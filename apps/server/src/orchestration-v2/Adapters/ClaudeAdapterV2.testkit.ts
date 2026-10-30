@@ -994,6 +994,8 @@ function layerClaudeAgentSdkReplay(
   );
 }
 
+const encodeReplaySessionLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /**
  * While a foreground Bash call runs, Claude Code writes its output to a task
  * file the adapter tails. A replay has no Claude Code process, so it writes the
@@ -1011,6 +1013,27 @@ const writeReplayTaskOutputFiles = Effect.fn("ClaudeReplay.writeTaskOutputFiles"
       ? [entry.frame as Record<string, unknown>]
       : [],
   );
+  // No CLI writes native history during replay. Materialize its recorded
+  // conversation so a runtime recreated after idle release can validate resume.
+  const sessions = new Map<string, Array<string>>();
+  for (const frame of frames) {
+    if (
+      (frame.type !== "user" && frame.type !== "assistant") ||
+      typeof frame.session_id !== "string"
+    )
+      continue;
+    const lines = sessions.get(frame.session_id) ?? [];
+    lines.push(encodeReplaySessionLine({ ...frame, sessionId: frame.session_id }));
+    sessions.set(frame.session_id, lines);
+  }
+  const projectsDir = path.join(tmpRoot, ".claude", "projects", "replay-project");
+  yield* fileSystem.makeDirectory(projectsDir, { recursive: true });
+  for (const [sessionId, lines] of sessions) {
+    yield* fileSystem.writeFileString(
+      path.join(projectsDir, `${sessionId}.jsonl`),
+      `${lines.join("\n")}\n`,
+    );
+  }
   const outputByToolUseId = new Map<string, string>();
   for (const frame of frames) {
     const result = frame.tool_use_result as Record<string, unknown> | undefined;
@@ -1063,7 +1086,7 @@ function layerClaudeProviderAdapterRegistryReplay(
               environment: [{ name: "CLAUDE_CODE_TMPDIR", value: tmpRoot, sensitive: false }],
             },
           },
-        }),
+        }).pipe(Layer.provide(Layer.succeed(HostProcess.HomeDirectory, tmpRoot))),
       ),
       Effect.provide(NodeServices.layer),
     ),

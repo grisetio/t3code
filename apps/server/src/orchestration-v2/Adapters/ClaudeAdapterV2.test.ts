@@ -1145,17 +1145,19 @@ describe("ClaudeAdapterV2 resumeThread", () => {
         });
         assert.equal(saved.nativeThreadRef?.nativeId, "native-thread-saved");
 
-        const missing = yield* runtime.resumeThread({
-          providerThread: {
-            ...providerThread,
-            nativeThreadRef: {
-              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-              nativeId: "native-thread-missing",
-              strength: "strong",
+        const missing = yield* Effect.flip(
+          runtime.resumeThread({
+            providerThread: {
+              ...providerThread,
+              nativeThreadRef: {
+                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                nativeId: "native-thread-missing",
+                strength: "strong",
+              },
             },
-          },
-        });
-        assert.equal(missing.nativeThreadRef?.nativeId, "native-thread-missing");
+          }),
+        );
+        assert.equal(missing._tag, "ProviderAdapterResumeThreadError");
       }),
     ).pipe(
       Effect.provide(
@@ -1845,6 +1847,225 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
 });
 
 describe("ClaudeAdapterV2 native session identity", () => {
+  const makeImportedSessionHarness = Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const configDir = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "t3-claude-imported-session-",
+    });
+    const projectDir = path.join(configDir, "projects", "another-workspace");
+    yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+    const nativeId = "imported-native-session";
+    const transcriptPath = path.join(projectDir, `${nativeId}.jsonl`);
+    const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
+    const queues: Array<Queue.Queue<SDKMessage, ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError>> =
+      [];
+    const startupError = new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+      method: "open",
+      cause: new Error("synthetic CLI initialization failure"),
+    });
+    let failOpen = false;
+    let allocations = 0;
+    const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+      instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+      settings: DEFAULT_CLAUDE_SETTINGS,
+      environment: { CLAUDE_CONFIG_DIR: configDir },
+      attachmentsDir: configDir,
+      fileSystem,
+      path,
+      crypto: yield* Crypto.Crypto,
+      idAllocator: yield* IdAllocator.IdAllocatorV2,
+      queryRunner: {
+        allocateSessionId: Effect.sync(() =>
+          allocations++ === 0 ? "fresh-native-session" : "replacement-native-session",
+        ),
+        open: (input) =>
+          Effect.gen(function* () {
+            openedQueries.push(input);
+            if (failOpen) return yield* startupError;
+            const messages = yield* Queue.unbounded<
+              SDKMessage,
+              ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError
+            >();
+            queues.push(messages);
+            return {
+              messages: Stream.fromQueue(messages),
+              offer: () => Effect.void,
+              setModel: () => Effect.void,
+              applyFlagSettings: () => Effect.void,
+              setPermissionMode: () => Effect.void,
+              backgroundTasks: () => Effect.succeed(false),
+              stopTask: () => Effect.void,
+              interrupt: Effect.void,
+              close: Effect.void,
+            };
+          }),
+        forkSession: () => Effect.die("Unexpected session fork"),
+        subagentLaunchToolUseId: () => Effect.succeed(null),
+        assertComplete: Effect.void,
+      },
+    });
+    const threadId = ThreadId.make("thread-imported-session");
+    const openSession = adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("session-imported"),
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+    });
+    const runtime = yield* openSession;
+    const ensureInput = {
+      threadId,
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+    };
+    const fresh = yield* runtime.ensureThread(ensureInput);
+    const imported = {
+      ...fresh,
+      providerSessionId: null,
+      nativeThreadRef: {
+        driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+        nativeId,
+        strength: "strong" as const,
+      },
+    };
+    const turn = makeClaudeTestTurnInput({
+      threadId,
+      providerThread: imported,
+      now: yield* DateTime.now,
+      attemptId: RunAttemptId.make("attempt-imported"),
+      text: "Continue the imported conversation.",
+      attachments: [],
+      nativeThreadHasTurns: false,
+    });
+    return {
+      fileSystem,
+      transcriptPath,
+      openedQueries,
+      queues,
+      startupError,
+      runtime,
+      openSession,
+      imported,
+      fresh,
+      turn,
+      ensureInput,
+      failOpen: (value: boolean) => {
+        failOpen = value;
+      },
+    };
+  });
+
+  it.effect("resumes imported native history on its first query and after a process restart", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeImportedSessionHarness;
+        yield* h.fileSystem.writeFileString(
+          h.transcriptPath,
+          '{"type":"user","uuid":"imported-message","message":{"role":"user","content":"Previous request"}}\n',
+        );
+        for (const runtime of [h.runtime, yield* h.openSession]) {
+          const loaded = yield* runtime.resumeThread({ providerThread: h.imported });
+          yield* runtime.startTurn({ ...h.turn, providerThread: loaded });
+        }
+        assert.equal(h.openedQueries.length, 2);
+        for (const query of h.openedQueries) {
+          assert.equal(query.options.resume, "imported-native-session");
+          assert.isUndefined(query.options.sessionId);
+        }
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect.each(["missing", "empty", "unreadable"] as const)(
+    "rejects %s imported history so orchestration can recover with a fresh id",
+    (state) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const h = yield* makeImportedSessionHarness;
+          if (state === "empty")
+            yield* h.fileSystem.writeFileString(h.transcriptPath, '{"type":"cost-state"}\n');
+          // A directory at the transcript path produces a deterministic read error,
+          // even when tests run with permission to read chmod-000 files.
+          if (state === "unreadable") yield* h.fileSystem.makeDirectory(h.transcriptPath);
+          const error = yield* Effect.flip(h.runtime.resumeThread({ providerThread: h.imported }));
+          assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+          assert.lengthOf(h.openedQueries, 0);
+          const replacement = yield* h.runtime.ensureThread(h.ensureInput);
+          yield* h.runtime.startTurn({ ...h.turn, providerThread: replacement });
+          assert.equal(h.openedQueries[0]?.options.sessionId, "replacement-native-session");
+          assert.isUndefined(h.openedQueries[0]?.options.resume);
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  it.effect.each([true, false])(
+    "keeps the correct initialization mode after failed open, imported=%s",
+    (imported) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const h = yield* makeImportedSessionHarness;
+          if (imported)
+            yield* h.fileSystem.writeFileString(
+              h.transcriptPath,
+              '{"type":"assistant","message":{"role":"assistant","content":"Previous answer"}}\n',
+            );
+          const providerThread = imported ? h.imported : h.fresh;
+          const loaded = yield* h.runtime.resumeThread({ providerThread });
+          h.failOpen(true);
+          const failure = yield* Effect.flip(
+            h.runtime.startTurn({ ...h.turn, providerThread: loaded }),
+          );
+          assert.equal(failure._tag, "ProviderAdapterTurnStartError");
+          assert.strictEqual(failure.cause, h.startupError);
+          h.failOpen(false);
+          yield* h.runtime.startTurn({ ...h.turn, providerThread: loaded });
+          assert.lengthOf(h.openedQueries, 2);
+          for (const query of h.openedQueries) {
+            assert.equal(query.options.resume, imported ? "imported-native-session" : undefined);
+            assert.equal(query.options.sessionId, imported ? undefined : "fresh-native-session");
+          }
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  it.effect("does not resume a preallocated id when the CLI exits before initialization", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeImportedSessionHarness;
+        yield* h.runtime.startTurn({ ...h.turn, providerThread: h.fresh });
+        yield* Queue.fail(h.queues[0]!, h.startupError);
+        const terminal = yield* h.runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(terminal));
+        const error = yield* Effect.flip(h.runtime.resumeThread({ providerThread: h.fresh }));
+        assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+        const replacement = yield* h.runtime.ensureThread(h.ensureInput);
+        yield* h.runtime.startTurn({ ...h.turn, providerThread: replacement });
+        assert.lengthOf(h.openedQueries, 2);
+        assert.equal(h.openedQueries[1]?.options.sessionId, "replacement-native-session");
+        assert.isUndefined(h.openedQueries[1]?.options.resume);
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   const openTurnWithOrdinal = (providerTurnOrdinal: number, nativeThreadHasTurns?: boolean) =>
     Effect.scoped(
       Effect.gen(function* () {
