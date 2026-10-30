@@ -8,6 +8,9 @@ import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./b
 // vectors in packages/contracts/test-vectors/device-approval.json pin them.
 
 const ELEVATION_PAYLOAD_MAX_BYTES = 16384;
+
+/** Signatures cover the ASCII bytes of this context followed by the payload bytes. */
+export const ELEVATION_SIGNATURE_CONTEXT = "t3-elevation-v1\0";
 const ELEVATION_MAX_WINDOW_SECONDS = 300;
 
 const base64UrlOfLength = (length: number) =>
@@ -244,6 +247,14 @@ export const ElevationDevice = Schema.Struct({
 });
 export type ElevationDevice = typeof ElevationDevice.Type;
 
+/** A generic, tool-agnostic result, e.g. "PAM line missing in /etc/pam.d/sudo". */
+export const ElevationCheck = Schema.Struct({
+  id: Schema.String,
+  ok: Schema.Boolean,
+  message: Schema.String,
+});
+export type ElevationCheck = typeof ElevationCheck.Type;
+
 export const ElevationStatus = Schema.Struct({
   /** False on platforms or accounts that can't use it (e.g. confined SELinux users). */
   supported: Schema.Boolean,
@@ -254,10 +265,7 @@ export const ElevationStatus = Schema.Struct({
   ownsApprovals: Schema.Boolean,
   /** Parts exist that `installed-by-t3.json` doesn't record; uninstall leaves them. */
   setupOutsideT3: Schema.Boolean,
-  /** Generic, tool-agnostic results, e.g. "PAM line missing in /etc/pam.d/sudo". */
-  checks: Schema.Array(
-    Schema.Struct({ id: Schema.String, ok: Schema.Boolean, message: Schema.String }),
-  ),
+  checks: Schema.Array(ElevationCheck),
   /** What install would change, shown before it runs. */
   plannedChanges: Schema.Array(Schema.Struct({ path: Schema.String, summary: Schema.String })),
   devices: Schema.Array(ElevationDevice),
