@@ -1,4 +1,4 @@
-import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import { ElevationError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -261,6 +261,7 @@ import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
+const elevationNotAvailable = () => new ElevationError({ reason: "not_available" });
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 
 const resolveDiscoveryForConfig = <A, E, R>(
@@ -2118,6 +2119,15 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),
           ),
+        // Stubs until ElevationService exists; the server leaves `deviceApproval`
+        // unadvertised, so clients never call these.
+        [WS_METHODS.elevationRespond]: (_input) => Effect.fail(elevationNotAvailable()),
+        [WS_METHODS.elevationSubscribe]: (_input) => Stream.fail(elevationNotAvailable()),
+        [WS_METHODS.elevationStatus]: (_input) => Effect.fail(elevationNotAvailable()),
+        [WS_METHODS.elevationInstall]: (_input) => Effect.fail(elevationNotAvailable()),
+        [WS_METHODS.elevationEnroll]: (_input) => Effect.fail(elevationNotAvailable()),
+        [WS_METHODS.elevationRevoke]: (_input) => Effect.fail(elevationNotAvailable()),
+        [WS_METHODS.elevationUninstall]: (_input) => Effect.fail(elevationNotAvailable()),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),

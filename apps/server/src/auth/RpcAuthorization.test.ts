@@ -64,6 +64,23 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("lets operate answer device approvals, but keeps device setup behind maintain", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.elevationRespond)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    for (const method of [WS_METHODS.elevationStatus, WS_METHODS.elevationSubscribe]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.elevationInstall,
+      WS_METHODS.elevationEnroll,
+      WS_METHODS.elevationRevoke,
+      WS_METHODS.elevationUninstall,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthEnvironmentMaintainScope);
+    }
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(
@@ -328,6 +345,38 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
       });
     }
     expect(handled).toBe(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("denies revoking an approval device before the handler with only operate", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.elevationRevoke> =>
+          tag !== WS_METHODS.elevationRevoke,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.elevationRevoke, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    expect(
+      yield* client[WS_METHODS.elevationRevoke]({ keyId: "AAAAAAAAAAAAAAAAAAAAAA" }).pipe(
+        Effect.flip,
+      ),
+    ).toMatchObject({ requiredPermission: AuthEnvironmentMaintainScope });
+    expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
 

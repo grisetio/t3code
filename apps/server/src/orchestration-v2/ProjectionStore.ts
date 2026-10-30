@@ -1077,7 +1077,7 @@ type ShellThreadRow = {
   readonly blocking_run_stop_requested: number;
   readonly blocking_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
-  readonly pending_secret_request_payload_json: string | null;
+  readonly pending_turn_item_request_payload_json: string | null;
   readonly latest_user_message_at: string | null;
   readonly latest_user_authored_message_at: string | null;
   readonly has_actionable_proposed_plan: number;
@@ -1500,13 +1500,19 @@ function pendingRuntimeRequestSummary(
   };
 }
 
-function secretRequestAsPendingInput(
+/**
+ * Secret and elevation requests are turn items, not runtime requests, so they
+ * are folded in here to reach thread lists and relay push. An elevation
+ * request reads as a command approval, a kind every client already decodes.
+ */
+function waitingTurnItemAsPendingRequest(
   item: OrchestrationV2TurnItem | null,
 ): OrchestrationV2PendingRuntimeRequestSummary | null {
-  if (item?.type !== "secret_request" || item.nodeId === null) return null;
+  if (item === null || item.nodeId === null) return null;
+  if (item.type !== "secret_request" && item.type !== "elevation_request") return null;
   return {
     id: RuntimeRequestId.make(item.id),
-    kind: "user_input",
+    kind: item.type === "secret_request" ? "user_input" : "command",
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
   };
@@ -1547,11 +1553,11 @@ export function threadShellFromProjection(
   );
   if (pendingRuntimeRequest === null || pendingRuntimeRequest.blocking === false) {
     pendingRuntimeRequest =
-      secretRequestAsPendingInput(
+      waitingTurnItemAsPendingRequest(
         projection.turnItems
           .filter(
             (item) =>
-              item.type === "secret_request" &&
+              (item.type === "secret_request" || item.type === "elevation_request") &&
               item.status === "waiting" &&
               item.runId !== null &&
               liveRunIds.has(item.runId),
@@ -5745,10 +5751,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE r.thread_id = t.thread_id
                   AND r.status IN ('preparing', 'starting', 'running', 'waiting')
                   AND secret.thread_id = t.thread_id AND secret.run_id = r.run_id
-                  AND secret.type = 'secret_request' AND secret.status = 'waiting'
+                  AND secret.type IN ('secret_request', 'elevation_request')
+                  AND secret.status = 'waiting'
                 ORDER BY secret.updated_at DESC, secret.turn_item_id DESC
                 LIMIT 1
-              ) AS pending_secret_request_payload_json,
+              ) AS pending_turn_item_request_payload_json,
               (
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
@@ -6171,11 +6178,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             : null;
         if (
           (pendingRuntimeRequest === null || pendingRuntimeRequest.blocking === false) &&
-          row.pending_secret_request_payload_json !== null
+          row.pending_turn_item_request_payload_json !== null
         ) {
           pendingRuntimeRequest =
-            secretRequestAsPendingInput(
-              yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
+            waitingTurnItemAsPendingRequest(
+              yield* decodeTurnItemPayload(row.pending_turn_item_request_payload_json),
             ) ?? pendingRuntimeRequest;
         }
         let terminalFailureItem =
