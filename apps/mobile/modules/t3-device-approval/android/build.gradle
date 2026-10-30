@@ -1,0 +1,29 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.t3tools.deviceapproval'
+version = '0.0.0'
+
+android {
+  namespace 'expo.modules.t3deviceapproval'
+  defaultConfig {
+    versionCode 1
+    versionName '0.0.0'
+  }
+}
+
+dependencies {
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.robolectric:robolectric:4.16.1'
+}
+
+// Expo compiles modules with Java 17; Robolectric's Android 16 runtime needs 21.
+tasks.withType(Test).configureEach {
+  javaLauncher = javaToolchains.launcherFor {
+    languageVersion = JavaLanguageVersion.of(21)
+  }
+  systemProperty 'deviceApprovalVectors',
+    file('../../../../../packages/contracts/test-vectors/device-approval.json').absolutePath
+}
