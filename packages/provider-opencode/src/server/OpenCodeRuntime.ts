@@ -38,6 +38,7 @@ import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
 import * as NetService from "@t3tools/shared/Net";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -598,6 +599,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const hostPlatform = yield* HostProcess.Platform;
   const serverLedger = yield* OpenCodeServerLedger.OpenCodeServerLedger;
   const agentScope = yield* AgentScope;
+  const providerProcesses = yield* ProviderProcesses;
   // npm installs OpenCode as `opencode.CMD`, which `cmd.exe` runs. The
   // `opencode.exe` it starts escapes libuv's kill-on-close job and outlives a
   // server that is killed, so the shim's executable runs directly instead.
@@ -758,6 +760,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     yield* Scope.addFinalizer(runtimeScope, terminateChild);
     const forgetServer = yield* serverLedger.track({ pid: Number(child.pid), port, args });
     yield* Scope.addFinalizer(ledgerScope, forgetServer);
+    // One server answers several sessions, so it names no thread.
+    const forgetProcess = providerProcesses.register({ pid: Number(child.pid), threadId: null });
+    yield* Scope.addFinalizer(runtimeScope, Effect.sync(forgetProcess));
 
     const stdoutRef = yield* Ref.make<string | null>("");
     const stderrRef = yield* Ref.make<string | null>("");

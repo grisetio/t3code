@@ -1,5 +1,6 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { AgentScope } from "@t3tools/shared/AgentScope";
+import { AgentScope, AgentScopeThreadId } from "@t3tools/shared/AgentScope";
+import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import * as Predicate from "effect/Predicate";
@@ -421,6 +422,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
+  const providerProcesses = yield* ProviderProcesses;
   const fileSystem = yield* FileSystem.FileSystem;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
@@ -493,6 +495,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         env: launch.env,
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(AgentScopeThreadId, input.threadId),
+        Effect.provideService(ProviderProcesses, providerProcesses),
         Effect.mapError(
           (cause) =>
             new ProviderAdapter.ProviderAdapterOpenSessionError({

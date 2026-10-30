@@ -1,4 +1,4 @@
-import { ElevationError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -120,6 +120,7 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as ElevationService from "./elevation/ElevationService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -261,7 +262,6 @@ import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
-const elevationNotAvailable = () => new ElevationError({ reason: "not_available" });
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 
 const resolveDiscoveryForConfig = <A, E, R>(
@@ -1259,6 +1259,7 @@ export const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
+      const elevation = yield* ElevationService.ElevationService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2119,15 +2120,14 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),
           ),
-        // Stubs until ElevationService exists; the server leaves `deviceApproval`
-        // unadvertised, so clients never call these.
-        [WS_METHODS.elevationRespond]: (_input) => Effect.fail(elevationNotAvailable()),
-        [WS_METHODS.elevationSubscribe]: (_input) => Stream.fail(elevationNotAvailable()),
-        [WS_METHODS.elevationStatus]: (_input) => Effect.fail(elevationNotAvailable()),
-        [WS_METHODS.elevationInstall]: (_input) => Effect.fail(elevationNotAvailable()),
-        [WS_METHODS.elevationEnroll]: (_input) => Effect.fail(elevationNotAvailable()),
-        [WS_METHODS.elevationRevoke]: (_input) => Effect.fail(elevationNotAvailable()),
-        [WS_METHODS.elevationUninstall]: (_input) => Effect.fail(elevationNotAvailable()),
+        [WS_METHODS.elevationRespond]: (input) => elevation.respond(input),
+        [WS_METHODS.elevationSubscribe]: (_input) => elevation.pendingRequests,
+        [WS_METHODS.elevationStatus]: (_input) => elevation.status,
+        [WS_METHODS.elevationTest]: (_input) => elevation.test,
+        [WS_METHODS.elevationInstall]: (input) => elevation.install(input),
+        [WS_METHODS.elevationEnroll]: (input) => elevation.enroll(input),
+        [WS_METHODS.elevationRevoke]: (input) => elevation.revoke(input),
+        [WS_METHODS.elevationUninstall]: (input) => elevation.uninstall(input),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),

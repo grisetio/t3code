@@ -98,6 +98,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.elevationRespond]: "elevation",
   [WS_METHODS.elevationSubscribe]: "elevation",
   [WS_METHODS.elevationStatus]: "elevation",
+  [WS_METHODS.elevationTest]: "elevation",
   [WS_METHODS.elevationInstall]: "elevation",
   [WS_METHODS.elevationEnroll]: "elevation",
   [WS_METHODS.elevationRevoke]: "elevation",

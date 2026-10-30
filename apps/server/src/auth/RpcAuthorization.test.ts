@@ -73,6 +73,7 @@ describe("RPC authorization scopes", () => {
     }
     for (const method of [
       WS_METHODS.elevationInstall,
+      WS_METHODS.elevationTest,
       WS_METHODS.elevationEnroll,
       WS_METHODS.elevationRevoke,
       WS_METHODS.elevationUninstall,

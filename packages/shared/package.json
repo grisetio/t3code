@@ -335,6 +335,10 @@
       "types": "./src/AgentScope.ts",
       "import": "./src/AgentScope.ts"
     },
+    "./ProviderProcesses": {
+      "types": "./src/ProviderProcesses.ts",
+      "import": "./src/ProviderProcesses.ts"
+    },
     "./HostProcess": {
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"

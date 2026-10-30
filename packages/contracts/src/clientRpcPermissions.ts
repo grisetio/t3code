@@ -54,6 +54,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // These change root-owned system files (PAM, sudoers) and who may approve
   // root commands, like the host-level changes server updates make.
   [WS_METHODS.elevationInstall]: AuthEnvironmentMaintainScope,
+  // Asks every enrolled device to approve a test command.
+  [WS_METHODS.elevationTest]: AuthEnvironmentMaintainScope,
   [WS_METHODS.elevationEnroll]: AuthEnvironmentMaintainScope,
   [WS_METHODS.elevationRevoke]: AuthEnvironmentMaintainScope,
   [WS_METHODS.elevationUninstall]: AuthEnvironmentMaintainScope,

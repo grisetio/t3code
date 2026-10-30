@@ -123,6 +123,7 @@ describe("command permissions", () => {
         const respond = createCommandPermissions(runtime, WS_METHODS.elevationRespond);
         const setupMethods = [
           WS_METHODS.elevationInstall,
+          WS_METHODS.elevationTest,
           WS_METHODS.elevationEnroll,
           WS_METHODS.elevationRevoke,
           WS_METHODS.elevationUninstall,

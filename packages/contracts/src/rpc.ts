@@ -359,6 +359,7 @@ import {
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
+  ElevationCheck,
   ElevationEnrollInput,
   ElevationError,
   ElevationInstallInput,
@@ -534,6 +535,7 @@ export const WS_METHODS = {
   elevationRespond: "elevation.respond",
   elevationSubscribe: "elevation.subscribe",
   elevationStatus: "elevation.status",
+  elevationTest: "elevation.test",
   elevationInstall: "elevation.install",
   elevationEnroll: "elevation.enroll",
   elevationRevoke: "elevation.revoke",
@@ -1882,6 +1884,13 @@ const WsElevationStatusRpc = Rpc.make(WS_METHODS.elevationStatus, {
   error: ElevationRpcError,
 });
 
+/** Runs `sudo -n true` from the server; a device approves it. */
+const WsElevationTestRpc = Rpc.make(WS_METHODS.elevationTest, {
+  payload: Schema.Struct({}),
+  success: ElevationCheck,
+  error: ElevationRpcError,
+});
+
 const WsElevationInstallRpc = Rpc.make(WS_METHODS.elevationInstall, {
   payload: ElevationInstallInput,
   success: ElevationInstallResult,
@@ -2013,6 +2022,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsElevationRespondRpc,
   WsElevationSubscribeRpc,
   WsElevationStatusRpc,
+  WsElevationTestRpc,
   WsElevationInstallRpc,
   WsElevationEnrollRpc,
   WsElevationRevokeRpc,
