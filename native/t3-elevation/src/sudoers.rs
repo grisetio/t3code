@@ -56,7 +56,9 @@ fn collect(path: &Path, depth: usize, out: &mut Vec<String>) {
     if depth > 8 {
         return;
     }
-    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
     let mut joined = String::new();
     for raw in text.lines() {
         if let Some(stripped) = raw.strip_suffix('\\') {
@@ -71,7 +73,9 @@ fn collect(path: &Path, depth: usize, out: &mut Vec<String>) {
             collect(&relative_to(path, &target), depth + 1, out);
         } else if let Some(target) = include_target(trimmed, "includedir") {
             let dir = relative_to(path, &target);
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             let mut names: Vec<String> = entries
                 .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
                 .filter(|name| !name.ends_with('~') && !name.contains('.'))
@@ -174,7 +178,12 @@ fn list_applies(list: &str, matches: impl Fn(&str) -> bool) -> Applies {
     for item in list.split(',').map(str::trim) {
         if item == "ALL" || matches(item) {
             result = Applies::Yes;
-        } else if item.starts_with('!') || item.starts_with('+') || item.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()) {
+        } else if item.starts_with('!')
+            || item.starts_with('+')
+            || item
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        {
             // Negations, netgroups and aliases.
             return Applies::Maybe;
         }
@@ -199,7 +208,13 @@ mod tests {
     use super::*;
 
     fn subject<'a>(groups: &'a [String]) -> Subject<'a> {
-        Subject { user: "alice", uid: 1000, groups, host: "box", run_as: "root" }
+        Subject {
+            user: "alice",
+            uid: 1000,
+            groups,
+            host: "box",
+            run_as: "root",
+        }
     }
 
     fn with_files(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -214,35 +229,59 @@ mod tests {
 
     #[test]
     fn global_user_and_includes() {
-        let dir = with_files("includes", &[
-            (
-                "sudoers",
-                "Defaults env_reset\nDefaults\tsecure_path=\"/usr/sbin:/usr/bin\" # comment\n@includedir sudoers.d\n",
-            ),
-            ("sudoers.d/a", "Defaults:alice secure_path=/opt/bin:\\\n/usr/bin\n"),
-            ("sudoers.d/b.disabled", "Defaults secure_path=/ignored\n"),
-        ]);
+        let dir = with_files(
+            "includes",
+            &[
+                (
+                    "sudoers",
+                    "Defaults env_reset\nDefaults\tsecure_path=\"/usr/sbin:/usr/bin\" # comment\n@includedir sudoers.d\n",
+                ),
+                (
+                    "sudoers.d/a",
+                    "Defaults:alice secure_path=/opt/bin:\\\n/usr/bin\n",
+                ),
+                ("sudoers.d/b.disabled", "Defaults secure_path=/ignored\n"),
+            ],
+        );
         let groups = vec![];
-        assert_eq!(secure_path(&dir.join("sudoers"), &subject(&groups)), vec![Some("/opt/bin: /usr/bin".to_string())]);
+        assert_eq!(
+            secure_path(&dir.join("sudoers"), &subject(&groups)),
+            vec![Some("/opt/bin: /usr/bin".to_string())]
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn user_binding_wins_regardless_of_order() {
-        let dir = with_files("order", &[(
-            "sudoers",
-            "Defaults:%wheel !secure_path\nDefaults secure_path=\"/sbin\"\nDefaults:bob secure_path=/x\n",
-        )]);
+        let dir = with_files(
+            "order",
+            &[(
+                "sudoers",
+                "Defaults:%wheel !secure_path\nDefaults secure_path=\"/sbin\"\nDefaults:bob secure_path=/x\n",
+            )],
+        );
         let groups = vec!["wheel".to_string()];
-        assert_eq!(secure_path(&dir.join("sudoers"), &subject(&groups)), vec![None]);
+        assert_eq!(
+            secure_path(&dir.join("sudoers"), &subject(&groups)),
+            vec![None]
+        );
         let none = vec![];
-        assert_eq!(secure_path(&dir.join("sudoers"), &subject(&none)), vec![Some("/sbin".to_string())]);
+        assert_eq!(
+            secure_path(&dir.join("sudoers"), &subject(&none)),
+            vec![Some("/sbin".to_string())]
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn aliases_make_it_uncertain() {
-        let dir = with_files("aliases", &[("sudoers", "Defaults secure_path=/a\nDefaults:ADMINS secure_path=/b\n")]);
+        let dir = with_files(
+            "aliases",
+            &[(
+                "sudoers",
+                "Defaults secure_path=/a\nDefaults:ADMINS secure_path=/b\n",
+            )],
+        );
         let groups = vec![];
         assert_eq!(
             secure_path(&dir.join("sudoers"), &subject(&groups)),
@@ -254,6 +293,9 @@ mod tests {
     #[test]
     fn missing_file_means_unset() {
         let groups = vec![];
-        assert_eq!(secure_path(Path::new("/nonexistent/sudoers"), &subject(&groups)), vec![None]);
+        assert_eq!(
+            secure_path(Path::new("/nonexistent/sudoers"), &subject(&groups)),
+            vec![None]
+        );
     }
 }

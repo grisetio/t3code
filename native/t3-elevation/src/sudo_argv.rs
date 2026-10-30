@@ -77,7 +77,10 @@ impl Flags {
 /// so they are treated as not understood.
 pub fn parse(argv: &[String]) -> Parsed {
     let mut flags = Flags::default();
-    if argv.first().is_some_and(|arg0| basename(arg0) == "sudoedit") {
+    if argv
+        .first()
+        .is_some_and(|arg0| basename(arg0) == "sudoedit")
+    {
         flags.edit = true;
     }
     let unparsed = |flags: Flags, rest: &[String]| Parsed {
@@ -178,7 +181,12 @@ pub fn parse(argv: &[String]) -> Parsed {
     } else {
         Mode::Run(command)
     };
-    Parsed { mode, user: flags.user, group: flags.group, non_interactive: flags.non_interactive }
+    Parsed {
+        mode,
+        user: flags.user,
+        group: flags.group,
+        non_interactive: flags.non_interactive,
+    }
 }
 
 /// After an option we don't understand, `-n` may still follow among the
@@ -260,13 +268,29 @@ pub fn describe(sudo_argv: &[String], parsed: &Parsed, context: &Context) -> Des
         Mode::Unparsed => {
             warnings.push(Warning::new("unparsed_options"));
             let raw = sudo_argv.get(1..).unwrap_or_default().to_vec();
-            return Described { run_as, run_as_group, command: Command { argv: raw, resolved_path: None, warnings } };
+            return Described {
+                run_as,
+                run_as_group,
+                command: Command {
+                    argv: raw,
+                    resolved_path: None,
+                    warnings,
+                },
+            };
         }
         Mode::Edit(files) => {
             let mut argv = vec!["sudoedit".to_string()];
             argv.extend(files.iter().cloned());
             warnings.push(Warning::new("edit"));
-            return Described { run_as, run_as_group, command: Command { argv, resolved_path: None, warnings } };
+            return Described {
+                run_as,
+                run_as_group,
+                command: Command {
+                    argv,
+                    resolved_path: None,
+                    warnings,
+                },
+            };
         }
         Mode::Shell(command) | Mode::Login(command) => {
             let shell = if matches!(parsed.mode, Mode::Shell(_)) {
@@ -305,7 +329,15 @@ pub fn describe(sudo_argv: &[String], parsed: &Parsed, context: &Context) -> Des
     if shell {
         warnings.push(Warning::new("shell"));
     }
-    Described { run_as, run_as_group, command: Command { argv, resolved_path, warnings } }
+    Described {
+        run_as,
+        run_as_group,
+        command: Command {
+            argv,
+            resolved_path,
+            warnings,
+        },
+    }
 }
 
 const KNOWN_SHELLS: &[&str] = &[
@@ -346,9 +378,14 @@ pub fn resolve_program(program: &str, context: &Context) -> Option<String> {
     match &context.search {
         SearchPath::Known(search) => search_one(program, search),
         SearchPath::Uncertain(alternatives) => {
-            let mut results = alternatives.iter().map(|search| search_one(program, search));
+            let mut results = alternatives
+                .iter()
+                .map(|search| search_one(program, search));
             let first = results.next()?;
-            results.all(|other| other == first).then_some(first).flatten()
+            results
+                .all(|other| other == first)
+                .then_some(first)
+                .flatten()
         }
     }
 }
@@ -383,7 +420,10 @@ fn path_replaceable(path: &Path, context: &Context) -> bool {
                 return true;
             }
         }
-        if index + 1 == components.len() && !meta.file_type().is_symlink() && writable_by(&meta, context) {
+        if index + 1 == components.len()
+            && !meta.file_type().is_symlink()
+            && writable_by(&meta, context)
+        {
             return true;
         }
     }
@@ -421,7 +461,14 @@ mod tests {
 
     #[test]
     fn parses_user_group_and_separator() {
-        let parsed = parse(&argv(&["sudo", "-u", "root", "--", "nix-collect-garbage", "-d"]));
+        let parsed = parse(&argv(&[
+            "sudo",
+            "-u",
+            "root",
+            "--",
+            "nix-collect-garbage",
+            "-d",
+        ]));
         assert_eq!(parsed.mode, run(&["nix-collect-garbage", "-d"]));
         assert_eq!(parsed.user.as_deref(), Some("root"));
         let parsed = parse(&argv(&["sudo", "-g", "wheel", "python3", "x.py"]));
@@ -431,8 +478,22 @@ mod tests {
         assert!(parsed.non_interactive);
         assert_eq!(parsed.user.as_deref(), Some("root"));
         assert_eq!(parsed.group.as_deref(), Some("wheel"));
-        let parsed = parse(&argv(&["sudo", "--user=bob", "--group", "staff", "--non-interactive", "id"]));
-        assert_eq!((parsed.user.as_deref(), parsed.group.as_deref(), parsed.non_interactive), (Some("bob"), Some("staff"), true));
+        let parsed = parse(&argv(&[
+            "sudo",
+            "--user=bob",
+            "--group",
+            "staff",
+            "--non-interactive",
+            "id",
+        ]));
+        assert_eq!(
+            (
+                parsed.user.as_deref(),
+                parsed.group.as_deref(),
+                parsed.non_interactive
+            ),
+            (Some("bob"), Some("staff"), true)
+        );
     }
 
     #[test]
@@ -441,16 +502,31 @@ mod tests {
         assert_eq!(parsed.mode, run(&["vi", "-n", "-u", "x"]));
         assert!(!parsed.non_interactive);
         assert_eq!(parsed.user, None);
-        assert_eq!(parse(&argv(&["sudo", "--", "-weird"])).mode, run(&["-weird"]));
+        assert_eq!(
+            parse(&argv(&["sudo", "--", "-weird"])).mode,
+            run(&["-weird"])
+        );
     }
 
     #[test]
     fn shell_login_and_edit() {
         assert_eq!(parse(&argv(&["sudo", "-s"])).mode, Mode::Shell(vec![]));
-        assert_eq!(parse(&argv(&["sudo", "-i", "id", "-u"])).mode, Mode::Login(argv(&["id", "-u"])));
-        assert_eq!(parse(&argv(&["sudo", "-e", "/etc/hosts"])).mode, Mode::Edit(argv(&["/etc/hosts"])));
-        assert_eq!(parse(&argv(&["/usr/bin/sudoedit", "/etc/hosts"])).mode, Mode::Edit(argv(&["/etc/hosts"])));
-        assert_eq!(parse(&argv(&["sudo", "-s", "-i", "id"])).mode, Mode::Unparsed);
+        assert_eq!(
+            parse(&argv(&["sudo", "-i", "id", "-u"])).mode,
+            Mode::Login(argv(&["id", "-u"]))
+        );
+        assert_eq!(
+            parse(&argv(&["sudo", "-e", "/etc/hosts"])).mode,
+            Mode::Edit(argv(&["/etc/hosts"]))
+        );
+        assert_eq!(
+            parse(&argv(&["/usr/bin/sudoedit", "/etc/hosts"])).mode,
+            Mode::Edit(argv(&["/etc/hosts"]))
+        );
+        assert_eq!(
+            parse(&argv(&["sudo", "-s", "-i", "id"])).mode,
+            Mode::Unparsed
+        );
         assert_eq!(parse(&argv(&["sudo", "-e"])).mode, Mode::Unparsed);
     }
 
@@ -482,7 +558,10 @@ mod tests {
 
     #[test]
     fn shell_string_matches_sudo_escaping() {
-        assert_eq!(shell_command_string(&argv(&["echo", "a b;c", "$HOME", "x_y-z"])), "echo a\\ b\\;c $HOME x_y-z");
+        assert_eq!(
+            shell_command_string(&argv(&["echo", "a b;c", "$HOME", "x_y-z"])),
+            "echo a\\ b\\;c $HOME x_y-z"
+        );
         assert_eq!(shell_command_string(&argv(&["é"])), "\\é");
     }
 
@@ -507,7 +586,8 @@ mod tests {
         std::fs::write(&script, "print(1)").unwrap();
         let tool = tmp.join("tool");
         std::fs::write(&tool, "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
         let cwd = tmp.to_string_lossy().into_owned();
         let shells = vec!["/bin/zsh".to_string()];
         let ctx = context(&cwd, &[], &shells);
@@ -516,10 +596,16 @@ mod tests {
         let described = describe(&sudo, &parse(&sudo), &ctx);
         assert_eq!(described.run_as, "me");
         assert_eq!(described.run_as_group.as_deref(), Some("wheel"));
-        assert_eq!(described.command.resolved_path.as_deref(), Some(tool.to_str().unwrap()));
+        assert_eq!(
+            described.command.resolved_path.as_deref(),
+            Some(tool.to_str().unwrap())
+        );
         assert_eq!(
             described.command.warnings,
-            vec![Warning::new("user_writable_program"), Warning::at("user_writable_argument", 1)]
+            vec![
+                Warning::new("user_writable_program"),
+                Warning::at("user_writable_argument", 1)
+            ]
         );
 
         let sudo = argv(&["sudo", "true"]);
@@ -530,11 +616,17 @@ mod tests {
 
         let sudo = argv(&["sudo", "-s", "echo", "a;b"]);
         let described = describe(&sudo, &parse(&sudo), &ctx);
-        assert_eq!(described.command.argv, argv(&["/bin/zsh", "-c", "echo a\\;b"]));
+        assert_eq!(
+            described.command.argv,
+            argv(&["/bin/zsh", "-c", "echo a\\;b"])
+        );
         assert_eq!(described.command.warnings, vec![Warning::new("shell")]);
 
         let sudo = argv(&["sudo", "-i"]);
-        assert_eq!(describe(&sudo, &parse(&sudo), &ctx).command.argv, argv(&["/bin/bash"]));
+        assert_eq!(
+            describe(&sudo, &parse(&sudo), &ctx).command.argv,
+            argv(&["/bin/bash"])
+        );
 
         let sudo = argv(&["sudo", "sh", "-c", "id"]);
         let described = describe(&sudo, &parse(&sudo), &ctx);
@@ -543,15 +635,24 @@ mod tests {
         let sudo = argv(&["sudo", "-e", "/etc/hosts"]);
         let described = describe(&sudo, &parse(&sudo), &ctx);
         assert_eq!(described.command.argv, argv(&["sudoedit", "/etc/hosts"]));
-        assert_eq!((described.command.resolved_path, described.command.warnings), (None, vec![Warning::new("edit")]));
+        assert_eq!(
+            (described.command.resolved_path, described.command.warnings),
+            (None, vec![Warning::new("edit")])
+        );
 
         let sudo = argv(&["sudo", "-n", "--chroot=/x", "id"]);
         let described = describe(&sudo, &parse(&sudo), &ctx);
         assert_eq!(described.command.argv, argv(&["-n", "--chroot=/x", "id"]));
-        assert_eq!(described.command.warnings, vec![Warning::new("unparsed_options")]);
+        assert_eq!(
+            described.command.warnings,
+            vec![Warning::new("unparsed_options")]
+        );
 
         let sudo = argv(&["sudo", "definitely-not-a-program-t3"]);
-        assert_eq!(describe(&sudo, &parse(&sudo), &ctx).command.resolved_path, None);
+        assert_eq!(
+            describe(&sudo, &parse(&sudo), &ctx).command.resolved_path,
+            None
+        );
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 

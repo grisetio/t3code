@@ -76,7 +76,10 @@ pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outco
     if !config::is_safe_user_name(&user.name) {
         return Outcome::Ignore;
     }
-    let config_path = environment.state_dir.join("users").join(format!("{}.toml", user.name));
+    let config_path = environment
+        .state_dir
+        .join("users")
+        .join(format!("{}.toml", user.name));
     if std::fs::symlink_metadata(&config_path).is_err() {
         return Outcome::Ignore;
     }
@@ -84,11 +87,22 @@ pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outco
     // program's `sudo -n` reach PAM, so with -n every outcome that would be
     // IGNORE fails instead; otherwise it would reach pam_unix, faillock or
     // Touch ID.
-    let soft = if parsed.non_interactive { Outcome::Fail } else { Outcome::Ignore };
+    let soft = if parsed.non_interactive {
+        Outcome::Fail
+    } else {
+        Outcome::Ignore
+    };
     let Some(prepared) = prepare(invocation, environment, &user, &config_path) else {
         return soft;
     };
-    match exchange(invocation, environment, &user, &argv_lossy, &parsed, prepared) {
+    match exchange(
+        invocation,
+        environment,
+        &user,
+        &argv_lossy,
+        &parsed,
+        prepared,
+    ) {
         Exchange::NotOurs => soft,
         Exchange::Decided(outcome) => outcome,
     }
@@ -102,7 +116,12 @@ struct Prepared {
     chain: Vec<ChainEntry>,
 }
 
-fn prepare(invocation: &Invocation, environment: &Environment, user: &sys::Passwd, config_path: &Path) -> Option<Prepared> {
+fn prepare(
+    invocation: &Invocation,
+    environment: &Environment,
+    user: &sys::Passwd,
+    config_path: &Path,
+) -> Option<Prepared> {
     rootsafe::check_path(config_path, &environment.policy, rootsafe::Kind::File).ok()?;
     let text = rootsafe::read_limited(config_path, 64 * 1024).ok()?;
     let config = config::parse(std::str::from_utf8(&text).ok()?)?;
@@ -117,7 +136,11 @@ fn prepare(invocation: &Invocation, environment: &Environment, user: &sys::Passw
     if !matches!(invocation.service.as_deref(), Some("sudo" | "sudo-i")) {
         return None;
     }
-    let keys = keys::load_dir(&environment.state_dir.join("keys").join(&user.name), &environment.policy).ok()?;
+    let keys = keys::load_dir(
+        &environment.state_dir.join("keys").join(&user.name),
+        &environment.policy,
+    )
+    .ok()?;
     if keys.is_empty() {
         return None;
     }
@@ -135,7 +158,13 @@ enum Exchange {
     Decided(Outcome),
 }
 
-fn hello_line(invocation: &Invocation, user: &str, host: (&str, &str), argv: &[String], chain: &[ChainEntry]) -> String {
+fn hello_line(
+    invocation: &Invocation,
+    user: &str,
+    host: (&str, &str),
+    argv: &[String],
+    chain: &[ChainEntry],
+) -> String {
     let mut out = String::from("{\"type\":\"hello\",\"v\":1,\"user\":");
     json::push_str(&mut out, user);
     out.push_str(&format!(",\"uid\":{},\"service\":", invocation.uid));
@@ -147,7 +176,10 @@ fn hello_line(invocation: &Invocation, user: &str, host: (&str, &str), argv: &[S
     out.push_str("},\"argv\":");
     json::push_str_array(&mut out, argv);
     out.push_str(",\"cwd\":");
-    let cwd = invocation.cwd.as_ref().map(|cwd| String::from_utf8_lossy(cwd).into_owned());
+    let cwd = invocation
+        .cwd
+        .as_ref()
+        .map(|cwd| String::from_utf8_lossy(cwd).into_owned());
     json::push_opt_str(&mut out, cwd.as_deref());
     out.push_str(",\"chain\":[");
     for (index, entry) in chain.iter().enumerate() {
@@ -238,7 +270,10 @@ fn exchange(
         send_result(&mut connection, "too_large");
         return Exchange::Decided(Outcome::Fail);
     }
-    let request = format!("{{\"type\":\"request\",\"payload\":\"{}\"}}", crate::b64::encode(&bytes));
+    let request = format!(
+        "{{\"type\":\"request\",\"payload\":\"{}\"}}",
+        crate::b64::encode(&bytes)
+    );
     let seconds_left = (payload.expires_at - sys::now()).max(0) as u64;
     let deadline = Instant::now() + Duration::from_secs(seconds_left);
     if !connection.write_line(&request, deadline) {
@@ -267,7 +302,13 @@ fn exchange(
                 alg: text("alg").unwrap_or_default(),
                 signature: text("signature").unwrap_or_default(),
             };
-            match verify::verify(&bytes, payload.expires_at, &response, &prepared.keys, sys::now()) {
+            match verify::verify(
+                &bytes,
+                payload.expires_at,
+                &response,
+                &prepared.keys,
+                sys::now(),
+            ) {
                 Ok(_) => {
                     send_result(&mut connection, "approved");
                     Exchange::Decided(Outcome::Approved)
@@ -322,7 +363,10 @@ fn build_payload(
         SearchPath::Uncertain(alternatives)
     };
     let target_shell = target_login_shell(&run_as_for_sudoers);
-    let caller_shell = invocation.env_shell.clone().or_else(|| Some(user.shell.clone()).filter(|s| !s.is_empty()));
+    let caller_shell = invocation
+        .env_shell
+        .clone()
+        .or_else(|| Some(user.shell.clone()).filter(|s| !s.is_empty()));
     let shells: Vec<String> = std::fs::read_to_string(&environment.shells)
         .unwrap_or_default()
         .lines()
@@ -398,7 +442,10 @@ mod tests {
         let state = dir.join("state");
         std::fs::create_dir_all(state.join("users")).unwrap();
         std::fs::create_dir_all(state.join("keys").join(&user)).unwrap();
-        let config = format!("version = 1\nenabled = true\nsocket = \"{}\"\n", dir.join("s.sock").display());
+        let config = format!(
+            "version = 1\nenabled = true\nsocket = \"{}\"\n",
+            dir.join("s.sock").display()
+        );
         std::fs::write(state.join("users").join(format!("{user}.toml")), config).unwrap();
         let key = vector_key("enrolled");
         let file = serde_json::json!({
@@ -406,16 +453,29 @@ mod tests {
             "label": "test", "securityLevel": "tee", "enrolledAt": "2026-10-30T12:00:00Z",
             "attestationSummary": { "packageName": "p", "signingCertDigest": "d", "devAttestation": true }
         });
-        std::fs::write(state.join("keys").join(&user).join(format!("{}.json", key.key_id)), file.to_string()).unwrap();
+        std::fs::write(
+            state
+                .join("keys")
+                .join(&user)
+                .join(format!("{}.json", key.key_id)),
+            file.to_string(),
+        )
+        .unwrap();
         let environment = Environment {
             state_dir: state,
-            policy: Policy { owners: vec![0, uid] },
+            policy: Policy {
+                owners: vec![0, uid],
+            },
             sudoers: dir.join("no-sudoers"),
             shells: PathBuf::from("/etc/shells"),
             chain_start: unsafe { libc::getppid() },
             window_override: None,
         };
-        Setup { dir, environment, user }
+        Setup {
+            dir,
+            environment,
+            user,
+        }
     }
 
     impl Setup {
@@ -457,7 +517,10 @@ mod tests {
         let payload = exchange.payload.unwrap();
         assert_eq!(payload["user"], setup.user.as_str());
         assert_eq!(payload["command"]["argv"], serde_json::json!(["true"]));
-        assert_eq!(payload["expiresAt"].as_i64().unwrap() - payload["issuedAt"].as_i64().unwrap(), 100);
+        assert_eq!(
+            payload["expiresAt"].as_i64().unwrap() - payload["issuedAt"].as_i64().unwrap(),
+            100
+        );
         let hello = exchange.hello.unwrap();
         assert_eq!(hello["type"], "hello");
         assert!(!hello["chain"].as_array().unwrap().is_empty());
@@ -492,30 +555,75 @@ mod tests {
     fn not_ours_is_ignored_unless_non_interactive() {
         for (name, mode) in [("notmine", Mode::NotMine), ("garbage", Mode::Garbage)] {
             let setup = setup(name);
-            assert_eq!(setup.run(mode, &setup.invocation(&["sudo", "true"])).0, Outcome::Ignore, "{name}");
-            assert_eq!(setup.run(mode, &setup.invocation(&["sudo", "-n", "true"])).0, Outcome::Fail, "{name}");
+            assert_eq!(
+                setup.run(mode, &setup.invocation(&["sudo", "true"])).0,
+                Outcome::Ignore,
+                "{name}"
+            );
+            assert_eq!(
+                setup
+                    .run(mode, &setup.invocation(&["sudo", "-n", "true"]))
+                    .0,
+                Outcome::Fail,
+                "{name}"
+            );
         }
         let setup = setup("down");
-        assert_eq!(authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment), Outcome::Ignore);
-        assert_eq!(authenticate(&setup.invocation(&["sudo", "-n", "true"]), &setup.environment), Outcome::Fail);
+        assert_eq!(
+            authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment),
+            Outcome::Ignore
+        );
+        assert_eq!(
+            authenticate(
+                &setup.invocation(&["sudo", "-n", "true"]),
+                &setup.environment
+            ),
+            Outcome::Fail
+        );
     }
 
     #[test]
     fn unconfigured_users_are_always_ignored() {
         let setup = setup("noconfig");
-        std::fs::remove_file(setup.environment.state_dir.join("users").join(format!("{}.toml", setup.user))).unwrap();
-        assert_eq!(authenticate(&setup.invocation(&["sudo", "-n", "true"]), &setup.environment), Outcome::Ignore);
+        std::fs::remove_file(
+            setup
+                .environment
+                .state_dir
+                .join("users")
+                .join(format!("{}.toml", setup.user)),
+        )
+        .unwrap();
+        assert_eq!(
+            authenticate(
+                &setup.invocation(&["sudo", "-n", "true"]),
+                &setup.environment
+            ),
+            Outcome::Ignore
+        );
     }
 
     #[test]
     fn unsafe_or_foreign_contexts_never_reach_the_socket() {
         let setup = setup("unsafe");
-        let config = setup.environment.state_dir.join("users").join(format!("{}.toml", setup.user));
+        let config = setup
+            .environment
+            .state_dir
+            .join("users")
+            .join(format!("{}.toml", setup.user));
         std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
         // No server is listening: reaching the socket would also be IGNORE, so
         // check -n, which only fails when the module got as far as deciding.
-        assert_eq!(authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment), Outcome::Ignore);
-        assert_eq!(authenticate(&setup.invocation(&["sudo", "-n", "true"]), &setup.environment), Outcome::Fail);
+        assert_eq!(
+            authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment),
+            Outcome::Ignore
+        );
+        assert_eq!(
+            authenticate(
+                &setup.invocation(&["sudo", "-n", "true"]),
+                &setup.environment
+            ),
+            Outcome::Fail
+        );
         std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         let mut invocation = setup.invocation(&["sudo", "true"]);
@@ -526,7 +634,12 @@ mod tests {
         assert_eq!(setup.run(Mode::Approve, &invocation).0, Outcome::Ignore);
         let keys = setup.environment.state_dir.join("keys").join(&setup.user);
         std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o777)).unwrap();
-        assert_eq!(setup.run(Mode::Approve, &setup.invocation(&["sudo", "true"])).0, Outcome::Ignore);
+        assert_eq!(
+            setup
+                .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
+                .0,
+            Outcome::Ignore
+        );
     }
 
     #[test]
@@ -535,10 +648,17 @@ mod tests {
         let mut invocation = setup.invocation(&["sudo", "true"]);
         invocation.argv.push(vec![0xff, 0xfe]);
         let (outcome, exchange) = setup.run(Mode::Approve, &invocation);
-        assert_eq!((outcome, exchange.result.as_deref()), (Outcome::Fail, Some("invalid_encoding")));
+        assert_eq!(
+            (outcome, exchange.result.as_deref()),
+            (Outcome::Fail, Some("invalid_encoding"))
+        );
 
         let big = "x".repeat(MAX_PAYLOAD_BYTES);
-        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "echo", &big]));
-        assert_eq!((outcome, exchange.result.as_deref()), (Outcome::Fail, Some("too_large")));
+        let (outcome, exchange) =
+            setup.run(Mode::Approve, &setup.invocation(&["sudo", "echo", &big]));
+        assert_eq!(
+            (outcome, exchange.result.as_deref()),
+            (Outcome::Fail, Some("too_large"))
+        );
     }
 }

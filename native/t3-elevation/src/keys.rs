@@ -85,7 +85,11 @@ pub fn parse_key_file(file_name: &str, bytes: &[u8]) -> Option<EnrolledKey> {
         return None;
     }
     let verifying_key = parse_p256_spki(&spki)?;
-    Some(EnrolledKey { key_id: file.key_id.clone(), verifying_key, file })
+    Some(EnrolledKey {
+        key_id: file.key_id.clone(),
+        verifying_key,
+        file,
+    })
 }
 
 /// Loads `keys/<user>/`. Unsafe files or directories fail the whole load;

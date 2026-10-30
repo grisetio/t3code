@@ -15,7 +15,9 @@ pub struct EnrollCommand {
 
 /// `<path>/t3-elevation enroll <options>`.
 pub fn parse_command(argv: &[String]) -> Option<EnrollCommand> {
-    let [program, subcommand, rest @ ..] = argv else { return None };
+    let [program, subcommand, rest @ ..] = argv else {
+        return None;
+    };
     (program.rsplit('/').next() == Some("t3-elevation") && subcommand == "enroll").then_some(())?;
     parse_options(rest)
 }
@@ -41,7 +43,9 @@ pub fn parse_options(rest: &[String]) -> Option<EnrollCommand> {
         }
         values[slot] = Some(args.next()?);
     }
-    let [Some(user), Some(label), Some(public_key), Some(challenge)] = values else { return None };
+    let [Some(user), Some(label), Some(public_key), Some(challenge)] = values else {
+        return None;
+    };
     b64::decode(public_key)?;
     (b64::decode(challenge)?.len() == 32).then_some(())?;
     Some(EnrollCommand {

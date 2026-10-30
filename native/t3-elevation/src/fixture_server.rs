@@ -12,7 +12,8 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-pub const VECTORS: &str = include_str!("../../../packages/contracts/test-vectors/device-approval.json");
+pub const VECTORS: &str =
+    include_str!("../../../packages/contracts/test-vectors/device-approval.json");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -58,7 +59,9 @@ pub struct VectorKey {
 pub fn vector_key(name: &str) -> VectorKey {
     let vectors: Value = serde_json::from_str(VECTORS).expect("vectors");
     let key = &vectors["keys"][name];
-    let decode = |field: &str| b64::decode(key[field].as_str().expect("vector key field")).expect("base64url");
+    let decode = |field: &str| {
+        b64::decode(key[field].as_str().expect("vector key field")).expect("base64url")
+    };
     VectorKey {
         key_id: key["keyId"].as_str().expect("keyId").to_string(),
         spki: decode("spkiDer"),
@@ -102,7 +105,9 @@ fn read_json(reader: &mut BufReader<UnixStream>) -> Option<Value> {
 pub fn handle(stream: UnixStream, mode: Mode) -> Exchange {
     let mut exchange = Exchange::default();
     let _ = stream.set_read_timeout(Some(Duration::from_secs(400)));
-    let Ok(mut writer) = stream.try_clone() else { return exchange };
+    let Ok(mut writer) = stream.try_clone() else {
+        return exchange;
+    };
     let mut reader = BufReader::new(stream);
     exchange.hello = read_json(&mut reader);
     let mut send = |value: String| writer.write_all(format!("{value}\n").as_bytes()).is_ok();
@@ -117,12 +122,16 @@ pub fn handle(stream: UnixStream, mode: Mode) -> Exchange {
         }
         _ => send(json!({ "type": "hello_reply", "v": 1, "decision": "mine" }).to_string()),
     };
-    let Some(request) = read_json(&mut reader) else { return exchange };
+    let Some(request) = read_json(&mut reader) else {
+        return exchange;
+    };
     if request["type"] == "result" {
         exchange.result = request["outcome"].as_str().map(str::to_string);
         return exchange;
     }
-    let Some(bytes) = request["payload"].as_str().and_then(b64::decode) else { return exchange };
+    let Some(bytes) = request["payload"].as_str().and_then(b64::decode) else {
+        return exchange;
+    };
     exchange.payload = serde_json::from_slice(&bytes).ok();
     if payload::decode(&bytes).is_err() {
         exchange.result = Some("fixture_rejected_payload".into());
@@ -150,6 +159,7 @@ pub fn handle(stream: UnixStream, mode: Mode) -> Exchange {
         Mode::Close => return exchange,
         Mode::Expire | Mode::NotMine | Mode::Garbage => true,
     };
-    exchange.result = read_json(&mut reader).and_then(|value| value["outcome"].as_str().map(str::to_string));
+    exchange.result =
+        read_json(&mut reader).and_then(|value| value["outcome"].as_str().map(str::to_string));
     exchange
 }

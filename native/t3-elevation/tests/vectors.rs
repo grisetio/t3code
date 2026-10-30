@@ -7,12 +7,17 @@ use t3_elevation::verify::{self, Response};
 use t3_elevation::{b64, enroll, escape, payload};
 
 fn vectors() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/contracts/test-vectors/device-approval.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../packages/contracts/test-vectors/device-approval.json"
+    );
     serde_json::from_slice(&std::fs::read(path).expect("vectors")).expect("vectors json")
 }
 
 fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value[key].as_str().unwrap_or_else(|| panic!("{key} missing"))
+    value[key]
+        .as_str()
+        .unwrap_or_else(|| panic!("{key} missing"))
 }
 
 fn bytes(value: &Value, key: &str) -> Vec<u8> {
@@ -41,18 +46,28 @@ fn enrolled(vectors: &Value, ids: &[String]) -> Vec<EnrolledKey> {
 #[test]
 fn context_matches() {
     let vectors = vectors();
-    assert_eq!(bytes(&vectors, "contextBase64Url"), t3_elevation::SIGNATURE_CONTEXT);
-    assert_eq!(vectors["maxPayloadBytes"].as_u64(), Some(t3_elevation::MAX_PAYLOAD_BYTES as u64));
+    assert_eq!(
+        bytes(&vectors, "contextBase64Url"),
+        t3_elevation::SIGNATURE_CONTEXT
+    );
+    assert_eq!(
+        vectors["maxPayloadBytes"].as_u64(),
+        Some(t3_elevation::MAX_PAYLOAD_BYTES as u64)
+    );
 }
 
 #[test]
 fn payloads_decode_reencode_and_verify() {
     let vectors = vectors();
-    let keys = enrolled(&vectors, &[str_of(&vectors["keys"]["enrolled"], "keyId").to_string()]);
+    let keys = enrolled(
+        &vectors,
+        &[str_of(&vectors["keys"]["enrolled"], "keyId").to_string()],
+    );
     for vector in vectors["payloads"].as_array().unwrap() {
         let name = str_of(vector, "name");
         let raw = bytes(vector, "payload");
-        let decoded = payload::decode(&raw).unwrap_or_else(|error| panic!("{name}: {}", error.as_str()));
+        let decoded =
+            payload::decode(&raw).unwrap_or_else(|error| panic!("{name}: {}", error.as_str()));
         // The module's encoder reproduces the exact signed bytes.
         assert_eq!(decoded.to_bytes(), raw, "{name}");
         let parsed: Value = serde_json::from_slice(&raw).unwrap();
@@ -65,7 +80,10 @@ fn payloads_decode_reencode_and_verify() {
         };
         let issued_at = vector["decoded"]["issuedAt"].as_i64().unwrap();
         let expires_at = vector["decoded"]["expiresAt"].as_i64().unwrap();
-        assert!(verify::verify(&raw, expires_at, &response, &keys, issued_at).is_ok(), "{name}");
+        assert!(
+            verify::verify(&raw, expires_at, &response, &keys, issued_at).is_ok(),
+            "{name}"
+        );
     }
 }
 
@@ -92,7 +110,9 @@ fn verify_vectors() {
         let keys = enrolled(&vectors, &ids);
         assert_eq!(keys.len(), ids.len(), "{name}");
         let raw = bytes(vector, "payload");
-        let expires_at = payload::decode(&raw).map(|payload| payload.expires_at).unwrap_or(0);
+        let expires_at = payload::decode(&raw)
+            .map(|payload| payload.expires_at)
+            .unwrap_or(0);
         let response = &vector["response"];
         let response = Response {
             key_id: response["keyId"].as_str().unwrap_or_default(),
@@ -114,8 +134,12 @@ fn enroll_parse() {
     let payloads = vectors["payloads"].as_array().unwrap();
     for vector in vectors["enrollParse"].as_array().unwrap() {
         let name = str_of(vector, "name");
-        let source = payloads.iter().find(|payload| payload["name"] == name).expect("payload for enrollParse");
-        let argv: Vec<String> = serde_json::from_value(source["decoded"]["command"]["argv"].clone()).unwrap();
+        let source = payloads
+            .iter()
+            .find(|payload| payload["name"] == name)
+            .expect("payload for enrollParse");
+        let argv: Vec<String> =
+            serde_json::from_value(source["decoded"]["command"]["argv"].clone()).unwrap();
         let parsed = enroll::parse_command(&argv);
         let expected = &vector["expected"];
         if expected.is_null() {
@@ -127,9 +151,15 @@ fn enroll_parse() {
         assert_eq!(parsed.label, str_of(expected, "label"));
         assert_eq!(parsed.public_key, str_of(expected, "publicKey"));
         assert_eq!(parsed.challenge, str_of(expected, "challenge"));
-        assert_eq!(parsed.allow_dev_attestation, expected["allowDevAttestation"].as_bool().unwrap());
+        assert_eq!(
+            parsed.allow_dev_attestation,
+            expected["allowDevAttestation"].as_bool().unwrap()
+        );
         let spki = b64::decode(&parsed.public_key).unwrap();
-        assert_eq!(keys::comparison_code(&spki), str_of(expected, "comparisonCode"));
+        assert_eq!(
+            keys::comparison_code(&spki),
+            str_of(expected, "comparisonCode")
+        );
     }
 }
 
@@ -138,13 +168,34 @@ fn enroll_grammar_is_strict() {
     let key = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ";
     let challenge = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
     let argv = |extra: &[&str]| -> Vec<String> {
-        let mut argv = vec!["/usr/local/lib/t3-elevation/t3-elevation", "enroll", "--challenge", challenge, "--user", "u", "--label", "x", "--public-key", key];
+        let mut argv = vec![
+            "/usr/local/lib/t3-elevation/t3-elevation",
+            "enroll",
+            "--challenge",
+            challenge,
+            "--user",
+            "u",
+            "--label",
+            "x",
+            "--public-key",
+            key,
+        ];
         argv.extend_from_slice(extra);
         argv.into_iter().map(str::to_string).collect()
     };
     assert!(enroll::parse_command(&argv(&[])).is_some());
-    assert!(enroll::parse_command(&argv(&["--allow-dev-attestation"])).unwrap().allow_dev_attestation);
-    assert!(enroll::parse_command(&argv(&["--allow-dev-attestation", "--allow-dev-attestation"])).is_none());
+    assert!(
+        enroll::parse_command(&argv(&["--allow-dev-attestation"]))
+            .unwrap()
+            .allow_dev_attestation
+    );
+    assert!(
+        enroll::parse_command(&argv(&[
+            "--allow-dev-attestation",
+            "--allow-dev-attestation"
+        ]))
+        .is_none()
+    );
     assert!(enroll::parse_command(&argv(&["--user", "v"])).is_none());
     assert!(enroll::parse_command(&argv(&["extra"])).is_none());
     assert!(enroll::parse_command(&argv(&["--label"])).is_none());
@@ -171,14 +222,23 @@ fn display_escaping() {
     let vectors = vectors();
     for vector in vectors["displayEscaping"].as_array().unwrap() {
         let name = str_of(vector, "name");
-        assert_eq!(escape::display(str_of(vector, "input")), str_of(vector, "expected"), "{name}");
+        assert_eq!(
+            escape::display(str_of(vector, "input")),
+            str_of(vector, "expected"),
+            "{name}"
+        );
     }
 }
 
 #[test]
 fn vector_keys_derive_their_ids() {
     let vectors = vectors();
-    for (name, key) in vectors["keys"].as_object().unwrap().iter().filter(|(_, key)| key.is_object()) {
+    for (name, key) in vectors["keys"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, key)| key.is_object())
+    {
         let spki = bytes(key, "spkiDer");
         assert_eq!(keys::key_id(&spki), str_of(key, "keyId"), "{name}");
         assert!(keys::parse_p256_spki(&spki).is_some(), "{name}");

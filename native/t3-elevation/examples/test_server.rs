@@ -15,7 +15,9 @@ use t3_elevation::fixture_server::{self, Mode};
 use t3_elevation::{b64, sys};
 
 fn option(args: &[String], name: &str) -> Option<String> {
-    args.windows(2).find(|pair| pair[0] == name).map(|pair| pair[1].clone())
+    args.windows(2)
+        .find(|pair| pair[0] == name)
+        .map(|pair| pair[1].clone())
 }
 
 fn serve(args: &[String]) {
@@ -34,7 +36,11 @@ fn serve(args: &[String]) {
         let mut line = exchange.to_json();
         line["time"] = sys::now().into();
         line["mode"] = format!("{mode:?}").into();
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&log).expect("log");
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .expect("log");
         let _ = writeln!(file, "{line}");
     }
 }
@@ -43,7 +49,9 @@ fn enrollment(args: &[String]) {
     let key = option(args, "--key").unwrap_or_else(|| "enrolled".into());
     let label = option(args, "--label").unwrap_or_else(|| "Test Pixel".into());
     let challenge: [u8; 32] = match option(args, "--challenge") {
-        Some(text) => b64::decode(&text).and_then(|bytes| bytes.try_into().ok()).expect("32-byte challenge"),
+        Some(text) => b64::decode(&text)
+            .and_then(|bytes| bytes.try_into().ok())
+            .expect("32-byte challenge"),
         None => {
             let mut bytes = [0u8; 32];
             getrandom::getrandom(&mut bytes).expect("random");

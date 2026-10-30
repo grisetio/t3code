@@ -31,7 +31,11 @@ pub fn parse(text: &str) -> Option<UserConfig> {
             .as_integer()?
             .clamp(MIN_WINDOW_SECONDS, MAX_WINDOW_SECONDS),
     };
-    Some(UserConfig { enabled, socket, approval_window_seconds })
+    Some(UserConfig {
+        enabled,
+        socket,
+        approval_window_seconds,
+    })
 }
 
 pub fn render(config: &UserConfig) -> String {
@@ -66,24 +70,40 @@ mod tests {
         .unwrap();
         assert_eq!(config.approval_window_seconds, 100);
         assert!(config.enabled);
-        let long = parse("version = 1\nenabled = true\nsocket = \"/s\"\napproval_window_seconds = 900\n").unwrap();
+        let long =
+            parse("version = 1\nenabled = true\nsocket = \"/s\"\napproval_window_seconds = 900\n")
+                .unwrap();
         assert_eq!(long.approval_window_seconds, 300);
-        let short = parse("version = 1\nenabled = true\nsocket = \"/s\"\napproval_window_seconds = 1\n").unwrap();
+        let short =
+            parse("version = 1\nenabled = true\nsocket = \"/s\"\napproval_window_seconds = 1\n")
+                .unwrap();
         assert_eq!(short.approval_window_seconds, 10);
-        assert_eq!(parse("version = 1\nenabled = true\nsocket = \"/s\"\n").unwrap().approval_window_seconds, 100);
+        assert_eq!(
+            parse("version = 1\nenabled = true\nsocket = \"/s\"\n")
+                .unwrap()
+                .approval_window_seconds,
+            100
+        );
     }
 
     #[test]
     fn rejects_other_versions_and_bad_sockets() {
         assert!(parse("version = 2\nenabled = true\nsocket = \"/s\"\n").is_none());
         assert!(parse("version = 1\nenabled = true\nsocket = \"relative\"\n").is_none());
-        let long = format!("version = 1\nenabled = true\nsocket = \"/{}\"\n", "a".repeat(100));
+        let long = format!(
+            "version = 1\nenabled = true\nsocket = \"/{}\"\n",
+            "a".repeat(100)
+        );
         assert!(parse(&long).is_none());
     }
 
     #[test]
     fn render_round_trips() {
-        let config = UserConfig { enabled: true, socket: "/home/a \"q\"/elevation.sock".into(), approval_window_seconds: 100 };
+        let config = UserConfig {
+            enabled: true,
+            socket: "/home/a \"q\"/elevation.sock".into(),
+            approval_window_seconds: 100,
+        };
         assert_eq!(parse(&render(&config)), Some(config));
     }
 }

@@ -43,7 +43,20 @@ impl<'a> Reader<'a> {
         self.data.is_empty()
     }
 
-    pub fn next(&mut self) -> Option<Tlv<'a>> {
+    pub fn expect(&mut self, class: Class, number: u32) -> Option<Tlv<'a>> {
+        let tlv = self.next()?;
+        (tlv.class == class && tlv.number == number).then_some(tlv)
+    }
+
+    pub fn universal(&mut self, number: u32) -> Option<Tlv<'a>> {
+        self.expect(Class::Universal, number)
+    }
+}
+
+impl<'a> Iterator for Reader<'a> {
+    type Item = Tlv<'a>;
+
+    fn next(&mut self) -> Option<Tlv<'a>> {
         let data = self.data;
         let first = *data.first()?;
         let class = match first >> 6 {
@@ -60,7 +73,9 @@ impl<'a> Reader<'a> {
             loop {
                 let byte = *data.get(position)?;
                 position += 1;
-                number = number.checked_mul(128)?.checked_add(u32::from(byte & 0x7f))?;
+                number = number
+                    .checked_mul(128)?
+                    .checked_add(u32::from(byte & 0x7f))?;
                 if byte & 0x80 == 0 {
                     break;
                 }
@@ -88,16 +103,13 @@ impl<'a> Reader<'a> {
         let end = position.checked_add(length)?;
         let value = data.get(position..end)?;
         self.data = &data[end..];
-        Some(Tlv { class, constructed, number, value, raw: &data[..end] })
-    }
-
-    pub fn expect(&mut self, class: Class, number: u32) -> Option<Tlv<'a>> {
-        let tlv = self.next()?;
-        (tlv.class == class && tlv.number == number).then_some(tlv)
-    }
-
-    pub fn universal(&mut self, number: u32) -> Option<Tlv<'a>> {
-        self.expect(Class::Universal, number)
+        Some(Tlv {
+            class,
+            constructed,
+            number,
+            value,
+            raw: &data[..end],
+        })
     }
 }
 
@@ -112,11 +124,19 @@ impl<'a> Tlv<'a> {
         if bytes.is_empty() || bytes[0] & 0x80 != 0 {
             return None;
         }
-        let bytes = if bytes.len() > 1 && bytes[0] == 0 { &bytes[1..] } else { bytes };
+        let bytes = if bytes.len() > 1 && bytes[0] == 0 {
+            &bytes[1..]
+        } else {
+            bytes
+        };
         if bytes.len() > 8 {
             return None;
         }
-        Some(bytes.iter().fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte)))
+        Some(
+            bytes
+                .iter()
+                .fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte)),
+        )
     }
 }
 
@@ -140,14 +160,23 @@ pub mod write {
                 }
             }
             for (index, group) in groups.iter().rev().enumerate() {
-                out.push(if index + 1 < groups.len() { group | 0x80 } else { *group });
+                out.push(if index + 1 < groups.len() {
+                    group | 0x80
+                } else {
+                    *group
+                });
             }
         }
         let length = value.len();
         if length < 0x80 {
             out.push(length as u8);
         } else {
-            let bytes: Vec<u8> = length.to_be_bytes().iter().copied().skip_while(|b| *b == 0).collect();
+            let bytes: Vec<u8> = length
+                .to_be_bytes()
+                .iter()
+                .copied()
+                .skip_while(|b| *b == 0)
+                .collect();
             out.push(0x80 | bytes.len() as u8);
             out.extend(bytes);
         }
@@ -161,7 +190,12 @@ pub mod write {
         tlv(0, true, 17, &parts.concat())
     }
     pub fn int(value: u64) -> Vec<u8> {
-        let mut bytes: Vec<u8> = value.to_be_bytes().iter().copied().skip_while(|b| *b == 0).collect();
+        let mut bytes: Vec<u8> = value
+            .to_be_bytes()
+            .iter()
+            .copied()
+            .skip_while(|b| *b == 0)
+            .collect();
         if bytes.is_empty() || bytes[0] & 0x80 != 0 {
             bytes.insert(0, 0);
         }
@@ -202,7 +236,7 @@ mod tests {
     #[test]
     fn reads_high_tag_numbers_and_long_lengths() {
         let inner = write::int(300);
-        let tagged = write::explicit(709, &write::octets(&vec![7u8; 200]));
+        let tagged = write::explicit(709, &write::octets(&[7u8; 200]));
         let data = write::seq(&[inner, tagged]);
         let mut outer = Reader::new(&data);
         let sequence = outer.universal(SEQUENCE).unwrap();
@@ -210,13 +244,23 @@ mod tests {
         let mut reader = sequence.reader();
         assert_eq!(reader.universal(INTEGER).unwrap().as_u64(), Some(300));
         let tagged = reader.next().unwrap();
-        assert_eq!((tagged.class, tagged.number, tagged.constructed), (Class::Context, 709, true));
-        assert_eq!(tagged.reader().universal(OCTET_STRING).unwrap().value.len(), 200);
+        assert_eq!(
+            (tagged.class, tagged.number, tagged.constructed),
+            (Class::Context, 709, true)
+        );
+        assert_eq!(
+            tagged.reader().universal(OCTET_STRING).unwrap().value.len(),
+            200
+        );
     }
 
     #[test]
     fn rejects_truncated_input() {
         assert!(Reader::new(&[0x30, 0x05, 0x02]).next().is_none());
-        assert!(Reader::new(&[0x30, 0x84, 0xff, 0xff, 0xff, 0xff]).next().is_none());
+        assert!(
+            Reader::new(&[0x30, 0x84, 0xff, 0xff, 0xff, 0xff])
+                .next()
+                .is_none()
+        );
     }
 }

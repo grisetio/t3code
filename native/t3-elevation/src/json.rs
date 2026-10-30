@@ -51,6 +51,9 @@ pub fn string(value: &str) -> String {
 mod tests {
     #[test]
     fn escapes_like_the_vector_generator() {
-        assert_eq!(super::string("a\"b\\c\n\u{1b}\u{7f}é"), "\"a\\\"b\\\\c\\n\\u001b\u{7f}é\"");
+        assert_eq!(
+            super::string("a\"b\\c\n\u{1b}\u{7f}é"),
+            "\"a\\\"b\\\\c\\n\\u001b\u{7f}é\""
+        );
     }
 }

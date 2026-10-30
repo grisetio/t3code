@@ -42,7 +42,9 @@ unsafe fn store_result(pamh: *mut pam::pam_handle, code: c_int) {
             return;
         }
         *data = code;
-        if pam::pam_set_data(pamh, RESULT_KEY.as_ptr(), data.cast(), free_result) != pam::PAM_SUCCESS {
+        if pam::pam_set_data(pamh, RESULT_KEY.as_ptr(), data.cast(), free_result)
+            != pam::PAM_SUCCESS
+        {
             libc::free(data.cast());
         }
     }
@@ -70,7 +72,11 @@ unsafe fn has_arg(argc: c_int, argv: *const *const c_char, wanted: &str) -> bool
     })
 }
 
-unsafe fn authenticate(pamh: *mut pam::pam_handle, argc: c_int, argv: *const *const c_char) -> c_int {
+unsafe fn authenticate(
+    pamh: *mut pam::pam_handle,
+    argc: c_int,
+    argv: *const *const c_char,
+) -> c_int {
     std::hint::black_box(&T3_ELEVATION_PROTOCOL_MARKER);
     if let Some(code) = unsafe { stored_result(pamh) } {
         return code;
@@ -96,6 +102,8 @@ unsafe fn authenticate(pamh: *mut pam::pam_handle, argc: c_int, argv: *const *co
     code
 }
 
+/// # Safety
+/// libpam calls this with a live handle and `argc` NUL-terminated strings in `argv`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pam_sm_authenticate(
     pamh: *mut pam::pam_handle,
@@ -103,11 +111,15 @@ pub unsafe extern "C" fn pam_sm_authenticate(
     argc: c_int,
     argv: *const *const c_char,
 ) -> c_int {
-    std::panic::catch_unwind(|| unsafe { authenticate(pamh, argc, argv) }).unwrap_or(pam::PAM_IGNORE)
+    std::panic::catch_unwind(|| unsafe { authenticate(pamh, argc, argv) })
+        .unwrap_or(pam::PAM_IGNORE)
 }
 
 /// Other modules' setcred keeps running: an auth-only module has no
 /// credentials to set.
+///
+/// # Safety
+/// Touches none of its arguments.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pam_sm_setcred(
     _pamh: *mut pam::pam_handle,

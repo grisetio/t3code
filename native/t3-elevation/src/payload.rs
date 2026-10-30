@@ -14,10 +14,16 @@ pub struct Warning {
 
 impl Warning {
     pub fn new(code: &str) -> Self {
-        Self { code: code.to_string(), arg: None }
+        Self {
+            code: code.to_string(),
+            arg: None,
+        }
     }
     pub fn at(code: &str, arg: usize) -> Self {
-        Self { code: code.to_string(), arg: Some(arg) }
+        Self {
+            code: code.to_string(),
+            arg: Some(arg),
+        }
     }
 }
 
@@ -138,8 +144,21 @@ pub fn decode(bytes: &[u8]) -> Result<Payload, DecodeError> {
 }
 
 const PAYLOAD_KEYS: [&str; 15] = [
-    "v", "kind", "nonce", "issuedAt", "expiresAt", "host", "user", "uid", "runAs", "runAsGroup",
-    "argv", "command", "cwd", "service", "keyIds",
+    "v",
+    "kind",
+    "nonce",
+    "issuedAt",
+    "expiresAt",
+    "host",
+    "user",
+    "uid",
+    "runAs",
+    "runAsGroup",
+    "argv",
+    "command",
+    "cwd",
+    "service",
+    "keyIds",
 ];
 
 fn exact_keys(object: &Map<String, Value>, keys: &[&str], optional: &[&str]) -> bool {
@@ -196,14 +215,20 @@ fn fields(object: &Map<String, Value>) -> Option<Payload> {
                 return None;
             }
             let code = warning["code"].as_str()?;
-            if code.is_empty() || code.len() > 64 || !code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+            if code.is_empty()
+                || code.len() > 64
+                || !code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+            {
                 return None;
             }
             let arg = match warning.get("arg") {
                 Some(arg) => Some(usize::try_from(non_negative(arg)?).ok()?),
                 None => None,
             };
-            Some(Warning { code: code.to_string(), arg })
+            Some(Warning {
+                code: code.to_string(),
+                arg,
+            })
         })
         .collect::<Option<Vec<_>>>()?;
     let key_ids = strings(&object["keyIds"])?;

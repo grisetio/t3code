@@ -50,16 +50,26 @@ pub fn chain(start: i32) -> Vec<ChainEntry> {
     let mut pid = start;
     let mut budget = MAX_CHAIN_TOTAL_ARGV_BYTES;
     while pid > 0 && entries.len() < MAX_CHAIN {
-        let Some((ppid, start_time)) = proc_parent_and_start(pid) else { break };
+        let Some((ppid, start_time)) = proc_parent_and_start(pid) else {
+            break;
+        };
         let (argv, argv_truncated) = match proc_argv(pid) {
             Some(raw) => {
-                let (kept, truncated, used) = truncate_argv(lossy(raw), MAX_CHAIN_ARGV_BYTES.min(budget));
+                let (kept, truncated, used) =
+                    truncate_argv(lossy(raw), MAX_CHAIN_ARGV_BYTES.min(budget));
                 budget -= used;
                 (Some(kept), truncated)
             }
             None => (None, false),
         };
-        entries.push(ChainEntry { pid, ppid, start_time, exe: proc_exe(pid), argv, argv_truncated });
+        entries.push(ChainEntry {
+            pid,
+            ppid,
+            start_time,
+            exe: proc_exe(pid),
+            argv,
+            argv_truncated,
+        });
         if pid == 1 || ppid == pid {
             break;
         }
@@ -70,7 +80,9 @@ pub fn chain(start: i32) -> Vec<ChainEntry> {
 
 #[cfg(target_os = "linux")]
 pub fn own_argv() -> Option<Vec<Vec<u8>>> {
-    std::fs::read("/proc/self/cmdline").ok().map(|bytes| split_nul(&bytes))
+    std::fs::read("/proc/self/cmdline")
+        .ok()
+        .map(|bytes| split_nul(&bytes))
 }
 
 #[cfg(target_os = "linux")]
@@ -108,13 +120,29 @@ fn procargs(pid: i32) -> Option<Vec<Vec<u8>>> {
         let mut argmax: c_int = 0;
         let mut size = std::mem::size_of::<c_int>();
         let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
-        if libc::sysctl(mib.as_mut_ptr(), 2, (&raw mut argmax).cast(), &mut size, std::ptr::null_mut(), 0) != 0 {
+        if libc::sysctl(
+            mib.as_mut_ptr(),
+            2,
+            (&raw mut argmax).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
             return None;
         }
         let mut buffer = vec![0u8; usize::try_from(argmax).ok()?];
         let mut size = buffer.len();
         let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
-        if libc::sysctl(mib.as_mut_ptr(), 3, buffer.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) != 0 {
+        if libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
             return None;
         }
         buffer.truncate(size);
@@ -150,7 +178,8 @@ fn proc_argv(pid: i32) -> Option<Vec<Vec<u8>>> {
 #[cfg(target_os = "macos")]
 fn proc_exe(pid: i32) -> Option<String> {
     let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    let length = unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    let length =
+        unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
     (length > 0).then(|| String::from_utf8_lossy(&buffer[..length as usize]).into_owned())
 }
 
@@ -161,7 +190,7 @@ fn proc_parent_and_start(pid: i32) -> Option<(i32, u64)> {
         let mut info: libc::proc_bsdinfo = std::mem::zeroed();
         let size = std::mem::size_of::<libc::proc_bsdinfo>() as c_int;
         let read = libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size);
-        (read == size).then(|| (info.pbi_ppid as i32, info.pbi_start_tvsec))
+        (read == size).then_some((info.pbi_ppid as i32, info.pbi_start_tvsec))
     }
 }
 
@@ -169,12 +198,22 @@ fn proc_parent_and_start(pid: i32) -> Option<(i32, u64)> {
 #[cfg(target_os = "macos")]
 pub fn machine_id() -> Option<String> {
     let mut uuid = [0u8; 16];
-    let wait = libc::timespec { tv_sec: 1, tv_nsec: 0 };
+    let wait = libc::timespec {
+        tv_sec: 1,
+        tv_nsec: 0,
+    };
     if unsafe { libc::gethostuuid(uuid.as_mut_ptr(), &wait) } != 0 {
         return None;
     }
     let hex: String = uuid.iter().map(|b| format!("{b:02X}")).collect();
-    let text = format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32]);
+    let text = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    );
     Some(b64::encode(&Sha256::digest(text.as_bytes())))
 }
 
@@ -189,7 +228,9 @@ pub fn hostname() -> Option<String> {
 
 pub fn cwd() -> Option<Vec<u8>> {
     use std::os::unix::ffi::OsStringExt as _;
-    std::env::current_dir().ok().map(|path| path.into_os_string().into_vec())
+    std::env::current_dir()
+        .ok()
+        .map(|path| path.into_os_string().into_vec())
 }
 
 #[derive(Clone, Debug)]
@@ -223,7 +264,13 @@ pub fn user_by_uid(uid: u32) -> Option<Passwd> {
         let mut entry: libc::passwd = std::mem::zeroed();
         let mut buffer = vec![0 as c_char; 16 * 1024];
         let mut result = std::ptr::null_mut();
-        libc::getpwuid_r(uid, &mut entry, buffer.as_mut_ptr(), buffer.len(), &mut result);
+        libc::getpwuid_r(
+            uid,
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        );
         passwd_from(result)
     }
 }
@@ -234,14 +281,22 @@ pub fn user_by_name(name: &str) -> Option<Passwd> {
         let mut entry: libc::passwd = std::mem::zeroed();
         let mut buffer = vec![0 as c_char; 16 * 1024];
         let mut result = std::ptr::null_mut();
-        libc::getpwnam_r(name.as_ptr(), &mut entry, buffer.as_mut_ptr(), buffer.len(), &mut result);
+        libc::getpwnam_r(
+            name.as_ptr(),
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        );
         passwd_from(result)
     }
 }
 
 /// The user's group ids and names from the group database.
 pub fn groups_of(user: &Passwd) -> (Vec<u32>, Vec<String>) {
-    let Ok(name) = CString::new(user.name.clone()) else { return (vec![user.gid], vec![]) };
+    let Ok(name) = CString::new(user.name.clone()) else {
+        return (vec![user.gid], vec![]);
+    };
     let mut count: c_int = 256;
     #[cfg(target_os = "macos")]
     let mut ids = vec![0 as c_int; 256];
@@ -249,7 +304,12 @@ pub fn groups_of(user: &Passwd) -> (Vec<u32>, Vec<String>) {
     let mut ids = vec![0 as libc::gid_t; 256];
     unsafe {
         #[cfg(target_os = "macos")]
-        libc::getgrouplist(name.as_ptr(), user.gid as c_int, ids.as_mut_ptr(), &mut count);
+        libc::getgrouplist(
+            name.as_ptr(),
+            user.gid as c_int,
+            ids.as_mut_ptr(),
+            &mut count,
+        );
         #[cfg(not(target_os = "macos"))]
         libc::getgrouplist(name.as_ptr(), user.gid, ids.as_mut_ptr(), &mut count);
     }
@@ -261,7 +321,11 @@ pub fn groups_of(user: &Passwd) -> (Vec<u32>, Vec<String>) {
         .iter()
         .filter_map(|gid| unsafe {
             let group = libc::getgrgid(*gid as libc::gid_t);
-            (!group.is_null()).then(|| CStr::from_ptr((*group).gr_name).to_string_lossy().into_owned())
+            (!group.is_null()).then(|| {
+                CStr::from_ptr((*group).gr_name)
+                    .to_string_lossy()
+                    .into_owned()
+            })
         })
         .collect();
     (gids, names)
@@ -296,11 +360,17 @@ mod tests {
     #[test]
     fn truncation_keeps_whole_arguments() {
         let (kept, truncated, used) = truncate_argv(vec!["ab".into(), "cd".into(), "ef".into()], 5);
-        assert_eq!((kept, truncated, used), (vec!["ab".to_string(), "cd".to_string()], true, 4));
+        assert_eq!(
+            (kept, truncated, used),
+            (vec!["ab".to_string(), "cd".to_string()], true, 4)
+        );
     }
 
     #[test]
     fn split_keeps_empty_arguments() {
-        assert_eq!(split_nul(b"sudo\0\0x\0"), vec![b"sudo".to_vec(), vec![], b"x".to_vec()]);
+        assert_eq!(
+            split_nul(b"sudo\0\0x\0"),
+            vec![b"sudo".to_vec(), vec![], b"x".to_vec()]
+        );
     }
 }

@@ -28,8 +28,14 @@ fn remaining_ms(deadline: Instant) -> Option<i32> {
 
 fn poll(fd: i32, events: i16, deadline: Instant) -> bool {
     loop {
-        let Some(timeout) = remaining_ms(deadline) else { return false };
-        let mut entry = libc::pollfd { fd, events, revents: 0 };
+        let Some(timeout) = remaining_ms(deadline) else {
+            return false;
+        };
+        let mut entry = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
         let ready = unsafe { libc::poll(&mut entry, 1, timeout) };
         if ready > 0 {
             return true;
@@ -79,19 +85,30 @@ impl Connection {
         let result = unsafe { libc::connect(raw, (&raw const address).cast(), length) };
         if result != 0 {
             let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::EINPROGRESS) || !poll(raw, libc::POLLOUT, deadline) {
+            if error.raw_os_error() != Some(libc::EINPROGRESS)
+                || !poll(raw, libc::POLLOUT, deadline)
+            {
                 return None;
             }
             let mut status: libc::c_int = 0;
             let mut size = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
             unsafe {
-                libc::getsockopt(raw, libc::SOL_SOCKET, libc::SO_ERROR, (&raw mut status).cast(), &mut size);
+                libc::getsockopt(
+                    raw,
+                    libc::SOL_SOCKET,
+                    libc::SO_ERROR,
+                    (&raw mut status).cast(),
+                    &mut size,
+                );
             }
             if status != 0 {
                 return None;
             }
         }
-        Some(Self { fd, buffer: Vec::new() })
+        Some(Self {
+            fd,
+            buffer: Vec::new(),
+        })
     }
 
     /// SO_PEERCRED on Linux, getpeereid on macOS.
@@ -128,7 +145,12 @@ impl Connection {
         let flags = 0;
         while written < data.len() {
             let sent = unsafe {
-                libc::send(self.fd.as_raw_fd(), data[written..].as_ptr().cast(), data.len() - written, flags)
+                libc::send(
+                    self.fd.as_raw_fd(),
+                    data[written..].as_ptr().cast(),
+                    data.len() - written,
+                    flags,
+                )
             };
             if sent > 0 {
                 written += sent as usize;
@@ -167,7 +189,8 @@ impl Connection {
                 return Err(ReadError::Timeout);
             }
             let mut chunk = [0u8; 8192];
-            let read = unsafe { libc::read(self.fd.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
+            let read =
+                unsafe { libc::read(self.fd.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
             if read > 0 {
                 self.buffer.extend_from_slice(&chunk[..read as usize]);
                 continue;
