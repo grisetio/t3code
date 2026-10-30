@@ -7,6 +7,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import type {
+  ElevationCheck,
   ElevationDevice,
   ElevationEnrollmentDevice,
   ElevationStatus,
@@ -150,6 +151,10 @@ function DeviceApprovalStatus(props: {
   const canEnroll = useAtomValue(elevation.enroll.permissionAtom(environmentId));
   const canRevoke = useAtomValue(elevation.revoke.permissionAtom(environmentId));
   const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(environmentId));
+  const test = useAtomCommand(elevation.test, "test device approval");
+  const canTest = useAtomValue(elevation.test.permissionAtom(environmentId));
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ElevationCheck | null>(null);
   const [record, setRecord] = useKeyRecord(environmentId);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -199,6 +204,19 @@ function DeviceApprovalStatus(props: {
     }
     return false;
   };
+  /** The live check: only a real approval proves sudo reaches device approval. */
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    setError(null);
+    try {
+      const result = await test({ environmentId, input: {} });
+      if (result._tag === "Success") setTestResult(result.value);
+      else succeeded(result);
+    } finally {
+      setTesting(false);
+    }
+  };
   const sudo = (label: string, action: SudoAction, after?: () => Promise<void>) =>
     run(label, async () => {
       if (!succeeded(await action(sudoPassword))) return false;
@@ -240,6 +258,8 @@ function DeviceApprovalStatus(props: {
         setRecord(nextRecord);
         if (result._tag === "Success" && result.value.type === "terminal_command") {
           setTerminalCommand(result.value.command);
+        } else {
+          void runTest();
         }
         return true;
       }
@@ -263,6 +283,7 @@ function DeviceApprovalStatus(props: {
           }),
         );
       }
+      void runTest();
       return true;
     });
 
@@ -312,6 +333,31 @@ function DeviceApprovalStatus(props: {
           onPress={props.onRefresh}
         />
       </View>
+
+      {installed ? (
+        <View className="gap-2">
+          <View className="overflow-hidden rounded-2xl">
+            <ListActionRow
+              icon="checkmark.circle"
+              label="Test"
+              description={
+                testing
+                  ? "Waiting for approval on a phone…"
+                  : "Runs sudo -n true on this machine for a phone to approve."
+              }
+              disabled={!canTest || testing || busy !== null}
+              onPress={() => void runTest()}
+            />
+          </View>
+          {testResult !== null ? (
+            <Text
+              className={`text-sm ${testResult.ok ? "text-foreground-muted" : "text-danger-foreground"}`}
+            >
+              {testResult.ok ? "✓" : "✗"} {testResult.message}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       {!installed && status.plannedChanges.length > 0 ? (
         <View className="gap-1 rounded-2xl bg-grouped-card p-4">

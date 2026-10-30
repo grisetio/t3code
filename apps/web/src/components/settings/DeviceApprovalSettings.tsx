@@ -6,7 +6,12 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { ElevationDevice, ElevationStatus, EnvironmentId } from "@t3tools/contracts";
+import type {
+  ElevationCheck,
+  ElevationDevice,
+  ElevationStatus,
+  EnvironmentId,
+} from "@t3tools/contracts";
 import { CheckIcon, XIcon } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 
@@ -125,19 +130,14 @@ function DeviceApprovalStatus(props: {
         {status.checks.length > 0 ? (
           <ul className="flex flex-col gap-1 text-xs">
             {status.checks.map((check) => (
-              <li key={check.id} className="flex min-w-0 items-start gap-1.5">
-                {check.ok ? (
-                  <CheckIcon className="mt-px size-3.5 shrink-0 text-success" aria-label="Passed" />
-                ) : (
-                  <XIcon className="mt-px size-3.5 shrink-0 text-destructive" aria-label="Failed" />
-                )}
-                <span className="min-w-0 break-words text-muted-foreground">{check.message}</span>
+              <li key={check.id}>
+                <CheckLine check={check} />
               </li>
             ))}
           </ul>
         ) : null}
       </SettingsRow>
-      {installed ? null : <SetUpRow status={status} />}
+      {installed ? <TestRow environmentId={props.environmentId} /> : <SetUpRow status={status} />}
       {status.devices.map((device) => (
         <DeviceRow key={device.keyId} environmentId={props.environmentId} device={device} />
       ))}
@@ -149,6 +149,71 @@ function DeviceApprovalStatus(props: {
       ) : null}
       {installed ? <TurnOffRow environmentId={props.environmentId} /> : null}
     </>
+  );
+}
+
+function CheckLine(props: { readonly check: ElevationCheck }) {
+  return (
+    <span className="flex min-w-0 items-start gap-1.5">
+      {props.check.ok ? (
+        <CheckIcon className="mt-px size-3.5 shrink-0 text-success" aria-label="Passed" />
+      ) : (
+        <XIcon className="mt-px size-3.5 shrink-0 text-destructive" aria-label="Failed" />
+      )}
+      <span className="min-w-0 break-words text-muted-foreground">{props.check.message}</span>
+    </span>
+  );
+}
+
+/** The live half of verification: only a real approval proves sudo reaches the module. */
+function TestRow(props: { readonly environmentId: EnvironmentId }) {
+  const test = useAtomCommand(elevation.test, "test device approval");
+  const canTest = useAtomValue(elevation.test.permissionAtom(props.environmentId));
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<ElevationCheck | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const onTest = async () => {
+    setRunning(true);
+    setResult(null);
+    setError(null);
+    const outcome = await test({ environmentId: props.environmentId, input: {} }).finally(() =>
+      setRunning(false),
+    );
+    if (outcome._tag === "Success") setResult(outcome.value);
+    else if (!isAtomCommandInterrupted(outcome)) {
+      setError(elevationFailureMessage(squashAtomCommandFailure(outcome), "The test didn't run."));
+    }
+  };
+  return (
+    <SettingsRow
+      title="Test"
+      description={
+        running
+          ? "Waiting for approval on your phone…"
+          : "Runs sudo -n true on this machine for your phone to approve."
+      }
+      control={
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={!canTest || running}
+          onClick={() => void onTest()}
+        >
+          Test
+        </Button>
+      }
+    >
+      {result !== null ? (
+        <div className="text-xs">
+          <CheckLine check={result} />
+        </div>
+      ) : null}
+      {error !== null ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </SettingsRow>
   );
 }
 
