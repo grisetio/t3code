@@ -651,6 +651,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       ...(unsupported === null ? {} : { unsupportedReason: unsupported }),
       ready: unsupported === null && listening && host.checks.every((check) => check.ok),
       ownsApprovals: listening,
+      user: options.user,
       setupOutsideT3: helper?.setupOutsideT3 ?? false,
       checks: host.checks,
       plannedChanges: helper?.plannedChanges ?? [],
