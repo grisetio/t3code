@@ -423,6 +423,28 @@ describe("ElevationService", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("cancels an interrupted run's unanswered request and resolves it cancelled", () =>
+    Effect.gen(function* () {
+      yield* setupRunningThread;
+      const fixture = yield* makeFixture();
+      const { module, request } = yield* openRequest(fixture);
+      yield* Queue.take(fixture.commands);
+      yield* fixture.service.cancelRun(runId);
+      assert.deepStrictEqual(yield* module.receive, { type: "cancel", reason: "interrupted" });
+      const resolved = yield* nextResolve(fixture.commands);
+      assert.strictEqual(resolved.elevationStatus, "cancelled");
+      assert.isNull(resolved.resolvedBy);
+      assert.deepStrictEqual(
+        (yield* Stream.runHead(fixture.service.pendingRequests)).pipe(Option.getOrThrow),
+        { requests: [] },
+      );
+      const late = yield* fixture.service
+        .respond({ requestId: request.requestId, decision: "deny" })
+        .pipe(Effect.flip);
+      assert.strictEqual(late.reason, "not_found");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("rejects a bad signature before anything reaches the module", () =>
     Effect.gen(function* () {
       yield* setupRunningThread;
