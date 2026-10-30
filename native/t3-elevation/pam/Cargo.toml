@@ -1,0 +1,16 @@
+[package]
+name = "pam_t3_elevation"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+name = "pam_t3_elevation"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2.186"
+libpam-sys = "0.2.0"
+t3-elevation = { path = ".." }
