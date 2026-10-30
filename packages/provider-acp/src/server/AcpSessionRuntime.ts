@@ -28,6 +28,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
+import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
@@ -1490,6 +1491,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           }),
       ),
     );
+
+  const ownerThreadId = yield* AgentScopeThreadId;
+  if (ownerThreadId !== undefined) {
+    const forget = (yield* ProviderProcesses).register({
+      pid: child.pid,
+      threadId: ownerThreadId,
+    });
+    yield* Scope.addFinalizer(runtimeScope, Effect.sync(forget));
+  }
 
   // Detached children can keep stdout open, delaying protocol termination.
   if (scopeUnit !== undefined) {

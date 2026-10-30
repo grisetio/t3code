@@ -36,6 +36,7 @@ import {
 } from "@t3tools/contracts";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   COMPUTER_USE_TOOL_SOURCE,
@@ -98,6 +99,10 @@ import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachme
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import {
+  DEVICE_APPROVAL_INSTRUCTIONS,
+  DeviceApprovalInstructions,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 import {
   buildCodexAdditionalContext,
   buildCodexDeveloperInstructions,
@@ -737,6 +742,8 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly hasT3Mcp?: boolean;
     readonly browserToolsAvailable?: boolean;
     readonly deviceToolsAvailable?: boolean;
+    /** Sent with or without the T3 MCP: any Codex turn may run sudo. */
+    readonly deviceApproval?: boolean;
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
@@ -782,10 +789,21 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
             },
           )
         : undefined;
+    const deviceApprovalContext =
+      input.deviceApproval === true
+        ? {
+            t3_code_device_approval: {
+              kind: "application" as const,
+              value: DEVICE_APPROVAL_INSTRUCTIONS,
+            },
+          }
+        : undefined;
     const additionalContext =
-      t3Context === undefined && Object.keys(appContext).length === 0
+      t3Context === undefined &&
+      deviceApprovalContext === undefined &&
+      Object.keys(appContext).length === 0
         ? undefined
-        : { ...t3Context, ...appContext };
+        : { ...t3Context, ...deviceApprovalContext, ...appContext };
     const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
       input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
         ? undefined
@@ -1566,6 +1584,7 @@ export const layerAppServerClientFactory: Layer.Layer<
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
+    const providerProcesses = yield* ProviderProcesses;
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAdapterV2.open")(function* (input) {
@@ -1593,6 +1612,11 @@ export const layerAppServerClientFactory: Layer.Layer<
               }),
           ),
         );
+        // One app-server serves many threads, so it names no thread.
+        yield* Effect.acquireRelease(
+          Effect.sync(() => providerProcesses.register({ pid: handle.pid, threadId: null })),
+          (release) => Effect.sync(release),
+        ).pipe(Effect.provideService(Scope.Scope, scope));
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,
@@ -1737,6 +1761,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const deviceApproval = yield* DeviceApprovalInstructions;
   const readMcpSession = (threadId: ThreadId | null) =>
     threadId === null ? Effect.succeed(undefined) : mcpSessions.read(threadId);
   const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
@@ -4118,6 +4143,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly nativeRequestId: string;
           readonly requestKind: ProviderRequestKind;
           readonly prompt?: string | null;
+          readonly reason?: string | null;
           readonly appName?: string;
           readonly options?: ReadonlyArray<ProviderApprovalOption>;
         }) {
@@ -4201,6 +4227,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ...(input.prompt === null || input.prompt === undefined
               ? {}
               : { prompt: input.prompt }),
+            ...(input.reason === null || input.reason === undefined
+              ? {}
+              : { reason: input.reason }),
             ...(input.appName === undefined ? {} : { appName: input.appName }),
             ...(input.options === undefined ? {} : { options: input.options }),
           };
@@ -5205,6 +5234,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ...((payload.reason ?? payload.command) === undefined
                 ? {}
                 : { prompt: payload.reason ?? payload.command }),
+              // Device approval shows it as the agent's explanation of a later sudo.
+              ...(payload.reason === undefined ? {} : { reason: payload.reason }),
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {
@@ -6411,6 +6442,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               hasT3Mcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
+              deviceApproval: deviceApproval.enabled(),
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
