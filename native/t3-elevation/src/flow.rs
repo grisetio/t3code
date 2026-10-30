@@ -370,3 +370,175 @@ fn target_login_shell(run_as: &str) -> Option<String> {
     }?;
     Some(entry.shell).filter(|shell| !shell.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixture_server::{self, Mode, vector_key};
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::net::UnixListener;
+
+    struct Setup {
+        dir: PathBuf,
+        environment: Environment,
+        user: String,
+    }
+
+    impl Drop for Setup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn setup(name: &str) -> Setup {
+        let uid = unsafe { libc::getuid() };
+        let user = sys::user_by_uid(uid).unwrap().name;
+        let dir = std::env::temp_dir().join(format!("t3e-flow-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state = dir.join("state");
+        std::fs::create_dir_all(state.join("users")).unwrap();
+        std::fs::create_dir_all(state.join("keys").join(&user)).unwrap();
+        let config = format!("version = 1\nenabled = true\nsocket = \"{}\"\n", dir.join("s.sock").display());
+        std::fs::write(state.join("users").join(format!("{user}.toml")), config).unwrap();
+        let key = vector_key("enrolled");
+        let file = serde_json::json!({
+            "version": 1, "keyId": key.key_id, "alg": "es256", "publicKey": crate::b64::encode(&key.spki),
+            "label": "test", "securityLevel": "tee", "enrolledAt": "2026-10-30T12:00:00Z",
+            "attestationSummary": { "packageName": "p", "signingCertDigest": "d", "devAttestation": true }
+        });
+        std::fs::write(state.join("keys").join(&user).join(format!("{}.json", key.key_id)), file.to_string()).unwrap();
+        let environment = Environment {
+            state_dir: state,
+            policy: Policy { owners: vec![0, uid] },
+            sudoers: dir.join("no-sudoers"),
+            shells: PathBuf::from("/etc/shells"),
+            chain_start: unsafe { libc::getppid() },
+            window_override: None,
+        };
+        Setup { dir, environment, user }
+    }
+
+    impl Setup {
+        fn invocation(&self, argv: &[&str]) -> Invocation {
+            Invocation {
+                argv: argv.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
+                uid: unsafe { libc::getuid() },
+                service: Some("sudo".into()),
+                pam_user: Some(self.user.clone()),
+                cwd: Some(self.dir.as_os_str().as_encoded_bytes().to_vec()),
+                env_shell: None,
+                env_path: Some("/usr/bin:/bin".into()),
+            }
+        }
+
+        /// Runs one authentication against a fixture server in `mode`.
+        fn run(&self, mode: Mode, invocation: &Invocation) -> (Outcome, fixture_server::Exchange) {
+            let path = self.dir.join("s.sock");
+            let _ = std::fs::remove_file(&path);
+            let listener = UnixListener::bind(&path).unwrap();
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                fixture_server::handle(stream, mode)
+            });
+            let outcome = authenticate(invocation, &self.environment);
+            // Wakes the accept when the module never connected; when it did,
+            // this connection just sits in the backlog.
+            drop(std::os::unix::net::UnixStream::connect(&path));
+            (outcome, server.join().unwrap())
+        }
+    }
+
+    #[test]
+    fn approves_only_a_valid_signature() {
+        let setup = setup("approve");
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "true"]));
+        assert_eq!(outcome, Outcome::Approved);
+        assert_eq!(exchange.result.as_deref(), Some("approved"));
+        let payload = exchange.payload.unwrap();
+        assert_eq!(payload["user"], setup.user.as_str());
+        assert_eq!(payload["command"]["argv"], serde_json::json!(["true"]));
+        assert_eq!(payload["expiresAt"].as_i64().unwrap() - payload["issuedAt"].as_i64().unwrap(), 100);
+        let hello = exchange.hello.unwrap();
+        assert_eq!(hello["type"], "hello");
+        assert!(!hello["chain"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn deny_and_bad_signatures_fail_the_stack() {
+        for (name, mode, result) in [
+            ("deny", Mode::Deny, Some("denied")),
+            ("badsig", Mode::BadSignature, Some("bad_signature")),
+            ("wrongpl", Mode::WrongPayload, Some("bad_signature")),
+            ("cancel", Mode::Cancel, None),
+            ("close", Mode::Close, None),
+        ] {
+            let setup = setup(name);
+            let (outcome, exchange) = setup.run(mode, &setup.invocation(&["sudo", "true"]));
+            assert_eq!(outcome, Outcome::Fail, "{name}");
+            assert_eq!(exchange.result.as_deref(), result, "{name}");
+        }
+    }
+
+    #[test]
+    fn expiry_fails_the_stack() {
+        let mut setup = setup("expire");
+        setup.environment.window_override = Some(1);
+        let (outcome, exchange) = setup.run(Mode::Expire, &setup.invocation(&["sudo", "true"]));
+        assert_eq!(outcome, Outcome::Fail);
+        assert_eq!(exchange.result.as_deref(), Some("expired"));
+    }
+
+    #[test]
+    fn not_ours_is_ignored_unless_non_interactive() {
+        for (name, mode) in [("notmine", Mode::NotMine), ("garbage", Mode::Garbage)] {
+            let setup = setup(name);
+            assert_eq!(setup.run(mode, &setup.invocation(&["sudo", "true"])).0, Outcome::Ignore, "{name}");
+            assert_eq!(setup.run(mode, &setup.invocation(&["sudo", "-n", "true"])).0, Outcome::Fail, "{name}");
+        }
+        let setup = setup("down");
+        assert_eq!(authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment), Outcome::Ignore);
+        assert_eq!(authenticate(&setup.invocation(&["sudo", "-n", "true"]), &setup.environment), Outcome::Fail);
+    }
+
+    #[test]
+    fn unconfigured_users_are_always_ignored() {
+        let setup = setup("noconfig");
+        std::fs::remove_file(setup.environment.state_dir.join("users").join(format!("{}.toml", setup.user))).unwrap();
+        assert_eq!(authenticate(&setup.invocation(&["sudo", "-n", "true"]), &setup.environment), Outcome::Ignore);
+    }
+
+    #[test]
+    fn unsafe_or_foreign_contexts_never_reach_the_socket() {
+        let setup = setup("unsafe");
+        let config = setup.environment.state_dir.join("users").join(format!("{}.toml", setup.user));
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
+        // No server is listening: reaching the socket would also be IGNORE, so
+        // check -n, which only fails when the module got as far as deciding.
+        assert_eq!(authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment), Outcome::Ignore);
+        assert_eq!(authenticate(&setup.invocation(&["sudo", "-n", "true"]), &setup.environment), Outcome::Fail);
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let mut invocation = setup.invocation(&["sudo", "true"]);
+        invocation.service = Some("login".into());
+        assert_eq!(setup.run(Mode::Approve, &invocation).0, Outcome::Ignore);
+        let mut invocation = setup.invocation(&["sudo", "true"]);
+        invocation.pam_user = Some("root".into());
+        assert_eq!(setup.run(Mode::Approve, &invocation).0, Outcome::Ignore);
+        let keys = setup.environment.state_dir.join("keys").join(&setup.user);
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(setup.run(Mode::Approve, &setup.invocation(&["sudo", "true"])).0, Outcome::Ignore);
+    }
+
+    #[test]
+    fn unrepresentable_or_huge_requests_fail_with_a_result() {
+        let setup = setup("encoding");
+        let mut invocation = setup.invocation(&["sudo", "true"]);
+        invocation.argv.push(vec![0xff, 0xfe]);
+        let (outcome, exchange) = setup.run(Mode::Approve, &invocation);
+        assert_eq!((outcome, exchange.result.as_deref()), (Outcome::Fail, Some("invalid_encoding")));
+
+        let big = "x".repeat(MAX_PAYLOAD_BYTES);
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "echo", &big]));
+        assert_eq!((outcome, exchange.result.as_deref()), (Outcome::Fail, Some("too_large")));
+    }
+}

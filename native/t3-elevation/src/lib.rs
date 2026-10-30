@@ -9,6 +9,8 @@ pub mod config;
 pub mod der;
 pub mod enroll;
 pub mod escape;
+#[cfg(any(test, feature = "fixtures"))]
+pub mod fixture_server;
 pub mod flow;
 pub mod install;
 pub mod json;
