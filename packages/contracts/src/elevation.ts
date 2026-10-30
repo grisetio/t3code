@@ -245,6 +245,8 @@ export const ElevationDevice = Schema.Struct({
 export type ElevationDevice = typeof ElevationDevice.Type;
 
 export const ElevationStatus = Schema.Struct({
+  /** The OS user whose sudo this server approves; phones name their key after it. */
+  user: Schema.optionalKey(Schema.String),
   /** False on platforms or accounts that can't use it (e.g. confined SELinux users). */
   supported: Schema.Boolean,
   unsupportedReason: Schema.optionalKey(Schema.String),
