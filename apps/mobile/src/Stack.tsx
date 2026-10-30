@@ -64,6 +64,8 @@ import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
+import { ElevationApprovalHost } from "./features/device-approval/ElevationApprovalHost";
+import { ElevationPendingBanner } from "./features/device-approval/ElevationPendingBanner";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
@@ -578,6 +580,8 @@ function RootStackLayout(props: {
               >
                 {props.children}
                 <HardwareKeyboardCommandOverlay />
+                <ElevationPendingBanner pathname={workspaceLocation.pathname} />
+                <ElevationApprovalHost />
               </AdaptiveWorkspaceLayout>
             </AndroidWorkspaceTabsProvider>
           </WorkspaceConnectionStatusProvider>
