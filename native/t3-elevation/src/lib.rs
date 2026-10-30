@@ -7,6 +7,7 @@ pub mod attestation;
 pub mod b64;
 pub mod config;
 pub mod der;
+pub mod enroll;
 pub mod escape;
 pub mod flow;
 pub mod install;

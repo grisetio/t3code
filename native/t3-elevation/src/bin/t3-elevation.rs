@@ -67,7 +67,10 @@ fn require_root() -> Result<(), Failure> {
 }
 
 fn user(options: &Options) -> Result<String, Failure> {
-    let user = options.require("--user")?;
+    known_user(options.require("--user")?)
+}
+
+fn known_user(user: &str) -> Result<String, Failure> {
     if !config::is_safe_user_name(user) || sys::user_by_name(user).is_none() {
         return Err(fail("unknown_user", format!("{user:?} isn't a user on this machine")));
     }
@@ -201,25 +204,17 @@ fn install(args: &[String]) -> Outcome {
 }
 
 fn enroll(args: &[String]) -> Outcome {
-    let options = Options::parse(
-        args,
-        &["--user", "--label", "--public-key", "--challenge"],
-        &["--allow-dev-attestation"],
-    )?;
-    for required in ["--user", "--label", "--public-key", "--challenge"] {
-        options.require(required)?;
-    }
+    let command = t3_elevation::enroll::parse_options(args).ok_or_else(|| {
+        fail("usage", "usage: t3-elevation enroll --user U --label L --public-key K --challenge C [--allow-dev-attestation]")
+    })?;
     require_root()?;
-    let user = user(&options)?;
+    let user = known_user(&command.user)?;
     let enrollment = read_enrollment("-")?;
     // The approval showed these argv values; the device must be that one.
-    if Some(enrollment.label.as_str()) != options.get("--label")
-        || Some(enrollment.public_key.as_str()) != options.get("--public-key")
-        || Some(enrollment.challenge.as_str()) != options.get("--challenge")
-    {
+    if enrollment.label != command.label || enrollment.public_key != command.public_key || enrollment.challenge != command.challenge {
         return Err(fail("mismatch", "the enrollment doesn't match the approved command"));
     }
-    let (spki, verified) = verify_enrollment(&enrollment, options.flag("--allow-dev-attestation"))?;
+    let (spki, verified) = verify_enrollment(&enrollment, command.allow_dev_attestation)?;
     let layout = Layout::system(&user);
     let (key_id, bytes) = install::key_file_bytes(&spki, &enrollment.label, &verified, sys::now());
     install::write_key(&layout, &user, &key_id, &bytes).map_err(key_error)?;
