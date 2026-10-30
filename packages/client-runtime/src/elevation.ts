@@ -88,7 +88,7 @@ function warningMessage(warning: ElevationWarning, argv: readonly string[]): str
   }
 }
 
-export function elevationRequestViewFromPayload(payload: ElevationPayload): ElevationRequestView {
+function elevationRequestViewFromPayload(payload: ElevationPayload): ElevationRequestView {
   const enroll = parseElevationEnrollCommand(payload);
   const publicKey = enroll === null ? null : decodeElevationBase64Url(enroll.publicKey);
   return {

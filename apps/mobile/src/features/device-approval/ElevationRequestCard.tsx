@@ -5,7 +5,7 @@ import {
 } from "@t3tools/client-runtime/elevation";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import * as Result from "effect/Result";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Pressable, View, type ColorValue } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
@@ -31,9 +31,14 @@ export function ElevationRequestCard(props: {
 }) {
   const { item, visibility } = props.projectedItem;
   const [expanded, setExpanded] = useState(false);
+  const payload = item.type === "elevation_request" ? item.payload : null;
+  // Stable bytes keep the comparison code from recomputing on every render.
+  const decoded = useMemo(
+    () => (payload === null ? null : decodeElevationRequestPayload(payload)),
+    [payload],
+  );
   if (item.type !== "elevation_request") return null;
   const status = elevationRequestStatusView(item);
-  const decoded = item.payload === null ? null : decodeElevationRequestPayload(item.payload);
   const decodedView = decoded !== null && Result.isSuccess(decoded) ? decoded.success.view : null;
   const view = decodedView ?? elevationRequestFallbackView(item);
 
