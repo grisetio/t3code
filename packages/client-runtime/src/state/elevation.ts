@@ -122,6 +122,12 @@ export function createElevationAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.requestId]),
       },
     }),
+    // Runs `sudo -n true` on the server and waits, up to the approval window, for a phone.
+    test: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:elevation:test",
+      tag: WS_METHODS.elevationTest,
+      concurrency: setupConcurrency,
+    }),
     install: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:elevation:install",
       tag: WS_METHODS.elevationInstall,
