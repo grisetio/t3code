@@ -66,6 +66,7 @@ import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { ElevationApprovalHost } from "./features/device-approval/ElevationApprovalHost";
 import { ElevationPendingBanner } from "./features/device-approval/ElevationPendingBanner";
+import { SettingsDeviceApprovalRouteScreen } from "./features/device-approval/SettingsDeviceApprovalRouteScreen";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
@@ -273,6 +274,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsEnvironmentMaintenanceRouteScreen,
       linking: "maintenance",
       options: { title: "Maintenance" },
+    }),
+    SettingsDeviceApproval: createNativeStackScreen({
+      screen: SettingsDeviceApprovalRouteScreen,
+      linking: "device-approval",
+      options: { title: "Device approval" },
     }),
     SettingsNotifications: createNativeStackScreen({
       screen: SettingsNotificationsRouteScreen,

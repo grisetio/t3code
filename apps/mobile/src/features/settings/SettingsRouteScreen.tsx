@@ -4,11 +4,13 @@ import { useAuth, useUser } from "@clerk/expo";
 import { useNavigation } from "@react-navigation/native";
 import { Platform, View } from "react-native";
 import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-grouping";
+import { environmentSupportsDeviceApproval } from "@t3tools/client-runtime/state/elevation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { useEnvironments } from "../../state/environments";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -136,6 +138,10 @@ function LocalSettingsRouteScreen() {
 function SettingsIndexSections() {
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const noServerTargets = selectedTargets.length === 0;
+  const { environments } = useEnvironments();
+  const hasDeviceApproval = environments.some((environment) =>
+    environmentSupportsDeviceApproval(environment.serverConfig),
+  );
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const scopedProjectMembers =
     selectedProject?.members
@@ -212,6 +218,9 @@ function SettingsIndexSections() {
           target="SettingsEnvironmentMaintenance"
           disabled={noServerTargets}
         />
+        {hasDeviceApproval ? (
+          <SettingsRow icon="iphone" label="Device approval" target="SettingsDeviceApproval" />
+        ) : null}
       </SettingsSection>
 
       <SettingsSection title="App">
