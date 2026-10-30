@@ -9857,6 +9857,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Run ${command.runId} is not interruptible.`,
       });
     }
+    // A sudo waiting on a phone would outlive the interrupted turn.
+    const waitingElevation = yield* loadProjectionForCommand(command, ["turnItems"], {
+      turnItemTypes: ["elevation_request"],
+      turnItemStatuses: ["waiting"],
+      turnItemRunIds: [run.id],
+      messageRoles: [],
+    });
+    if (waitingElevation.turnItems.length > 0) {
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:elevation-requests.cancel:${run.id}`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "elevation-requests.cancel", runId: run.id },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
+    }
     const now = yield* DateTime.now;
     const completionMessage = projection.messages.find(
       (candidate) => candidate.id === run.userMessageId,

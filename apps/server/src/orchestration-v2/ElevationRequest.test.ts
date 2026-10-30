@@ -257,3 +257,82 @@ it.effect("a request that failed before a payload existed is recorded already en
     assert.deepStrictEqual(yield* pendingRequests(), [null, null]);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("interrupting a run cancels its waiting request through the effect worker", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const interruptedThreadId = ThreadId.make("thread:elevation-interrupt");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-elevation-interrupt"),
+      threadId: interruptedThreadId,
+      projectId: ProjectId.make("project:elevation"),
+      title: "Elevation",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const dispatchRun = (id: string) =>
+      orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(id),
+        threadId: interruptedThreadId,
+        messageId: MessageId.make(id),
+        text: "Free disk space",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+    const interrupt = (id: string) =>
+      Effect.gen(function* () {
+        const runs = (yield* projections.getThreadProjection(interruptedThreadId)).runs;
+        const run = runs.at(-1)!;
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make(id),
+          threadId: interruptedThreadId,
+          runId: run.id,
+        });
+        const effects = yield* outbox.listByCommandId(CommandId.make(id));
+        return {
+          run,
+          cancels: effects.flatMap((effect) =>
+            effect.request.type === "elevation-requests.cancel" ? [effect.request] : [],
+          ),
+        };
+      });
+
+    yield* dispatchRun("run-without-sudo");
+    assert.deepStrictEqual((yield* interrupt("interrupt-without-sudo")).cancels, []);
+
+    yield* dispatchRun("run-with-sudo");
+    const live = (yield* projections.getThreadProjection(interruptedThreadId)).runs.at(-1)!;
+    yield* orchestrator.dispatch({
+      type: "elevation_request.record",
+      commandId: CommandId.make("elevation:record-interrupt"),
+      threadId: interruptedThreadId,
+      runId: live.id,
+      nodeId: live.rootNodeId!,
+      turnItemId,
+      requestId: ElevationRequestId.make("elevation-request-1"),
+      kind: "sudo",
+      argv: ["sudo", "nix-collect-garbage", "-d"],
+      runAs: "root",
+      cwd: "/repo",
+      host: "macbook",
+      warnings: [],
+      explanation: null,
+      payload: "e30",
+      elevationStatus: "pending",
+    });
+    const { run, cancels } = yield* interrupt("interrupt-with-sudo");
+    assert.deepStrictEqual(cancels, [{ type: "elevation-requests.cancel", runId: run.id }]);
+  }).pipe(Effect.provide(layerTest)),
+);

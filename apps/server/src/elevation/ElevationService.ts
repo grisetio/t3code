@@ -14,6 +14,7 @@ import * as NodePath from "node:path";
 
 import {
   CommandId,
+  type RunId,
   decodeElevationBase64Url,
   decodeElevationPayload,
   ElevationError,
@@ -43,6 +44,7 @@ import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -61,6 +63,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { attribute, type LiveRun, type ServerSudo } from "./attribution.ts";
+import { ElevationRunCancellation } from "./runCancellation.ts";
 import {
   checkSignature,
   readEnrolledKeys,
@@ -125,6 +128,9 @@ interface Answer {
 
 interface PendingEntry {
   readonly request: ElevationPendingRequest;
+  /** The run attribution picked, even when its thread item couldn't be recorded. */
+  readonly runId: RunId | null;
+  readonly interrupted: Deferred.Deferred<void>;
   readonly payload: ElevationPayload;
   readonly payloadBytes: Uint8Array;
   readonly send: (message: ServerMessage) => void;
@@ -182,6 +188,8 @@ export class ElevationService extends Context.Service<
   ElevationService,
   {
     readonly respond: (input: ElevationRespondInput) => Effect.Effect<void, ElevationError>;
+    /** Ends the run's unanswered requests; the module treats a cancel as expired. */
+    readonly cancelRun: (runId: RunId) => Effect.Effect<void>;
     /** The complete pending set, current value first. */
     readonly pendingRequests: Stream.Stream<ElevationPendingRequests>;
     readonly status: Effect.Effect<ElevationStatus, ElevationError>;
@@ -481,6 +489,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         explanation: attribution.explanation,
         createdAt: yield* DateTime.now,
       },
+      runId: attribution.run?.runId ?? null,
+      interrupted: yield* Deferred.make<void>(),
       payload: payload.success,
       payloadBytes,
       send,
@@ -512,7 +522,10 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
     pending.set(requestId, entry);
     yield* publish;
-    const outcome = yield* Effect.raceFirst(waitForResult, expire).pipe(
+    const interrupted = Deferred.await(entry.interrupted).pipe(
+      Effect.as<Outcome>({ elevationStatus: "cancelled" }),
+    );
+    const outcome = yield* Effect.raceAllFirst([waitForResult, expire, interrupted]).pipe(
       Effect.onInterrupt(() =>
         Effect.sync(() => send({ type: "cancel", reason: "shutdown" })).pipe(
           Effect.andThen(
@@ -929,6 +942,17 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     yield* markUsed(response.keyId);
   });
 
+  const cancelRun = Effect.fn("ElevationService.cancelRun")(function* (runId: RunId) {
+    for (const entry of pending.values()) {
+      // An approval already sent can't be taken back; its sudo is running.
+      if (entry.runId !== runId || entry.answer !== null) continue;
+      entry.answer = { resolvedBy: null };
+      entry.send({ type: "cancel", reason: "interrupted" });
+      yield* Deferred.succeed(entry.interrupted, undefined);
+    }
+    yield* publish;
+  });
+
   // Start listening at boot only when the installed config already points
   // here; every other server stays away from the native calls.
   const bootConfig = yield* readUserConfig(options.hostPaths, options.user);
@@ -938,6 +962,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   return ElevationService.of({
     respond,
+    cancelRun,
     pendingRequests: SubscriptionRef.changes(pendingRef),
     status,
     test,
@@ -947,6 +972,15 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     uninstall,
   });
 });
+
+/** Hands interrupts from the effect worker to this service. */
+export const runCancellationLayer = Layer.effect(
+  ElevationRunCancellation,
+  Effect.gen(function* () {
+    const service = yield* ElevationService;
+    return { cancelRun: service.cancelRun };
+  }),
+);
 
 /** Set by ElevationService; adapters read it when they build instructions. */
 export const instructionsLayer = Layer.sync(DeviceApprovalInstructions, () => {

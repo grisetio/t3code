@@ -336,6 +336,10 @@ const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.laye
   ),
 );
 
+const layerElevationProvided = ElevationService.layer.pipe(
+  Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerOrchestratorProvided)),
+);
+
 const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -368,9 +372,7 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
-  ElevationService.layer.pipe(
-    Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerOrchestratorProvided)),
-  ),
+  layerElevationProvided,
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -385,6 +387,7 @@ export const layerProduction = Layer.mergeAll(
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
 ).pipe(
   Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerScheduledTaskProvided))),
+  Layer.provide(ElevationService.runCancellationLayer.pipe(Layer.provide(layerElevationProvided))),
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(layerEventInfrastructure),
 );
