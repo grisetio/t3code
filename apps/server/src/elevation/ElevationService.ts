@@ -93,6 +93,9 @@ const EXPIRY_GRACE_SECONDS = 5;
 // A device-approved helper call waits for the phone, up to the 300 s window.
 const DEVICE_SUDO_TIMEOUT = "6 minutes";
 const PASSWORD_SUDO_TIMEOUT = "60 seconds";
+// A pasted install command reads its key file once; one never run is left behind.
+const INSTALL_KEY_FILE = /^elevation-install-[0-9a-f-]{36}\.json$/;
+const INSTALL_KEY_FILE_MAX_AGE_MS = 60 * 60 * 1000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const RUNNING_ITEM_STATUSES = new Set(["pending", "running", "waiting"]);
 
@@ -238,6 +241,23 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       NodeFSP.writeFile(options.devicesStatePath, text, { mode: 0o600 }).catch(() => undefined),
     );
   });
+
+  const removeStaleInstallKeys = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const directory = NodePath.dirname(options.socketPath);
+    yield* Effect.promise(async () => {
+      const names = await NodeFSP.readdir(directory).catch(() => []);
+      for (const name of names) {
+        if (!INSTALL_KEY_FILE.test(name)) continue;
+        const path = NodePath.join(directory, name);
+        const stat = await NodeFSP.lstat(path).catch(() => null);
+        if (stat?.isFile() && now - stat.mtimeMs > INSTALL_KEY_FILE_MAX_AGE_MS) {
+          await NodeFSP.unlink(path).catch(() => undefined);
+        }
+      }
+    });
+  });
+  yield* removeStaleInstallKeys;
 
   const record = (
     run: LiveRun,
@@ -637,6 +657,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   });
 
   const status: Effect.Effect<ElevationStatus, ElevationError> = Effect.gen(function* () {
+    yield* removeStaleInstallKeys;
     const unsupported = yield* unsupportedReason;
     const host = yield* staticChecks(options.hostPaths, {
       user: options.user,

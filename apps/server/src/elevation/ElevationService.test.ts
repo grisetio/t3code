@@ -662,6 +662,21 @@ describe("ElevationService helper", () => {
       assert.include(result.command, `; rm -f '${keyPath}'`);
       const stat = yield* Effect.promise(() => NodeFSP.stat(keyPath!));
       assert.strictEqual(stat.mode & 0o777, 0o600);
+
+      // A command the user never ran leaves its key file until it is an hour old.
+      const exists = (path: string) =>
+        Effect.promise(() =>
+          NodeFSP.access(path).then(
+            () => true,
+            () => false,
+          ),
+        );
+      yield* fixture.service.status;
+      assert.isTrue(yield* exists(keyPath!));
+      yield* Effect.promise(() => NodeFSP.utimes(keyPath!, 1_000_000, 1_000_000));
+      yield* fixture.service.status;
+      assert.isFalse(yield* exists(keyPath!));
+      assert.isTrue(yield* exists(NodePath.join(fixture.dir, "helper")));
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
