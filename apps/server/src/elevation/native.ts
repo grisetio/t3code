@@ -2,9 +2,10 @@
 /**
  * Node has no API for a Unix socket's peer credentials or another process's
  * start time. `node:ffi` (Node 26, experimental) reaches the libc calls
- * without a native addon. Where it is missing, such as an older embedded
- * Node, device approval reports itself unsupported rather than trusting an
- * unverified peer.
+ * without a native addon. Electron's embedded Node (24 in Electron 44) has
+ * none, so the desktop server runs without both: the module verifies every
+ * signature itself, which leaves the peer check stopping only fake prompts and
+ * start times serving only attribution, a UX concern.
  */
 import * as NodeFS from "node:fs";
 import type * as NodeNet from "node:net";
@@ -130,6 +131,38 @@ function linuxStartTime(pid: number): number | null {
 function calls(host: NativeHost): NativeCalls | null {
   if (native === undefined) native = load(host);
   return native;
+}
+
+/**
+ * Without peer credentials, a Linux hello must still name a parent that has a
+ * root-owned child running exactly sudo's argv. False only when every child
+ * could be read and none matched; anything unreadable passes.
+ */
+export function linuxSudoChildExists(
+  proc: { readonly dir: string; readonly rootUid: number },
+  parentPid: number,
+  argv: ReadonlyArray<string>,
+): boolean {
+  if (!Number.isSafeInteger(parentPid) || parentPid <= 0) return false;
+  let children: Array<string>;
+  try {
+    // Each thread lists the children it forked; multi-threaded parents fork from any.
+    const taskDir = `${proc.dir}/${parentPid}/task`;
+    children = NodeFS.readdirSync(taskDir).flatMap((tid) =>
+      NodeFS.readFileSync(`${taskDir}/${tid}/children`, "utf8").split(" ").filter(Boolean),
+    );
+  } catch {
+    return true;
+  }
+  const expected = `${argv.join("\0")}\0`;
+  return children.some((pid) => {
+    try {
+      if (NodeFS.statSync(`${proc.dir}/${pid}`).uid !== proc.rootUid) return false;
+      return NodeFS.readFileSync(`${proc.dir}/${pid}/cmdline`, "utf8") === expected;
+    } catch {
+      return true;
+    }
+  });
 }
 
 /** Whether this runtime can verify who connected to the approval socket. */

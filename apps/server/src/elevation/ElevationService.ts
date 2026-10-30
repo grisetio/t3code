@@ -68,10 +68,16 @@ import {
   staticChecks,
   type HostPaths,
 } from "./hostState.ts";
-import { peerCredentialsSupported, processStartTime, socketPeerUid } from "./native.ts";
+import {
+  linuxSudoChildExists,
+  peerCredentialsSupported,
+  processStartTime,
+  socketPeerUid,
+} from "./native.ts";
 import {
   decodeHello,
   encodeServerMessage,
+  type Hello,
   makeLineSplitter,
   parseModuleLine,
   type ModuleMessage,
@@ -106,6 +112,8 @@ export interface ElevationOptions {
   readonly trustedPeerUid: number;
   readonly peerUid: (socket: NodeNet.Socket) => number | null;
   readonly peerCredentialsSupported: () => boolean;
+  /** The weaker check used when peer credentials can't be read. */
+  readonly plausiblePeer: (hello: Hello) => boolean;
 }
 
 interface Answer {
@@ -372,6 +380,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       if (helloJson.v !== 1) send({ type: "hello_reply", v: 1, decision: "not_mine" });
       return;
     }
+    if (!options.peerCredentialsSupported() && !options.plausiblePeer(decoded.value)) return;
     const attribution = attribute({
       hello: decoded.value,
       server: serverProcess(),
@@ -531,7 +540,11 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     let open = 0;
     const server = NodeNet.createServer((socket) => {
       socket.on("error", () => {});
-      if (open >= MAX_CONNECTIONS || options.peerUid(socket) !== options.trustedPeerUid) {
+      // Without peer credentials, the hello gets the weaker plausibility check instead.
+      if (
+        open >= MAX_CONNECTIONS ||
+        (options.peerCredentialsSupported() && options.peerUid(socket) !== options.trustedPeerUid)
+      ) {
         socket.destroy();
         return;
       }
@@ -590,9 +603,6 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   const unsupportedReason = Effect.gen(function* () {
     if (platform !== "darwin" && platform !== "linux") {
       return "Device approval needs Linux or macOS.";
-    }
-    if (!options.peerCredentialsSupported()) {
-      return "This server's runtime can't verify the PAM module's connection.";
     }
     if (Buffer.byteLength(options.socketPath) > UNIX_SOCKET_PATH_BYTES) {
       return "The T3 state directory path is too long for its approval socket.";
@@ -949,6 +959,10 @@ export const layer = Layer.effect(
       trustedPeerUid: 0,
       peerUid: (socket) => socketPeerUid(host, socket),
       peerCredentialsSupported: () => peerCredentialsSupported(host),
+      plausiblePeer: (hello) =>
+        platform !== "linux" ||
+        hello.chain[0] === undefined ||
+        linuxSudoChildExists({ dir: "/proc", rootUid: 0 }, hello.chain[0].pid, hello.argv),
     });
   }),
 );

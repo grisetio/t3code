@@ -198,6 +198,8 @@ const writeScript = (path: string, text: string) =>
 const makeFixture = Effect.fn("test.makeFixture")(function* (options?: {
   readonly peerUid?: number;
   readonly providerProcesses?: ReadonlyArray<ProviderProcess>;
+  /** Set to run without peer credentials, as under Electron's Node. */
+  readonly plausiblePeer?: (hello: { readonly chain: ReadonlyArray<{ pid: number }> }) => boolean;
 }) {
   const dir = yield* Effect.acquireRelease(
     Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elev-"))),
@@ -279,8 +281,9 @@ esac
     devicesStatePath: NodePath.join(dir, "elevation-devices.json"),
     server: () => server,
     trustedPeerUid: 0,
-    peerUid: () => options?.peerUid ?? 0,
-    peerCredentialsSupported: () => true,
+    peerUid: () => (options?.plausiblePeer === undefined ? (options?.peerUid ?? 0) : null),
+    peerCredentialsSupported: () => options?.plausiblePeer === undefined,
+    plausiblePeer: options?.plausiblePeer ?? (() => true),
   }).pipe(
     Effect.provideService(Orchestrator.OrchestratorV2, spy),
     Effect.provideService(HostProcess.Platform, "darwin"),
@@ -571,6 +574,22 @@ describe("ElevationService", () => {
       const module = yield* connectModule(fixture.socketPath);
       yield* module.send(hello(agentChain));
       assert.isNull(yield* module.receive);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("without peer credentials, still serves and drops an implausible hello", () =>
+    Effect.gen(function* () {
+      yield* setupRunningThread;
+      const fixture = yield* makeFixture({
+        plausiblePeer: (hello) => hello.chain[0]?.pid === 500,
+      });
+      assert.isTrue((yield* fixture.service.status).supported);
+      const { request } = yield* openRequest(fixture);
+      assert.strictEqual(request.threadId, threadId);
+
+      const fake = yield* connectModule(fixture.socketPath);
+      yield* fake.send(hello([chainEntry(600, ["/bin/zsh", "-lc", commandText]), serverEntry]));
+      assert.isNull(yield* fake.receive);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 });
