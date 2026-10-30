@@ -51,6 +51,10 @@
       "types": "./src/promptLinks.ts",
       "default": "./src/promptLinks.ts"
     },
+    "./elevation": {
+      "types": "./src/elevation.ts",
+      "default": "./src/elevation.ts"
+    },
     "./secret-request": {
       "types": "./src/secretRequest.ts",
       "default": "./src/secretRequest.ts"
@@ -126,6 +130,10 @@
     "./relay": {
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
+    },
+    "./state/elevation": {
+      "types": "./src/state/elevation.ts",
+      "default": "./src/state/elevation.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",
