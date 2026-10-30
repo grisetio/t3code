@@ -203,11 +203,13 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   const pending = new Map<ElevationRequestId, PendingEntry>();
   const pendingRef = yield* SubscriptionRef.make<ElevationPendingRequests>({ requests: [] });
   // Answered requests leave the set: the phone has nothing left to sign.
-  const publish = SubscriptionRef.set(pendingRef, {
-    requests: [...pending.values()]
-      .filter((entry) => entry.answer === null)
-      .map((entry) => entry.request),
-  });
+  const publish = Effect.suspend(() =>
+    SubscriptionRef.set(pendingRef, {
+      requests: [...pending.values()]
+        .filter((entry) => entry.answer === null)
+        .map((entry) => entry.request),
+    }),
+  );
   const serverSudos = new Set<OwnSudo>();
   let serverIdentity: ReturnType<ElevationOptions["server"]> | undefined;
   const serverProcess = () => (serverIdentity ??= options.server());
@@ -496,12 +498,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           ),
         ),
       ),
-      Effect.ensuring(
-        Effect.suspend(() => {
-          pending.delete(requestId);
-          return publish;
-        }),
-      ),
+      Effect.ensuring(Effect.sync(() => pending.delete(requestId)).pipe(Effect.andThen(publish))),
     );
     if (item !== null) {
       const resolvedBy =
