@@ -39,6 +39,7 @@ const ARRIVAL_WINDOW_MS = 10_000;
 /** One soft tick per request as it arrives, wherever it shows. */
 function useArrivalHaptic(pending: readonly PendingElevationRequest[]): void {
   const seen = useRef(new Set<string>());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fires one haptic per newly arrived request
   useEffect(() => {
     const now = Date.now();
     for (const entry of pending) {
@@ -58,6 +59,7 @@ function useArrivalHaptic(pending: readonly PendingElevationRequest[]): void {
 /** Keeps the native push handler's machine names current, and opens tapped sudo pushes. */
 function useSudoApprovalPushes(pending: readonly PendingElevationRequest[]): void {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors environment labels into the native push handler
   useEffect(() => {
     if (Platform.OS !== "android") return;
     setAndroidSudoApprovalMachines(
@@ -72,6 +74,7 @@ function useSudoApprovalPushes(pending: readonly PendingElevationRequest[]): voi
 
   // Startup is empty before it connects, so only clear once requests were seen and then left.
   const hadPending = useRef(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the native sudo notifications once pending requests are gone
   useEffect(() => {
     if (pending.length > 0) hadPending.current = true;
     else if (hadPending.current) {
@@ -80,6 +83,7 @@ function useSudoApprovalPushes(pending: readonly PendingElevationRequest[]): voi
     }
   }, [pending.length]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to native sudo notification taps while mounted
   useEffect(
     () =>
       subscribeAndroidSudoApprovalOpens((open) => {
@@ -112,6 +116,7 @@ function useLockScreenReenrollPrompt(): void {
   const lockScreen = useAtomValue(elevationLockScreenAtom);
   const navigation = useNavigation();
   const asked = useRef(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads key state from the native keystore and shows the re-enroll dialog once
   useEffect(() => {
     if (asked.current || lockScreen !== null || !deviceApprovalSigner.isPresent()) return;
     let cancelled = false;
