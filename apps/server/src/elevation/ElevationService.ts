@@ -746,12 +746,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   });
 
   /**
-   * With a password, sudo reads it from stdin (`-S`, with `-k` so a cached
-   * login can't skip the prompt). PAM can still approve without asking for
-   * it (Touch ID, an enrolled phone), leaving the password line unread, so
-   * the helper's input follows a marker line and the helper skips at most
-   * one line before it. Without a password, `sudo -n` goes to an enrolled
-   * device like any other request.
+   * `sudo -S -k` reads the password only if PAM asks; Touch ID or an enrolled
+   * phone can approve first and leave it unread on stdin. The helper's input
+   * therefore follows a marker line, and the helper skips at most one line.
    */
   const runHelper = Effect.fn("ElevationService.runHelper")(function* (input: {
     readonly helper: string;
