@@ -6,6 +6,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import {
   decodeElevationRequestPayload,
   elevationFailureMessage,
+  elevationHeadline,
   elevationRequestFallbackView,
   elevationRequestStatusView,
   elevationSudoApproval,
@@ -218,23 +219,98 @@ describe("elevationRequestFallbackView", () => {
 });
 
 describe("elevationRequestStatusView", () => {
-  it("names the answering device and keeps the failure reason", () => {
+  const at = DateTime.makeUnsafe(Date.UTC(2026, 9, 31, 13, 18));
+  const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+    at.epochMilliseconds,
+  );
+  const ended = { updatedAt: at, completedAt: at };
+
+  it("says it was this phone when the approving key is this phone's", () => {
+    const item = {
+      ...ended,
+      elevationStatus: "approved" as const,
+      resolvedBy: { deviceLabel: "Fold\n", keyId: "doBaY6aYDBgHVCShPzJ3LQ" },
+    };
     expect(
-      elevationRequestStatusView({
-        elevationStatus: "approved",
-        resolvedBy: { deviceLabel: "Fold\n" },
-      }),
-    ).toEqual({ kind: "approved", label: "Approved on Fold\\n", detail: null });
+      elevationRequestStatusView(item, { finished: false, thisKeyId: "doBaY6aYDBgHVCShPzJ3LQ" }),
+    ).toEqual({
+      kind: "approved",
+      label: "Approved",
+      time,
+      how: `Approved on this phone · ${time}`,
+      detail: null,
+    });
+    expect(elevationRequestStatusView(item, { finished: true })).toEqual({
+      kind: "done",
+      label: "Done",
+      time,
+      how: `Approved on Fold\\n · ${time} · finished`,
+      detail: null,
+    });
+  });
+
+  it("names the phone that denied, from the item or from this session", () => {
+    const item = {
+      ...ended,
+      elevationStatus: "denied" as const,
+      resolvedBy: { deviceLabel: "Fold", keyId: "doBaY6aYDBgHVCShPzJ3LQ" },
+    };
     expect(
-      elevationRequestStatusView({
-        elevationStatus: "cancelled",
-        failure: "too_large",
-        resolvedBy: null,
-      }),
+      elevationRequestStatusView(item, { finished: true, thisKeyId: "doBaY6aYDBgHVCShPzJ3LQ" }),
+    ).toMatchObject({ label: "Denied", how: `Denied on this phone · ${time}` });
+    expect(elevationRequestStatusView(item, { finished: true })).toMatchObject({
+      how: `Denied on Fold · ${time}`,
+    });
+    expect(
+      elevationRequestStatusView(
+        { ...item, resolvedBy: null },
+        { finished: true, deniedHere: true },
+      ),
+    ).toMatchObject({ how: `Denied on this phone · ${time}` });
+    expect(
+      elevationRequestStatusView({ ...item, resolvedBy: null }, { finished: true }),
+    ).toMatchObject({ how: `Denied · ${time}` });
+  });
+
+  it("uses one expired text and keeps the failure reason", () => {
+    expect(
+      elevationRequestStatusView(
+        { ...ended, elevationStatus: "expired", resolvedBy: null },
+        { finished: true },
+      ),
+    ).toMatchObject({ label: "Expired", how: `Nobody approved in time · ${time}` });
+    expect(
+      elevationRequestStatusView(
+        { ...ended, elevationStatus: "cancelled", failure: "too_large", resolvedBy: null },
+        { finished: true },
+      ),
     ).toEqual({
       kind: "cancelled",
       label: "Cancelled",
+      time,
+      how: `Cancelled · ${time}`,
       detail: "Too long to approve on a device; use the terminal.",
+    });
+  });
+});
+
+describe("elevationHeadline", () => {
+  const decoded = decodeElevationRequestPayload(
+    encodePayload({ argv: ["killall", "coreaudiod"], resolvedPath: null, warnings: [] }),
+  );
+
+  it("leads with the trimmed reason, else the command", () => {
+    expect(elevationHeadline({ explanation: "  Restart audio\n", decoded })).toEqual({
+      text: "“Restart audio”",
+      command: false,
+    });
+    expect(elevationHeadline({ explanation: "  ", decoded })).toEqual({
+      text: "killall coreaudiod",
+      command: true,
+    });
+    expect(elevationHeadline({ explanation: null, decoded: Result.fail("too_large") })).toEqual({
+      text: "Too long to approve on a device; use the terminal.",
+      command: false,
     });
   });
 });

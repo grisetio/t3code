@@ -46,7 +46,7 @@ export function Sheet(props: SheetProps) {
               tintColorClassName="accent-foreground"
               hideBackButton
               hideShadow={false}
-              title={props.title}
+              title={props.title ?? ""}
               titleColorClassName="accent-foreground"
               titleFontSize={18}
               titleFontWeight="800"
@@ -55,7 +55,7 @@ export function Sheet(props: SheetProps) {
                 {
                   type: "button",
                   icon: { name: "xmark", type: "sfSymbol" },
-                  accessibilityLabel: `Close ${props.title}`,
+                  accessibilityLabel: props.title === undefined ? "Close" : `Close ${props.title}`,
                   identifier: `app-sheet-close-${screenId}`,
                   onPress: close,
                 },

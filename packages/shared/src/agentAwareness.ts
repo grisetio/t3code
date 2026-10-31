@@ -62,7 +62,14 @@ export function projectThreadAwarenessV2(
   input: ProjectThreadAwarenessV2Input,
 ): AgentAwarenessState | null {
   const { environmentId, project, thread } = input;
-  if (thread.lineage.relationshipToParent === "subagent") return null;
+  // A subagent's work shows on its parent's card, but a sudo it waits on can
+  // only be approved from the phone, so that request surfaces on its own.
+  if (
+    thread.lineage.relationshipToParent === "subagent" &&
+    thread.pendingRuntimeRequest?.elevation !== true
+  ) {
+    return null;
+  }
   const phase = resolveThreadAwarenessPhaseV2(thread);
   if (phase === null) {
     return null;

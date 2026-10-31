@@ -9,6 +9,7 @@ interface AndroidAgentNotifications {
   openLiveUpdateSettings?(): boolean;
   showShowcaseActivity?(scheme: string, data: Record<string, string>): void;
   setSudoApprovalMachines?(machines: Record<string, string>): void;
+  setSudoPendingThreads?(paths: string[]): void;
   clearSudoApprovals?(): void;
   consumeSudoApprovalOpen?(): SudoApprovalOpen | null;
   isOverLockScreen?(): boolean;
@@ -75,6 +76,14 @@ export async function openAndroidLiveUpdateSettings(): Promise<void> {
 /** Machine names as named on this phone, which sudo approval pushes show. */
 export function setAndroidSudoApprovalMachines(machines: Record<string, string>): void {
   native?.setSudoApprovalMachines?.(machines);
+}
+
+/**
+ * The threads with a request waiting, as deep link paths. While the app is in front, their agent
+ * pushes are dropped and any already posted are removed: the request is on screen already.
+ */
+export function setAndroidSudoPendingThreads(paths: readonly string[]): void {
+  native?.setSudoPendingThreads?.([...paths]);
 }
 
 export function clearAndroidSudoApprovals(): void {

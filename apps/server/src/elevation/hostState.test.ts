@@ -20,7 +20,8 @@ import {
   isManagedPath,
   isTrustedHelper,
   moduleProtocol,
-  readPathsWrittenByT3,
+  pathOwner,
+  readT3Install,
   staticChecks,
   withFixBy,
   type HostPaths,
@@ -141,6 +142,13 @@ describe("staticChecks", () => {
         "keys:ok",
         "devices:ok",
       ]);
+      expect(result.checks.map((check) => check.path)).toEqual([
+        NodePath.join(paths.pamDir, "sudo"),
+        NodePath.join(NodePath.dirname(paths.helperPath), "pam_t3_elevation.so"),
+        NodePath.join(paths.etcDir, "users", "me.toml"),
+        NodePath.join(paths.etcDir, "keys", "me"),
+        undefined,
+      ]);
       expect(result.keys.map((key) => key.keyId)).toEqual([enrolled.keyId]);
     }).pipe(Effect.scoped),
   );
@@ -170,8 +178,11 @@ describe("staticChecks", () => {
       expect(result.checks.find((check) => check.id === "config")?.message).toContain(
         "points at another T3 server",
       );
-      // A misplaced line and an incompatible module aren't missing parts.
-      expect(result.checks.flatMap((check) => check.missingPath ?? [])).toEqual([]);
+      // A misplaced line and an incompatible module aren't missing parts, but still name their file.
+      expect(result.checks.filter((check) => check.missing === true)).toEqual([]);
+      expect(result.checks.find((check) => check.id === "pam:sudo")?.path).toBe(
+        NodePath.join(paths.pamDir, "sudo"),
+      );
     }).pipe(Effect.scoped),
   );
 
@@ -192,14 +203,19 @@ describe("staticChecks", () => {
         NodeFSP.writeFile(NodePath.join(paths.pamDir, "sudo"), "auth sufficient pam_tid.so\n"),
       );
       const missingInclude = yield* staticChecks(paths, { user: "me", socketPath });
-      expect(okIds(missingInclude.checks)[0]).toBe("pam_include:fail");
+      expect(missingInclude.checks[0]).toMatchObject({
+        id: "pam_include",
+        ok: false,
+        path: NodePath.join(paths.pamDir, "sudo"),
+      });
 
       const local = NodePath.join(paths.pamDir, "sudo_local");
       yield* Effect.promise(() => NodeFSP.writeFile(local, "auth sufficient pam_tid.so\n"));
       const missingLine = yield* staticChecks(paths, { user: "me", socketPath });
       expect(missingLine.checks.find((check) => check.id === "pam:sudo_local")).toMatchObject({
         ok: false,
-        missingPath: local,
+        path: local,
+        missing: true,
       });
     }).pipe(Effect.scoped),
   );
@@ -239,22 +255,35 @@ describe("withFixBy", () => {
     id: "pam:sudo_local",
     ok: false,
     message: `PAM line missing in ${pam}`,
-    missingPath: pam,
+    path: pam,
+    missing: true,
   };
   const repairable: FixContext = {
     plannedChanges: [{ path: pam, summary: "add the device approval lines" }],
     writtenByT3: new Set([pam]),
     managed: new Set(),
+    owners: new Map(),
   };
   const fixBy = (check: typeof missingLine | object, context: Partial<FixContext> = {}) =>
     withFixBy({ id: "x", ok: false, message: "", ...check }, { ...repairable, ...context }).fixBy;
 
-  it("leaves passing checks without a fixer and keeps missingPath off the wire", () => {
-    expect(withFixBy({ ...missingLine, ok: true }, repairable)).toEqual({
+  it("leaves passing checks without a fixer or owner and keeps `missing` off the wire", () => {
+    expect(
+      withFixBy({ ...missingLine, ok: true }, { ...repairable, owners: new Map([[pam, "nix"]]) }),
+    ).toEqual({
       id: "pam:sudo_local",
       ok: true,
       message: `PAM line missing in ${pam}`,
+      path: pam,
     });
+  });
+
+  it("names who owns a failing part", () => {
+    const owned = (owner: "nix" | "hand") =>
+      withFixBy(missingLine, { ...repairable, owners: new Map([[pam, owner]]) }).managedBy;
+    expect(owned("nix")).toBe("nix");
+    expect(owned("hand")).toBe("hand");
+    expect(withFixBy(missingLine, repairable).managedBy).toBeUndefined();
   });
 
   it("re-adds a missing line T3 wrote on a file nothing else manages", () => {
@@ -310,11 +339,36 @@ describe("isManagedPath", () => {
   );
 });
 
-describe("readPathsWrittenByT3", () => {
-  it.effect("reads the paths installed-by-t3.json records, and none without it", () =>
+describe("pathOwner", () => {
+  it.effect("says Nix for store paths, by hand for files T3 didn't write, else nobody", () =>
+    Effect.gen(function* () {
+      const { paths } = yield* layout({
+        platform: "darwin",
+        pam: { sudo_local: "auth sufficient pam_tid.so\n" },
+        protocol: 1,
+      });
+      const local = NodePath.join(paths.pamDir, "sudo_local");
+      const missing = NodePath.join(paths.pamDir, "missing");
+      const store = "/nix/store/abc-t3-elevation/lib/pam_t3_elevation.so";
+      expect(yield* pathOwner(store, new Set())).toBe("nix");
+      // A rebuild replaces it whatever the record says.
+      expect(yield* pathOwner(store, new Set([store]))).toBe("nix");
+      expect(yield* pathOwner(local, new Set())).toBe("hand");
+      expect(yield* pathOwner(local, new Set([local]))).toBeUndefined();
+      expect(yield* pathOwner(missing, new Set())).toBeUndefined();
+      // A link that doesn't lead into the store is someone's own.
+      const linked = NodePath.join(paths.pamDir, "sudo_linked");
+      yield* Effect.promise(() => NodeFSP.symlink(local, linked));
+      expect(yield* pathOwner(linked, new Set())).toBe("hand");
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("readT3Install", () => {
+  it.effect("reads who installed-by-t3.json installed for and the paths it wrote", () =>
     Effect.gen(function* () {
       const { paths } = yield* layout({ platform: "darwin", pam: {}, protocol: 1 });
-      expect([...(yield* readPathsWrittenByT3(paths))]).toEqual([]);
+      expect(yield* readT3Install(paths)).toBeNull();
       yield* Effect.promise(() =>
         NodeFSP.writeFile(
           NodePath.join(paths.etcDir, "installed-by-t3.json"),
@@ -325,7 +379,10 @@ describe("readPathsWrittenByT3", () => {
           }),
         ),
       );
-      expect([...(yield* readPathsWrittenByT3(paths))]).toEqual(["/etc/pam.d/sudo_local"]);
+      expect(yield* readT3Install(paths)).toEqual({
+        user: "me",
+        written: new Set(["/etc/pam.d/sudo_local"]),
+      });
     }).pipe(Effect.scoped),
   );
 });

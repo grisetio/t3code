@@ -248,9 +248,9 @@ const includesSudo = (text: string) =>
     /^(@include\s+sudo|-?auth\s+(include|substack)\s+sudo)$/.test(line),
   );
 
-/** A check plus, when it fails because a part is gone, where install would put it back. */
+/** A check plus whether it fails because its `path` is gone, so install could put it back. */
 export interface HostCheck extends ElevationCheck {
-  readonly missingPath?: string;
+  readonly missing?: boolean;
 }
 
 export interface StaticChecks {
@@ -264,9 +264,16 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
   input: { readonly user: string; readonly socketPath: string },
 ) {
   const checks: Array<HostCheck> = [];
-  const pass = (id: string, message: string) => checks.push({ id, ok: true, message });
-  const fail = (id: string, message: string, missingPath?: string) =>
-    checks.push({ id, ok: false, message, ...(missingPath === undefined ? {} : { missingPath }) });
+  const pass = (id: string, message: string, path?: string) =>
+    checks.push({ id, ok: true, message, ...(path === undefined ? {} : { path }) });
+  const fail = (id: string, message: string, path?: string, missing = false) =>
+    checks.push({
+      id,
+      ok: false,
+      message,
+      ...(path === undefined ? {} : { path }),
+      ...(missing ? { missing } : {}),
+    });
 
   const pamFiles =
     paths.platform === "darwin"
@@ -274,8 +281,9 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
       : [{ file: "sudo", parse: linuxPamModulePath }];
   if (paths.platform === "darwin") {
     const sudo = yield* readText(NodePath.join(paths.pamDir, "sudo"));
+    const sudoPath = NodePath.join(paths.pamDir, "sudo");
     if (sudo !== null && !/^\s*auth\s+include\s+sudo_local\s*$/m.test(sudo)) {
-      fail("pam_include", `${NodePath.join(paths.pamDir, "sudo")} doesn't include sudo_local`);
+      fail("pam_include", `${sudoPath} doesn't include sudo_local`, sudoPath);
     }
   } else {
     const sudoI = yield* readText(NodePath.join(paths.pamDir, "sudo-i"));
@@ -288,41 +296,50 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
     const path = NodePath.join(paths.pamDir, file);
     const text = yield* readText(path);
     const result = text === null ? "missing" : parse(text);
-    if (result === "missing") fail(`pam:${file}`, `PAM line missing in ${path}`, path);
+    if (result === "missing") fail(`pam:${file}`, `PAM line missing in ${path}`, path, true);
     else if (result === "misplaced")
-      fail(`pam:${file}`, `PAM line in ${path} isn't first or has the wrong control`);
+      fail(`pam:${file}`, `PAM line in ${path} isn't first or has the wrong control`, path);
     else {
-      pass(`pam:${file}`, `PAM line present in ${path}`);
+      pass(`pam:${file}`, `PAM line present in ${path}`, path);
       modulePaths.add(result);
     }
   }
   for (const modulePath of modulePaths) {
     const binary = yield* Effect.promise(() => NodeFSP.readFile(modulePath).catch(() => null));
     const protocol = binary === null ? null : moduleProtocol(binary);
-    if (binary === null) fail("module", `PAM module missing at ${modulePath}`, modulePath);
+    if (binary === null) fail("module", `PAM module missing at ${modulePath}`, modulePath, true);
     else if (protocol !== PROTOCOL_VERSION)
-      fail("module", `PAM module at ${modulePath} isn't a compatible version`);
-    else pass("module", `PAM module at ${modulePath} is compatible`);
+      fail("module", `PAM module at ${modulePath} isn't a compatible version`, modulePath);
+    else pass("module", `PAM module at ${modulePath} is compatible`, modulePath);
   }
 
   const config = yield* readUserConfig(paths, input.user);
   const configFile = configPath(paths, input.user);
-  if (config === null) fail("config", `${configFile} is missing`, configFile);
+  if (config === null) fail("config", `${configFile} is missing`, configFile, true);
   else if (!(yield* isRootOwned(paths, configFile)))
-    fail("config", `${configFile} or a parent directory isn't root-owned and closed to others`);
-  else if (config.version !== 1) fail("config", `${configFile} has an unsupported version`);
-  else if (!config.enabled) fail("config", `${configFile} turns device approval off`);
+    fail(
+      "config",
+      `${configFile} or a parent directory isn't root-owned and closed to others`,
+      configFile,
+    );
+  else if (config.version !== 1)
+    fail("config", `${configFile} has an unsupported version`, configFile);
+  else if (!config.enabled) fail("config", `${configFile} turns device approval off`, configFile);
   else if (config.socket !== input.socketPath)
-    fail("config", `${configFile} points at another T3 server`);
-  else pass("config", `${configFile} points at this server`);
+    fail("config", `${configFile} points at another T3 server`, configFile);
+  else pass("config", `${configFile} points at this server`, configFile);
 
   const keysPath = keysDir(paths, input.user);
   const keysStat = yield* lstat(keysPath);
-  if (keysStat === null) fail("keys", `${keysPath} is missing`, keysPath);
-  else if (!keysStat.isDirectory()) fail("keys", `${keysPath} isn't a directory`);
+  if (keysStat === null) fail("keys", `${keysPath} is missing`, keysPath, true);
+  else if (!keysStat.isDirectory()) fail("keys", `${keysPath} isn't a directory`, keysPath);
   else if (!(yield* isRootOwned(paths, keysPath)))
-    fail("keys", `${keysPath} or a parent directory isn't root-owned and closed to others`);
-  else pass("keys", `${keysPath} is root-owned`);
+    fail(
+      "keys",
+      `${keysPath} or a parent directory isn't root-owned and closed to others`,
+      keysPath,
+    );
+  else pass("keys", `${keysPath} is root-owned`, keysPath);
 
   const keys = yield* readEnrolledKeys(paths, input.user);
   if (keys.length === 0) fail("devices", "No device is enrolled");
@@ -341,27 +358,53 @@ const MANAGED_PREFIXES = ["/nix/store/", "/etc/static/"];
 export const isManagedPath = Effect.fn("ElevationHostState.isManagedPath")(function* (
   path: string,
 ) {
-  if (MANAGED_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
   const stat = yield* lstat(path);
-  if (stat?.isSymbolicLink() === true) return true;
+  return stat?.isSymbolicLink() === true || (yield* isNixPath(path));
+});
+
+/** In the Nix store, or resolving into it (nix-darwin and NixOS `/etc` links via `/etc/static`). */
+const isNixPath = Effect.fn("ElevationHostState.isNixPath")(function* (path: string) {
+  if (MANAGED_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
   const real = yield* Effect.promise(() => NodeFSP.realpath(path).catch(() => path));
   return MANAGED_PREFIXES.some((prefix) => real.startsWith(prefix));
 });
 
-const Manifest = Schema.Struct({ changes: Schema.Array(Schema.Struct({ path: Schema.String })) });
+export type PathOwner = NonNullable<ElevationCheck["managedBy"]>;
+
+/**
+ * Who owns a path that isn't T3's: Nix when it is or resolves into the store, by hand when it
+ * exists and `installed-by-t3.json` doesn't record it. Undefined when T3 wrote it or it's gone.
+ * A Nix link wins over the record, since a rebuild replaces whatever T3 wrote there.
+ */
+export const pathOwner = Effect.fn("ElevationHostState.pathOwner")(function* (
+  path: string,
+  writtenByT3: ReadonlySet<string>,
+) {
+  if (yield* isNixPath(path)) return "nix" satisfies PathOwner;
+  if (writtenByT3.has(path) || (yield* lstat(path)) === null) return undefined;
+  return "hand" satisfies PathOwner;
+});
+
+const Manifest = Schema.Struct({
+  user: Schema.String,
+  changes: Schema.Array(Schema.Struct({ path: Schema.String })),
+});
 const decodeManifest = Schema.decodeUnknownOption(Schema.fromJsonString(Manifest));
 
-/** Paths `installed-by-t3.json` records T3 writing; empty when there is none. */
-export const readPathsWrittenByT3 = Effect.fn("ElevationHostState.readPathsWrittenByT3")(function* (
+/**
+ * What `installed-by-t3.json` records: the user T3 installed for, and the paths it wrote. Null
+ * when there is none, so T3 didn't install device approval here.
+ */
+export const readT3Install = Effect.fn("ElevationHostState.readT3Install")(function* (
   paths: HostPaths,
 ) {
   const text = yield* readText(NodePath.join(paths.etcDir, "installed-by-t3.json"));
   const manifest = text === null ? null : decodeManifest(text);
-  return new Set(
-    manifest === null || manifest._tag === "None"
-      ? []
-      : manifest.value.changes.map((change) => change.path),
-  );
+  if (manifest === null || manifest._tag === "None") return null;
+  return {
+    user: manifest.value.user,
+    written: new Set(manifest.value.changes.map((change) => change.path)),
+  };
 });
 
 export interface FixContext {
@@ -369,6 +412,8 @@ export interface FixContext {
   readonly plannedChanges: ReadonlyArray<{ readonly path: string; readonly summary: string }>;
   readonly writtenByT3: ReadonlySet<string>;
   readonly managed: ReadonlySet<string>;
+  /** `pathOwner` of each failing check's path, where it has one. */
+  readonly owners: ReadonlyMap<string, PathOwner>;
 }
 
 /**
@@ -377,10 +422,12 @@ export interface FixContext {
  * Everything else goes to an agent with the diagnosis. The phone's key is always T3's to add back.
  */
 export function withFixBy(check: HostCheck, context: FixContext): ElevationCheck {
-  const { missingPath: _, ...wire } = check;
-  if (check.ok) return wire;
+  const { missing, ...rest } = check;
+  if (check.ok) return rest;
+  const managedBy = check.path === undefined ? undefined : context.owners.get(check.path);
+  const wire = managedBy === undefined ? rest : { ...rest, managedBy };
   if (check.id === "devices") return { ...wire, fixBy: "t3" };
-  const path = check.missingPath;
+  const path = missing === true ? check.path : undefined;
   const installCanWrite =
     path !== undefined &&
     context.plannedChanges.some((change) => change.path === path) &&

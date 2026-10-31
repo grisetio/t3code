@@ -447,6 +447,27 @@ describe("ElevationService", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("records the enrolled phone that named itself on a deny, and no other key", () =>
+    Effect.gen(function* () {
+      yield* setupRunningThread;
+      const fixture = yield* makeFixture();
+      const denyWith = (keyId: ElevationKeyId) =>
+        Effect.gen(function* () {
+          const { module, request } = yield* openRequest(fixture);
+          yield* fixture.service.respond({ requestId: request.requestId, decision: "deny", keyId });
+          assert.deepStrictEqual(yield* module.receive, { type: "response", decision: "deny" });
+          yield* module.send({ type: "result", outcome: "denied" });
+          yield* Queue.take(fixture.commands);
+          return (yield* nextResolve(fixture.commands)).resolvedBy;
+        });
+      assert.deepStrictEqual(yield* denyWith(enrolledKeyId), {
+        deviceLabel: "Pixel",
+        keyId: enrolledKeyId,
+      });
+      assert.isNull(yield* denyWith(vectorsJson.keys.other.keyId as ElevationKeyId));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("cancels an interrupted run's unanswered request and resolves it cancelled", () =>
     Effect.gen(function* () {
       yield* setupRunningThread;
@@ -834,6 +855,54 @@ describe("ElevationService helper", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.live("says whether T3 installed it, from installed-by-t3.json for this user", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const manifest = NodePath.join(fixture.dir, "etc", "installed-by-t3.json");
+      const writeManifest = (user: string) =>
+        Effect.promise(() =>
+          NodeFSP.writeFile(
+            manifest,
+            JSON.stringify({ version: 1, user, changes: [{ path: "/etc/pam.d/sudo_local" }] }),
+          ),
+        );
+      assert.isFalse((yield* fixture.service.status).installedByT3);
+      yield* writeManifest("me");
+      assert.isTrue((yield* fixture.service.status).installedByT3);
+      // Uninstall refuses another user's install, so Turn off couldn't undo it.
+      yield* writeManifest("someone-else");
+      assert.isFalse((yield* fixture.service.status).installedByT3);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("names each failing check's file and who owns it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const pamDir = NodePath.join(fixture.dir, "pam.d");
+      const local = NodePath.join(pamDir, "sudo_local");
+      const pamCheck = Effect.map(fixture.service.status, (status) =>
+        status.checks.find((check) => check.id === "pam:sudo_local"),
+      );
+      // Missing, so nobody owns it yet.
+      assert.deepInclude(yield* pamCheck, { ok: false, path: local });
+      assert.isUndefined((yield* pamCheck)?.managedBy);
+
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(pamDir);
+        await NodeFSP.writeFile(local, "auth sufficient pam_tid.so\n");
+      });
+      assert.strictEqual((yield* pamCheck)?.managedBy, "hand");
+
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(fixture.dir, "etc", "installed-by-t3.json"),
+          JSON.stringify({ version: 1, user: "me", changes: [{ path: local }] }),
+        ),
+      );
+      assert.isUndefined((yield* pamCheck)?.managedBy);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.live("reports an installed helper someone other than root could replace", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -847,6 +916,7 @@ describe("ElevationService helper", () => {
       const check = untrusted.checks.find((candidate) => candidate.id === "helper");
       assert.isFalse(check?.ok);
       assert.include(check?.message, installedHelper(fixture.dir));
+      assert.strictEqual(check?.path, installedHelper(fixture.dir));
       // Agent sudo still goes to the phone; only managing devices needs the helper.
       assert.strictEqual(untrusted.ready, trusted.ready);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),

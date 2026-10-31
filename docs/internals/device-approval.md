@@ -339,13 +339,24 @@ or an operand that expands. Claude Code's wrapper (`… && eval '<cmd>' <
 read the same way. Sudos with their own warnings, declines, and the helper
 (`t3-elevation`) are not covered and ask the phone.
 
+A sudo that a live grant doesn't cover logs one `LOG_AUTHPRIV` line,
+`t3-elevation: grant miss: <category> uid=<uid> session=<sid>` (categories:
+`Miss` in `grant.rs`), never argv or paths. It exists to measure whether
+reading expansions the approved text shows (`f=/x; sudo cp "$f" /etc`) is
+worth building. Count them on macOS with `log show --last 7d --predicate
+'process == "sudo" AND eventMessage BEGINSWITH "t3-elevation: grant miss:"' |
+grep -o 'miss: [a-z-]*' | sort | uniq -c`, and on Linux with `journalctl
+--facility=authpriv -o cat | grep -o 'grant miss: [a-z-]*' | sort | uniq -c`.
+
 Residual risks: a same-uid process can run a covered call itself, once, inside
 the window, the session and the same cwd; relative arguments resolve against
 that cwd. A process that can ptrace or preload into the leader before the first
 sudo changes the string the phone shows rather than what it covers. zsh-only
 syntax is read with POSIX rules, which can only drop calls. On macOS with Nix,
-`/etc/shells` must list the store shell an agent runs (nix-darwin
-`environment.shells`) for its sessions to qualify.
+`/etc/shells` must list the store shell an agent runs for its sessions to
+qualify, and must be a root-owned file: nix-darwin's `environment.shells` links
+it into the group-writable store, which fails the root-safe check and empties
+the list, so install a copy at activation instead.
 
 Grants live in `/run/t3-elevation` (Linux tmpfs) or `/var/db/t3-elevation`
 (macOS, where `/var/run` isn't root-only), one `<uid>-<sid>.json` per session.
@@ -485,6 +496,15 @@ sudo password into T3.
 - A request attributed to no thread has no turn item. Clients get every
   pending request, with its payload, from the `elevationSubscribe` stream,
   which also drives the cross-environment banner.
+- One entry per request. While the Android app is in front, the request already
+  shows in the app, so the native push handler posts nothing for it. Our relay
+  marks sudo pushes with `alert_request_kind`, but upstream relays strip it, so
+  JS also reports the threads with a waiting request (`setSudoPendingThreads`):
+  unmarked alerts for them are dropped, and ones posted before the request
+  reached the app are removed.
+- Removing a phone revokes through the helper's sudo, which that phone approves
+  with the key it is removing. The phone claims the request so it never shows
+  as a banner or sheet.
 - RPC schemas and helpers: `packages/contracts/src/elevation.ts`. Clients
   check the `deviceApproval` environment capability before showing anything.
 - Test vectors shared by the Rust, TypeScript and Kotlin tests:

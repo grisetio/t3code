@@ -72,8 +72,10 @@ import {
   type HostCheck,
   isManagedPath,
   isTrustedHelper,
+  pathOwner,
+  type PathOwner,
   readEnrolledKeys,
-  readPathsWrittenByT3,
+  readT3Install,
   readUserConfig,
   staticChecks,
   withFixBy,
@@ -781,27 +783,24 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
               id: "helper",
               ok: false,
               message: untrustedHelperMessage,
-              missingPath: options.hostPaths.helperPath,
+              path: options.hostPaths.helperPath,
+              missing: true,
             },
           ]
         : [];
     const hostChecks = [...host.checks, ...helperCheck];
     const plannedChanges = helper?.plannedChanges ?? [];
-    const missingPaths = hostChecks.flatMap((check) =>
-      check.missingPath === undefined ? [] : [check.missingPath],
-    );
+    const install = yield* readT3Install(options.hostPaths);
+    const writtenByT3 = install?.written ?? new Set<string>();
     const managed = new Set<string>();
-    for (const path of missingPaths) {
-      if (yield* isManagedPath(path)) managed.add(path);
+    const owners = new Map<string, PathOwner>();
+    for (const check of hostChecks) {
+      if (check.ok || check.path === undefined) continue;
+      if (check.missing === true && (yield* isManagedPath(check.path))) managed.add(check.path);
+      const owner = yield* pathOwner(check.path, writtenByT3);
+      if (owner !== undefined) owners.set(check.path, owner);
     }
-    const fixContext = {
-      plannedChanges,
-      writtenByT3:
-        missingPaths.length === 0
-          ? new Set<string>()
-          : yield* readPathsWrittenByT3(options.hostPaths),
-      managed,
-    };
+    const fixContext = { plannedChanges, writtenByT3, managed, owners };
     return {
       supported: unsupported === null,
       ...(unsupported === null ? {} : { unsupportedReason: unsupported }),
@@ -809,6 +808,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       ownsApprovals: listening,
       user: options.user,
       setupOutsideT3: helper?.setupOutsideT3 ?? false,
+      installedByT3: install?.user === options.user,
       helperInstalled,
       checks: hostChecks.map((check) => withFixBy(check, fixContext)),
       plannedChanges,
@@ -1059,7 +1059,17 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     if (entry === undefined) return yield* fail("not_found");
     if (entry.answer !== null) return yield* fail("already_resolved");
     if (input.decision === "deny") {
-      entry.answer = { resolvedBy: null };
+      // Unsigned, so the key only labels the row; one that isn't enrolled labels nothing.
+      const key =
+        input.keyId === undefined
+          ? undefined
+          : (yield* readEnrolledKeys(options.hostPaths, options.user)).find(
+              (candidate) => candidate.keyId === input.keyId,
+            );
+      if (entry.answer !== null) return yield* fail("already_resolved");
+      entry.answer = {
+        resolvedBy: key === undefined ? null : { deviceLabel: key.label, keyId: key.keyId },
+      };
       entry.send({ type: "response", decision: "deny" });
       yield* publish;
       return;

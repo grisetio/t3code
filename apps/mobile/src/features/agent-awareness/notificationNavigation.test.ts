@@ -4,8 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
 import {
+  encodeThreadDeepLink,
   extractAgentNotificationDeepLink,
   routeAgentNotificationResponseOnce,
+  threadDeepLinkOnScreen,
 } from "./notificationPayload";
 
 function responseWithData(data: Record<string, unknown>, identifier = "notification-1") {
@@ -125,5 +127,36 @@ describe("routeAgentNotificationResponseOnce", () => {
     });
 
     expect(navigations).toEqual(["/threads/env/thread"]);
+  });
+});
+
+describe("threadDeepLinkOnScreen", () => {
+  // React Navigation leaves RFC 3986 pchars such as `:` and `@` unencoded in params, while deep
+  // links and pushes use encodeURIComponent; both must name the same thread.
+  it.each([
+    ["environment-1", "thread-1"],
+    ["environment-1", "thread:delegated-task:command%3Aabc"],
+    ["env:host@local", "a+b,c;d=e&f$g"],
+  ])("matches the deep link for %s / %s", (environmentId, threadId) => {
+    const navigationPath = `/threads/${[environmentId, threadId]
+      .map((value) =>
+        Array.from(value)
+          .map((char) =>
+            /[^A-Za-z0-9\-._~!$&'()*+,;=:@]/.test(char) ? encodeURIComponent(char) : char,
+          )
+          .join(""),
+      )
+      .join("/")}`;
+    expect(threadDeepLinkOnScreen(navigationPath)).toBe(
+      encodeThreadDeepLink({ environmentId, threadId }),
+    );
+    expect(threadDeepLinkOnScreen(`${navigationPath}/review`)).toBe(
+      encodeThreadDeepLink({ environmentId, threadId }),
+    );
+  });
+
+  it("ignores paths that aren't a thread", () => {
+    expect(threadDeepLinkOnScreen("/settings")).toBeNull();
+    expect(threadDeepLinkOnScreen("/threads/%E0%A4%A/x")).toBeNull();
   });
 });

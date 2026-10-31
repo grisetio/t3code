@@ -194,9 +194,30 @@ pub struct Grant {
     pub key_id: String,
     pub until: i64,
     pub sudos: Vec<Covered>,
+    /// The rest only says why a later sudo missed (`Miss`); none of it
+    /// approves anything. Optional so a grant without it still reads.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub non_literal: bool,
+    /// `argv_digest`s of written calls past `session_max_uses`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capped: Vec<String>,
+    /// `argv_digest`s of the approved call and the calls used since.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub used: Vec<String>,
 }
 
 const GRANT_VERSION: u32 = 2;
+
+/// The written sudos an approval doesn't cover, by why.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Uncovered {
+    /// A written sudo had an argument an expansion may change.
+    pub non_literal: bool,
+    /// Calls past `session_max_uses`, as sudo's argv without argv[0].
+    pub capped: Vec<Vec<String>>,
+    /// The approved call itself.
+    pub approved: Vec<String>,
+}
 
 /// base64url SHA-256 of each argument followed by a NUL.
 fn argv_digest(argv: &[String]) -> String {
@@ -216,7 +237,7 @@ impl Grant {
         cwd: &str,
         key_id: &str,
         until: i64,
-        sudos: Vec<Covered>,
+        (sudos, uncovered): (Vec<Covered>, Uncovered),
     ) -> Self {
         Self {
             version: GRANT_VERSION,
@@ -229,6 +250,13 @@ impl Grant {
             key_id: key_id.to_string(),
             until,
             sudos,
+            non_literal: uncovered.non_literal,
+            capped: uncovered
+                .capped
+                .iter()
+                .map(|args| argv_digest(args))
+                .collect(),
+            used: vec![argv_digest(&uncovered.approved)],
         }
     }
 }
@@ -242,7 +270,10 @@ pub struct Request<'a> {
     pub leading: bool,
     /// sudo's argv without argv[0].
     pub args: &'a [String],
-    pub resolved_path: &'a str,
+    /// The phone would warn about it, it's the helper, or sudo can't find
+    /// the program: never covered.
+    pub excluded: bool,
+    pub resolved_path: Option<&'a str>,
     pub run_as: &'a str,
     pub run_as_group: Option<&'a str>,
     pub cwd: &'a str,
@@ -372,6 +403,55 @@ pub fn present(dir: &Path, uid: u32, session: i32) -> bool {
     std::fs::symlink_metadata(dir.join(file_name(uid, session))).is_ok()
 }
 
+/// Why a sudo in a session with a grant asks the phone anyway. Counted in
+/// syslog to learn which sudos agents write that a grant can't cover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Miss {
+    /// No readable grant: the normal first prompt, never logged.
+    NoGrant,
+    Expired,
+    /// The leader died, was reused, or now runs something else.
+    LeaderChanged,
+    Cwd,
+    /// Another invoking user, or another `-u`/`-g` than the written call.
+    User,
+    /// The approving key is no longer enrolled.
+    Key,
+    /// The written call's program resolves elsewhere now.
+    Program,
+    Excluded,
+    /// The approved call again, or a call already used.
+    Used,
+    Cap,
+    /// Not a covered call, and the approved command had a sudo whose
+    /// arguments expand, which this one may be.
+    NonLiteral,
+    NotInCommand,
+    /// Covered, but the use couldn't be counted.
+    Unrecorded,
+}
+
+impl Miss {
+    /// The syslog category; None when there's nothing to count.
+    pub fn category(self) -> Option<&'static str> {
+        Some(match self {
+            Self::NoGrant => return None,
+            Self::Expired => "expired",
+            Self::LeaderChanged => "leader-changed",
+            Self::Cwd => "cwd",
+            Self::User => "user",
+            Self::Key => "key",
+            Self::Program => "program",
+            Self::Excluded => "excluded",
+            Self::Used => "used",
+            Self::Cap => "cap",
+            Self::NonLiteral => "non-literal",
+            Self::NotInCommand => "not-in-command",
+            Self::Unrecorded => "unrecorded",
+        })
+    }
+}
+
 /// Consumes the call of the grant that `request` is, if there is one. The
 /// leader is re-read from the kernel, so a dead leader, a reused pid, or a
 /// leader that now runs something else never matches.
@@ -382,54 +462,101 @@ pub fn take<S, A>(
     keys: &[EnrolledKey],
     now: i64,
     leader: Leader<S, A>,
-) -> bool
+) -> Result<(), Miss>
 where
     S: Fn(i32) -> Option<u64>,
     A: Fn(i32) -> Option<Vec<String>>,
 {
-    let Some(locked) = open_dir(dir, policy, false) else {
-        return false;
-    };
+    let locked = open_dir(dir, policy, false).ok_or(Miss::NoGrant)?;
     let name = file_name(request.uid, request.anchor.session);
     let path = locked.dir.join(&name);
-    let Some(mut grant) = read(&path, policy) else {
-        return false;
+    let mut grant = read(&path, policy).ok_or(Miss::NoGrant)?;
+    let stale = if grant.sudos.is_empty() {
+        Some(Miss::NoGrant)
+    } else if now >= grant.until {
+        Some(Miss::Expired)
+    } else if (leader.start)(grant.session) != Some(grant.leader_start) {
+        Some(Miss::LeaderChanged)
+    } else {
+        None
     };
-    let stale = now >= grant.until
-        || grant.sudos.is_empty()
-        || (leader.start)(grant.session) != Some(grant.leader_start);
-    if stale {
+    if let Some(miss) = stale {
         let _ = std::fs::remove_file(&path);
-        return false;
+        return Err(miss);
     }
-    let matches = grant.uid == request.uid
-        && grant.user == request.user
-        && grant.session == request.anchor.session
-        && grant.leader_start == request.anchor.leader_start
-        && grant.cwd == request.cwd
-        && keys.iter().any(|key| key.key_id == grant.key_id);
     // A leading sudo replaced the shell, so its argv is sudo's own; only the
     // string's last command can have done that.
     let same_leader = request.leading
         || (leader.argv)(grant.session).is_some_and(|argv| argv_digest(&argv) == grant.leader_argv);
-    if !matches || !same_leader {
-        return false;
+    if grant.uid != request.uid || grant.user != request.user {
+        return Err(Miss::User);
     }
+    if grant.session != request.anchor.session
+        || grant.leader_start != request.anchor.leader_start
+        || !same_leader
+    {
+        return Err(Miss::LeaderChanged);
+    }
+    if grant.cwd != request.cwd {
+        return Err(Miss::Cwd);
+    }
+    if !keys.iter().any(|key| key.key_id == grant.key_id) {
+        return Err(Miss::Key);
+    }
+    if request.excluded {
+        return Err(Miss::Excluded);
+    }
+    let Some(resolved_path) = request.resolved_path else {
+        return Err(Miss::Excluded);
+    };
     let Some(position) = grant.sudos.iter().position(|covered| {
         covered.args == request.args
-            && covered.resolved_path == request.resolved_path
+            && covered.resolved_path == resolved_path
             && covered.run_as == request.run_as
             && covered.run_as_group.as_deref() == request.run_as_group
             && (covered.exec_tail || !request.leading)
     }) else {
-        return false;
+        return Err(not_covered(&grant, request, resolved_path));
     };
-    grant.sudos.remove(position);
+    let taken = grant.sudos.remove(position);
     // A use that can't be counted isn't granted.
-    if grant.sudos.is_empty() {
-        return std::fs::remove_file(&path).is_ok();
+    let counted = if grant.sudos.is_empty() {
+        std::fs::remove_file(&path).is_ok()
+    } else {
+        grant.used.push(argv_digest(&taken.args));
+        write(&locked, &name, &grant)
+    };
+    counted.then_some(()).ok_or(Miss::Unrecorded)
+}
+
+/// Why no covered call is `request`, which passed every session check.
+fn not_covered(grant: &Grant, request: &Request, resolved_path: &str) -> Miss {
+    if let Some(written) = grant
+        .sudos
+        .iter()
+        .find(|covered| covered.args == request.args)
+    {
+        return if written.resolved_path != resolved_path {
+            Miss::Program
+        } else if written.run_as != request.run_as
+            || written.run_as_group.as_deref() != request.run_as_group
+        {
+            Miss::User
+        } else {
+            // It leads the session but isn't the string's last command.
+            Miss::LeaderChanged
+        };
     }
-    write(&locked, &name, &grant)
+    let digest = argv_digest(request.args);
+    if grant.used.contains(&digest) {
+        Miss::Used
+    } else if grant.capped.contains(&digest) {
+        Miss::Cap
+    } else if grant.non_literal {
+        Miss::NonLiteral
+    } else {
+        Miss::NotInCommand
+    }
 }
 
 #[cfg(test)]
@@ -634,6 +761,10 @@ mod tests {
 
     impl Fixture {
         fn record(&self, sudos: Vec<Covered>, until: i64) {
+            self.record_with(sudos, until, Uncovered::default());
+        }
+
+        fn record_with(&self, sudos: Vec<Covered>, until: i64, uncovered: Uncovered) {
             let session = Session {
                 id: self.anchor.session,
                 leader_start: self.anchor.leader_start,
@@ -647,7 +778,7 @@ mod tests {
                 "/work",
                 &self.keys[0].key_id,
                 until,
-                sudos,
+                (sudos, uncovered),
             );
             record(&self.dir, &test_fs::policy(), &grant, 100);
         }
@@ -660,7 +791,7 @@ mod tests {
             run_as: &str,
             cwd: &str,
             now: i64,
-        ) -> bool {
+        ) -> Result<(), Miss> {
             let args = strings(args);
             let resolved = format!("/usr/bin/{}", args[0]);
             let request = Request {
@@ -669,7 +800,8 @@ mod tests {
                 anchor,
                 leading,
                 args: &args,
-                resolved_path: &resolved,
+                excluded: false,
+                resolved_path: Some(&resolved),
                 run_as,
                 run_as_group: None,
                 cwd,
@@ -689,7 +821,7 @@ mod tests {
             )
         }
 
-        fn take(&self, args: &[&str], now: i64) -> bool {
+        fn take(&self, args: &[&str], now: i64) -> Result<(), Miss> {
             self.take_with(self.anchor, false, args, "root", "/work", now)
         }
     }
@@ -697,8 +829,9 @@ mod tests {
     #[test]
     fn a_grant_covers_each_written_call_once() {
         let fixture = fixture();
-        assert!(
-            !fixture.take(&["apt", "update"], 100),
+        assert_eq!(
+            fixture.take(&["apt", "update"], 100),
+            Err(Miss::NoGrant),
             "nothing recorded yet"
         );
         fixture.record(
@@ -710,15 +843,28 @@ mod tests {
         );
         let meta = std::fs::metadata(&fixture.dir).unwrap();
         assert_eq!(meta.mode() & 0o777, 0o700);
-        assert!(
-            !fixture.take(&["ls", "/"], 150),
-            "not written in the command"
+        assert_eq!(fixture.take(&["ls", "/"], 150), Err(Miss::NotInCommand));
+        assert_eq!(
+            fixture.take(&["apt"], 150),
+            Err(Miss::NotInCommand),
+            "only the whole argv"
         );
-        assert!(!fixture.take(&["apt"], 150), "only the whole argv");
-        assert!(fixture.take(&["apt", "update"], 150));
-        assert!(!fixture.take(&["apt", "update"], 150), "once each");
-        assert!(fixture.take(&["systemctl", "restart", "nginx"], 150));
+        assert_eq!(fixture.take(&["apt", "update"], 150), Ok(()));
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::Used),
+            "once each"
+        );
+        assert_eq!(
+            fixture.take(&["systemctl", "restart", "nginx"], 150),
+            Ok(())
+        );
         assert!(std::fs::read_dir(&fixture.dir).unwrap().next().is_none());
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::NoGrant),
+            "a spent grant is no grant"
+        );
     }
 
     #[test]
@@ -734,12 +880,86 @@ mod tests {
             ..fixture.anchor
         };
         let apt = ["apt", "update"];
-        assert!(!fixture.take_with(other_session, false, &apt, "root", "/work", 150));
-        assert!(!fixture.take_with(reused_pid, false, &apt, "root", "/work", 150));
-        assert!(!fixture.take_with(fixture.anchor, false, &apt, "postgres", "/work", 150));
-        assert!(!fixture.take_with(fixture.anchor, false, &apt, "root", "/tmp", 150));
-        assert!(!fixture.take(&apt, 200), "expired");
-        assert!(!fixture.take(&apt, 150), "expired grants are removed");
+        let take = |anchor, run_as, cwd| fixture.take_with(anchor, false, &apt, run_as, cwd, 150);
+        assert_eq!(take(other_session, "root", "/work"), Err(Miss::NoGrant));
+        assert_eq!(take(reused_pid, "root", "/work"), Err(Miss::LeaderChanged));
+        assert_eq!(take(fixture.anchor, "postgres", "/work"), Err(Miss::User));
+        assert_eq!(take(fixture.anchor, "root", "/tmp"), Err(Miss::Cwd));
+        assert_eq!(fixture.take(&apt, 200), Err(Miss::Expired));
+        assert_eq!(
+            fixture.take(&apt, 150),
+            Err(Miss::NoGrant),
+            "expired grants are removed"
+        );
+    }
+
+    /// The miss log's categories for calls the grant never covered.
+    #[test]
+    fn a_miss_says_why_the_call_wasnt_covered() {
+        let fixture = fixture();
+        fixture.record_with(
+            vec![covered(&["apt", "update"], "root", false)],
+            200,
+            Uncovered {
+                non_literal: false,
+                capped: vec![strings(&["apt", "upgrade"])],
+                approved: strings(&["apt", "install", "x"]),
+            },
+        );
+        assert_eq!(fixture.take(&["apt", "install", "x"], 150), Err(Miss::Used));
+        assert_eq!(fixture.take(&["apt", "upgrade"], 150), Err(Miss::Cap));
+        assert_eq!(
+            fixture.take(&["cp", "a", "/etc"], 150),
+            Err(Miss::NotInCommand)
+        );
+        let args = strings(&["apt", "update"]);
+        let request = |resolved_path, excluded| Request {
+            uid: 1000,
+            user: "me",
+            anchor: fixture.anchor,
+            leading: false,
+            args: &args,
+            excluded,
+            resolved_path,
+            run_as: "root",
+            run_as_group: None,
+            cwd: "/work",
+        };
+        let take = |request: &Request| {
+            take(
+                &fixture.dir,
+                &test_fs::policy(),
+                request,
+                &fixture.keys,
+                150,
+                Leader {
+                    start: |pid| crate::sys::leader_facts(pid).map(|facts| facts.start),
+                    argv: |_| Some(fixture.leader_argv.borrow().clone()),
+                },
+            )
+        };
+        assert_eq!(take(&request(Some("/opt/apt"), false)), Err(Miss::Program));
+        assert_eq!(take(&request(None, false)), Err(Miss::Excluded));
+        assert_eq!(
+            take(&request(Some("/usr/bin/apt"), true)),
+            Err(Miss::Excluded)
+        );
+        assert_eq!(take(&request(Some("/usr/bin/apt"), false)), Ok(()));
+
+        fixture.record_with(
+            vec![covered(&["apt", "update"], "root", false)],
+            200,
+            Uncovered {
+                non_literal: true,
+                ..Uncovered::default()
+            },
+        );
+        assert_eq!(
+            fixture.take(&["cp", "a", "/etc"], 150),
+            Err(Miss::NonLiteral)
+        );
+        assert_eq!(Miss::NoGrant.category(), None);
+        assert_eq!(Miss::NonLiteral.category(), Some("non-literal"));
     }
 
     /// Review H1: an exec'd program leads the session too, and its sudo
@@ -756,11 +976,15 @@ mod tests {
         );
         // The shell exec'd its last command, so its argv is sudo's now.
         *fixture.leader_argv.borrow_mut() = strings(&["sudo", "systemctl", "restart", "nginx"]);
-        assert!(!fixture.take(&["apt", "update"], 150), "the leader changed");
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::LeaderChanged),
+            "the leader changed"
+        );
         let leading =
             |args: &[&str]| fixture.take_with(fixture.anchor, true, args, "root", "/work", 150);
-        assert!(!leading(&["apt", "update"]));
-        assert!(leading(&["systemctl", "restart", "nginx"]));
+        assert_eq!(leading(&["apt", "update"]), Err(Miss::LeaderChanged));
+        assert_eq!(leading(&["systemctl", "restart", "nginx"]), Ok(()));
     }
 
     #[test]
@@ -769,7 +993,10 @@ mod tests {
         fixture.record(vec![covered(&["apt", "update"], "root", false)], 200);
         fixture.leader.kill().unwrap();
         fixture.leader.wait().unwrap();
-        assert!(!fixture.take(&["apt", "update"], 150));
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::LeaderChanged)
+        );
     }
 
     #[test]
@@ -777,7 +1004,7 @@ mod tests {
         let mut fixture = fixture();
         fixture.record(vec![covered(&["apt", "update"], "root", false)], 200);
         fixture.keys.clear();
-        assert!(!fixture.take(&["apt", "update"], 150));
+        assert_eq!(fixture.take(&["apt", "update"], 150), Err(Miss::Key));
     }
 
     #[test]
@@ -787,22 +1014,35 @@ mod tests {
         fixture.record(apt(), 200);
         let file = fixture.dir.join(file_name(1000, fixture.anchor.session));
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(!fixture.take(&["apt", "update"], 150), "readable by others");
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::NoGrant),
+            "readable by others"
+        );
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::set_permissions(&fixture.dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(
-            !fixture.take(&["apt", "update"], 150),
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::NoGrant),
             "directory open to others"
         );
         std::fs::set_permissions(&fixture.dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::write(&file, b"{not json").unwrap();
-        assert!(!fixture.take(&["apt", "update"], 150), "corrupt");
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::NoGrant),
+            "corrupt"
+        );
 
         fixture.record(apt(), 200);
         let target = fixture.root.join("planted.json");
         std::fs::rename(&file, &target).unwrap();
         std::os::unix::fs::symlink(&target, &file).unwrap();
-        assert!(!fixture.take(&["apt", "update"], 150), "symlinked grant");
+        assert_eq!(
+            fixture.take(&["apt", "update"], 150),
+            Err(Miss::NoGrant),
+            "symlinked grant"
+        );
         std::fs::remove_file(&file).unwrap();
 
         std::fs::remove_dir_all(&fixture.dir).unwrap();

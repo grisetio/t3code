@@ -15,7 +15,12 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { elevation } from "../../state/elevation";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { createPhoneKey, type PhoneKey } from "./deviceApprovalEnrollment";
+import {
+  confirmPhoneKey,
+  createPhoneKey,
+  discardPhoneKey,
+  type PhoneKey,
+} from "./deviceApprovalEnrollment";
 import { deviceApprovalKeys } from "./deviceApprovalKeys";
 import {
   deviceApprovalSignerErrorCode,
@@ -26,9 +31,12 @@ import { approvalHaptic } from "./approvalHaptics";
 
 type Step = "intro" | "approve" | "terminal" | "done";
 
+// Long enough to see "✓ Confirmed" before the password step slides in.
+const CONFIRMED_MS = 500;
+
 /**
- * Setup from the phone (FLOW moment 4): the phone creates its key, the Mac
- * password approves the first phone once, and an enrolled phone approves a
+ * Setup from the phone (FLOW moment 4): the phone creates its key and the fingerprint proves it
+ * can use it, the Mac password approves the first phone once, and an enrolled phone approves a
  * later one. No checks or paths here; Details has them.
  */
 export function DeviceApprovalSetupFlow(props: {
@@ -47,6 +55,7 @@ export function DeviceApprovalSetupFlow(props: {
   const otherPhoneApproves = installed && status.devices.length > 0;
   const [step, setStep] = useState<Step>("intro");
   const [key, setKey] = useState<PhoneKey | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
   const [password, setPassword] = useState("");
   const [usePassword, setUsePassword] = useState(!otherPhoneApproves);
   const [busy, setBusy] = useState(false);
@@ -78,19 +87,48 @@ export function DeviceApprovalSetupFlow(props: {
     }
     return false;
   };
-  const finish = (phoneKey: PhoneKey) =>
-    deviceApprovalKeys.write(environmentId, phoneKey.record).then(() => {
-      setPassword("");
-      setStep("done");
-      approvalHaptic("setupComplete");
-    });
+  // The key this phone had before, if any; it stays until the new one is accepted.
+  const previous = useRef<string | null>(null);
+  const keep = async (phoneKey: PhoneKey) => {
+    await deviceApprovalKeys.write(environmentId, phoneKey.record);
+    if (previous.current !== null && previous.current !== phoneKey.record.alias) {
+      await discardPhoneKey(previous.current);
+    }
+  };
+  const finish = async (phoneKey: PhoneKey) => {
+    await keep(phoneKey);
+    setPassword("");
+    setStep("done");
+    approvalHaptic("setupComplete");
+  };
 
   const createKey = () =>
     guarded(async () => {
       if (status.user === undefined) return;
-      setKey(await createPhoneKey(environmentId, status.user));
+      const current = await deviceApprovalKeys.read(environmentId);
+      previous.current = current?.alias ?? null;
+      const created = await createPhoneKey(environmentId, status.user, current);
+      try {
+        await confirmPhoneKey(created, { title: "Set up device approval", subtitle: machine });
+      } catch (cause) {
+        // Cancel is a plain cancel: the new key goes, and the intro stays.
+        await discardPhoneKey(created.record.alias);
+        throw cause;
+      }
+      approvalHaptic("approved");
+      setKey(created);
+      setConfirmed(true);
+      await new Promise((resolve) => setTimeout(resolve, CONFIRMED_MS));
       setStep("approve");
     });
+
+  const close = () => {
+    // A key the machine never accepted is useless; the previous key, if any, still works.
+    if (key !== null && (step === "intro" || step === "approve")) {
+      void discardPhoneKey(key.record.alias);
+    }
+    props.onClose();
+  };
 
   const approve = (sudoPassword: string | null) =>
     guarded(async () => {
@@ -103,7 +141,7 @@ export function DeviceApprovalSetupFlow(props: {
         if (!succeeded(result) || result._tag !== "Success") return;
         if (result.value.type === "terminal_command") {
           // The key is this phone's once the command runs.
-          await deviceApprovalKeys.write(environmentId, key.record);
+          await keep(key);
           setTerminalCommand(result.value.command);
           setStep("terminal");
           return;
@@ -121,22 +159,28 @@ export function DeviceApprovalSetupFlow(props: {
   return (
     <View className="flex-1 gap-5 px-5 pt-4">
       <View className="flex-row items-center justify-between">
-        <Button label="Cancel" tone="text" disabled={busy} onPress={props.onClose} />
+        <Button label="Cancel" tone="text" disabled={busy} onPress={close} />
         <Text className="text-sm text-foreground-muted">{stepNumber} of 3</Text>
       </View>
 
       {step === "intro" ? (
         <StepBody
-          icon="iphone"
+          icon={FINGERPRINT}
           title={`Use this phone to approve admin actions on ${machine}`}
           body="When an agent there needs sudo, it asks here and you approve with your fingerprint."
         >
           <Button
-            label="Continue"
+            label={confirmed ? "Confirmed" : "Continue"}
+            icon={confirmed ? "checkmark" : FINGERPRINT}
             tone="primary"
             fullWidth
-            loading={busy}
-            disabled={busy || status.user === undefined || !(installed ? canEnroll : canInstall)}
+            loading={busy && !confirmed}
+            disabled={
+              busy ||
+              confirmed ||
+              status.user === undefined ||
+              !(installed ? canEnroll : canInstall)
+            }
             onPress={() => void createKey()}
           />
         </StepBody>
@@ -245,8 +289,10 @@ export function DeviceApprovalSetupFlow(props: {
   );
 }
 
+const FINGERPRINT = { ios: "touchid", android: "fingerprint" } as const;
+
 function StepBody(props: {
-  readonly icon: "laptopcomputer" | "iphone" | "terminal" | "checkmark.circle";
+  readonly icon: "laptopcomputer" | "iphone" | "terminal" | "checkmark.circle" | typeof FINGERPRINT;
   readonly title: string;
   readonly body: string;
   readonly children: ReactNode;

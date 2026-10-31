@@ -12,6 +12,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -104,6 +105,12 @@ describe("startup agent activity", () => {
     const newCompleted = ThreadId.make("new-completed");
     const oldFailed = ThreadId.make("old-failed");
     const newFailed = ThreadId.make("new-failed");
+    const sudoSubagent = ThreadId.make("sudo-subagent");
+    const subagent = {
+      rootThreadId: THREAD_ID,
+      parentThreadId: THREAD_ID,
+      relationshipToParent: "subagent" as const,
+    };
     const ids = AgentAwarenessRelay.resolveAgentAwarenessRelayActiveThreadIds({
       environmentId: EnvironmentId.make("relay-env"),
       startedAt,
@@ -132,9 +139,20 @@ describe("startup agent activity", () => {
         }),
         shell({ id: ThreadId.make("idle"), status: "idle" }),
         shell({ id: ThreadId.make("missing-project"), projectId: ProjectId.make("missing") }),
+        shell({ id: ThreadId.make("running-subagent"), lineage: subagent }),
+        shell({
+          id: sudoSubagent,
+          lineage: subagent,
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("request-sudo"),
+            kind: "command",
+            createdAt: DateTime.makeUnsafe(NOW),
+            elevation: true,
+          },
+        }),
       ],
     });
-    assert.deepStrictEqual(ids, [THREAD_ID, newCompleted, newFailed]);
+    assert.deepStrictEqual(ids, [THREAD_ID, newCompleted, newFailed, sudoSubagent]);
   });
 });
 
@@ -718,143 +736,172 @@ describe("AgentAwarenessRelay", () => {
     ),
   );
 
-  it.effect("publishes a pending sudo request as a sudo approval and clears it when it ends", () =>
-    Effect.gen(function* () {
-      const store = yield* ProjectionStore.ProjectionStoreV2;
-      const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
-      const pulls = yield* Queue.unbounded<void>();
-      const { relay, publications } = yield* makeTestRelay({
-        readShell: (threadId) => store.getThreadShell(threadId).pipe(Effect.orDie),
-        domainEvents: Stream.fromEffectRepeat(
-          Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(events))),
-        ),
-      });
-      yield* relay.start();
-      yield* Queue.take(pulls);
-      const deliver = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
-        yield* store.apply(event);
-        yield* Queue.offer(events, event);
+  // A subagent shows only while it waits, and its row clears through the
+  // deferred tombstone like any live state that ends.
+  it.effect.each([
+    {
+      thread: "a thread",
+      relationshipToParent: null,
+      phases: [
+        ["running", undefined],
+        ["waiting_for_approval", "sudo"],
+        ["running", undefined],
+      ],
+    },
+    {
+      thread: "a subagent",
+      relationshipToParent: "subagent",
+      phases: [
+        ["waiting_for_approval", "sudo"],
+        [undefined, undefined],
+      ],
+    },
+  ] as const)(
+    "publishes $thread's pending sudo request as a sudo approval and clears it when it ends",
+    ({ relationshipToParent, phases }) =>
+      Effect.gen(function* () {
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+        const pulls = yield* Queue.unbounded<void>();
+        const { relay, publications } = yield* makeTestRelay({
+          readShell: (threadId) => store.getThreadShell(threadId).pipe(Effect.orDie),
+          domainEvents: Stream.fromEffectRepeat(
+            Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(events))),
+          ),
+        });
+        yield* relay.start();
         yield* Queue.take(pulls);
-        yield* relay.drain;
-      });
+        const deliver = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
+          yield* store.apply(event);
+          yield* Queue.offer(events, event);
+          yield* Queue.take(pulls);
+          yield* relay.drain;
+        });
 
-      const now = yield* DateTime.now;
-      const runId = RunId.make("run:sudo");
-      const nodeId = NodeId.make("node:sudo");
-      const run = {
-        id: runId,
-        threadId: THREAD_ID,
-        ordinal: 1,
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test-model" },
-        providerThreadId: null,
-        userMessageId: MessageId.make("message:sudo"),
-        rootNodeId: nodeId,
-        activeAttemptId: null,
-        status: "running" as const,
-        requestedAt: now,
-        startedAt: now,
-        completedAt: null,
-        checkpointId: null,
-        contextHandoffId: null,
-      };
-      const sudo = (
-        id: string,
-        fields: Pick<
-          Extract<OrchestrationV2TurnItem, { readonly type: "elevation_request" }>,
-          "status" | "elevationStatus"
-        >,
-      ): OrchestrationV2DomainEvent => ({
-        id: EventId.make(id),
-        type: "turn-item.updated",
-        threadId: THREAD_ID,
-        runId,
-        occurredAt: now,
-        payload: {
-          id: TurnItemId.make("elevation:request"),
+        const now = yield* DateTime.now;
+        const runId = RunId.make("run:sudo");
+        const nodeId = NodeId.make("node:sudo");
+        const run = {
+          id: runId,
           threadId: THREAD_ID,
-          runId,
-          nodeId,
-          providerThreadId: null,
-          providerTurnId: null,
-          nativeItemRef: null,
-          parentItemId: null,
           ordinal: 1,
-          title: null,
-          startedAt: now,
-          completedAt: null,
-          updatedAt: now,
-          type: "elevation_request",
-          requestId: ElevationRequestId.make("request"),
-          kind: "sudo",
-          argv: ["/usr/bin/true"],
-          runAs: "root",
-          cwd: "/workspace",
-          host: "host",
-          warnings: [],
-          explanation: "Check sudo",
-          payload: null,
-          resolvedBy: null,
-          ...fields,
-        },
-      });
-
-      yield* deliver({
-        id: EventId.make("event:sudo:thread"),
-        type: "thread.created",
-        threadId: THREAD_ID,
-        occurredAt: now,
-        payload: {
-          createdBy: "user",
-          creationSource: "web",
-          id: THREAD_ID,
-          projectId: PROJECT_ID,
-          title: "Thread",
           providerInstanceId: ProviderInstanceId.make("codex"),
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test-model" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          activeProviderThreadId: null,
-          lineage: { rootThreadId: THREAD_ID, parentThreadId: null, relationshipToParent: null },
-          forkedFrom: null,
-          createdAt: now,
-          updatedAt: now,
-          archivedAt: null,
-          settledOverride: null,
-          settledAt: null,
-          lastVisitedAt: null,
-          deletedAt: null,
-        },
-      });
-      yield* deliver({
-        id: EventId.make("event:sudo:run"),
-        type: "run.created",
-        threadId: THREAD_ID,
-        runId,
-        occurredAt: now,
-        payload: run,
-      });
-      yield* deliver(sudo("event:sudo:pending", { status: "waiting", elevationStatus: "pending" }));
-      yield* deliver(
-        sudo("event:sudo:expired", { status: "cancelled", elevationStatus: "expired" }),
-      );
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:sudo"),
+          rootNodeId: nodeId,
+          activeAttemptId: null,
+          status: "running" as const,
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        };
+        const sudo = (
+          id: string,
+          fields: Pick<
+            Extract<OrchestrationV2TurnItem, { readonly type: "elevation_request" }>,
+            "status" | "elevationStatus"
+          >,
+        ): OrchestrationV2DomainEvent => ({
+          id: EventId.make(id),
+          type: "turn-item.updated",
+          threadId: THREAD_ID,
+          runId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make("elevation:request"),
+            threadId: THREAD_ID,
+            runId,
+            nodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            title: null,
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+            type: "elevation_request",
+            requestId: ElevationRequestId.make("request"),
+            kind: "sudo",
+            argv: ["/usr/bin/true"],
+            runAs: "root",
+            cwd: "/workspace",
+            host: "host",
+            warnings: [],
+            explanation: "Check sudo",
+            payload: null,
+            resolvedBy: null,
+            ...fields,
+          },
+        });
 
-      assert.deepEqual(
-        publications.map((publication) => [
-          publication.state?.phase,
-          publication.state?.pendingRequestKind,
-        ]),
-        [
-          ["running", undefined],
-          ["waiting_for_approval", "sudo"],
-          ["running", undefined],
-        ],
-      );
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
-    ),
+        yield* deliver({
+          id: EventId.make("event:sudo:thread"),
+          type: "thread.created",
+          threadId: THREAD_ID,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: THREAD_ID,
+            projectId: PROJECT_ID,
+            title: "Thread",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test-model" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage:
+              relationshipToParent === null
+                ? { rootThreadId: THREAD_ID, parentThreadId: null, relationshipToParent }
+                : {
+                    rootThreadId: SECOND_THREAD_ID,
+                    parentThreadId: SECOND_THREAD_ID,
+                    relationshipToParent,
+                  },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        });
+        yield* deliver({
+          id: EventId.make("event:sudo:run"),
+          type: "run.created",
+          threadId: THREAD_ID,
+          runId,
+          occurredAt: now,
+          payload: run,
+        });
+        yield* deliver(
+          sudo("event:sudo:pending", { status: "waiting", elevationStatus: "pending" }),
+        );
+        yield* deliver(
+          sudo("event:sudo:expired", { status: "cancelled", elevationStatus: "expired" }),
+        );
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+
+        assert.deepEqual<ReadonlyArray<ReadonlyArray<string | undefined>>>(
+          publications.map((publication) => [
+            publication.state?.phase,
+            publication.state?.pendingRequestKind,
+          ]),
+          phases,
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+      ),
   );
 });

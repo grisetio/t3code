@@ -1,10 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { elevationKeyAlias } from "@t3tools/client-runtime/elevation";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import { useNavigation } from "@react-navigation/native";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppState, Platform, ScrollView } from "react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
@@ -16,13 +15,17 @@ import {
   androidLockScreen,
   clearAndroidSudoApprovals,
   setAndroidSudoApprovalMachines,
+  setAndroidSudoPendingThreads,
   subscribeAndroidSudoApprovalOpens,
 } from "../agent-awareness/androidNotifications";
+import { encodeThreadDeepLink } from "../agent-awareness/notificationPayload";
 import { approvalHaptic } from "./approvalHaptics";
 import { ElevationApprovalCard } from "./ElevationApprovalCard";
 import {
+  claimedElevationRequestAtom,
   closeElevationApproval,
   elevationApprovalTargetAtom,
+  isClaimedElevationRequest,
   elevationLockScreenAtom,
   elevationNotificationIntentAtom,
   openElevationApproval,
@@ -30,7 +33,9 @@ import {
   pendingRequestForNotificationIntent,
   rememberElevationNotificationTap,
 } from "./elevationApprovalTarget";
+import { requestDeviceApprovalRekey } from "./deviceApprovalRekey";
 import { deviceApprovalKeys } from "./deviceApprovalKeys";
+import { ELEVATION_SETTLE_MS } from "./elevationApproval";
 import { deviceApprovalSigner } from "./deviceApprovalSigner";
 
 // A request created this recently is arriving now, not found on reconnect.
@@ -56,9 +61,31 @@ function useArrivalHaptic(pending: readonly PendingElevationRequest[]): void {
   }, [pending]);
 }
 
-/** Keeps the native push handler's machine names current, and opens tapped sudo pushes. */
+/**
+ * Keeps the native push handler's machine names current, tells it which threads have a request
+ * waiting so their pushes don't repeat what the app shows, and opens tapped sudo pushes.
+ */
 function useSudoApprovalPushes(pending: readonly PendingElevationRequest[]): void {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const threadPaths = pending
+    .flatMap(({ environmentId, request }) =>
+      request.threadId === null
+        ? []
+        : [encodeThreadDeepLink({ environmentId, threadId: request.threadId })],
+    )
+    .join("\n");
+  // Reported only while the app is in front: in the background the push is the only entry.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors the threads with pending sudo into the native push handler while the app is in front
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const report = (state: string | null | undefined) =>
+      setAndroidSudoPendingThreads(
+        state === "active" && threadPaths !== "" ? threadPaths.split("\n") : [],
+      );
+    report(AppState.currentState);
+    const subscription = AppState.addEventListener("change", report);
+    return () => subscription.remove();
+  }, [threadPaths]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors environment labels into the native push handler
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -124,7 +151,7 @@ function useLockScreenReenrollPrompt(): void {
       for (const [environmentId, presentation] of presentations) {
         const record = await deviceApprovalKeys.read(environmentId);
         if (record === null || cancelled) continue;
-        const alias = elevationKeyAlias(environmentId, record.user);
+        const { alias } = record;
         const storageKey = reenrollAskedKey(alias);
         const [present, unlockedOnly, alreadyAsked] = await Promise.all([
           deviceApprovalSigner.hasKey(alias).catch(() => false),
@@ -145,7 +172,10 @@ function useLockScreenReenrollPrompt(): void {
           message: `Set this phone up again for ${presentation.entry.target.label} so one fingerprint approves while the phone is locked.`,
           cancelText: "Not now",
           confirmText: "Set up again",
-          onConfirm: () => navigation.navigate("SettingsDeviceApproval"),
+          onConfirm: () => {
+            requestDeviceApprovalRekey(environmentId);
+            navigation.navigate("SettingsDeviceApproval");
+          },
         });
         return;
       }
@@ -161,7 +191,12 @@ function useLockScreenReenrollPrompt(): void {
  * request a tapped push was about once it reaches this phone.
  */
 export function ElevationApprovalHost() {
-  const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
+  const allPending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
+  const claim = useAtomValue(claimedElevationRequestAtom);
+  const pending =
+    claim === null
+      ? allPending
+      : allPending.filter((entry) => !isClaimedElevationRequest(claim, entry));
   const target = useAtomValue(elevationApprovalTargetAtom);
   const intent = useAtomValue(elevationNotificationIntentAtom);
   useArrivalHaptic(pending);
@@ -182,16 +217,32 @@ export function ElevationApprovalHost() {
     }
   }, [intent, pending]);
 
+  // Approved here: the request may leave the list before the answer returns, and "✓ Approved"
+  // stays a moment after it does.
+  const [held, setHeld] = useState<PendingElevationRequest | null>(null);
+  const [settled, setSettled] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the sheet on a timer after the approval settles
+  useEffect(() => {
+    if (!settled) return;
+    const timer = setTimeout(() => {
+      setHeld(null);
+      setSettled(false);
+      closeElevationApproval();
+    }, ELEVATION_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [settled]);
+
   const entry =
-    target === null
+    held ??
+    (target === null
       ? undefined
       : pending.find(
           (candidate) =>
             candidate.environmentId === target.environmentId &&
             candidate.request.requestId === target.requestId,
-        );
-  // Answered here, elsewhere, or expired: the request left the pending list.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the open-sheet atom when its request is answered elsewhere or expires
+        ));
+  // Answered elsewhere, or expired: the request left the pending list.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the approval sheet when its request leaves the pending list
   useEffect(() => {
     if (target !== null && entry === undefined) closeElevationApproval();
   }, [target, entry]);
@@ -199,12 +250,12 @@ export function ElevationApprovalHost() {
   if (entry === undefined) return null;
   const { environmentId, request, decoded } = entry;
   return (
-    <Sheet title="Approval needed" onClose={closeElevationApproval}>
+    <Sheet onClose={closeElevationApproval}>
       <ScrollView
         nestedScrollEnabled
         className="flex-1"
         contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
-        contentContainerClassName="px-5 pt-3 pb-8"
+        contentContainerClassName="px-5 pt-5 pb-8"
       >
         <ElevationApprovalCard
           key={request.requestId}
@@ -216,6 +267,11 @@ export function ElevationApprovalHost() {
             decoded,
             explanation: request.explanation,
             changes: request.changes,
+          }}
+          onApproving={(active) => setHeld(active ? entry : null)}
+          onAnswered={(decision) => {
+            if (decision === "approve") setSettled(true);
+            else closeElevationApproval();
           }}
           openChanges={(open) => {
             closeElevationApproval();

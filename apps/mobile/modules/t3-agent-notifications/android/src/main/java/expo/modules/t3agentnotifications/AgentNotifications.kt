@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
@@ -48,6 +49,7 @@ object AgentNotifications {
   private const val ACTIVITY_TAG = "t3-agent-activity"
   private const val ALERT_TAG = "t3-agent-alert"
   private const val ACTIVITY_ID = 73001
+  private const val EXTRA_ALERT_PATH = "expo.modules.t3agentnotifications.ALERT_PATH"
   private const val MAX_MESSAGE_AGE_MS = 10 * 60 * 1000L
   private const val RUNNING_LIFETIME_MS = 2 * 60 * 60 * 1000L
   private const val MAX_LIFETIME_MS = 24 * 60 * 60 * 1000L
@@ -81,6 +83,7 @@ object AgentNotifications {
 
   @Synchronized
   fun clear(context: Context) {
+    sudoPendingThreads = emptySet()
     cancelActivity(context)
     context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().clear().apply()
     val manager = manager(context)
@@ -96,6 +99,32 @@ object AgentNotifications {
 
   fun setThreadOnScreen(path: String?) {
     threadOnScreen = path
+  }
+
+  /** Threads with a sudo request waiting, reported by JS only while the app is in front. */
+  @Volatile private var sudoPendingThreads: Set<String> = emptySet()
+
+  /**
+   * While the app is in front, a waiting request already shows as the inline card, the sheet or
+   * the banner, so its push would be a second entry. JS can learn of a request after its push
+   * arrived, so alerts already posted for those threads are removed too.
+   */
+  @Synchronized
+  fun setSudoPendingThreads(context: Context, paths: List<String>) {
+    sudoPendingThreads = paths.toSet()
+    if (paths.isEmpty()) return
+    val manager = manager(context)
+    val active = manager.activeNotifications
+    val removed = active.filter {
+      it.tag == ALERT_TAG &&
+        it.notification.extras.getString(EXTRA_ALERT_PATH) in sudoPendingThreads
+    }
+    if (removed.isEmpty()) return
+    removed.forEach { manager.cancel(it.tag, it.id) }
+    val remainingGroups = active.filter { it.tag == ALERT_TAG && it !in removed }
+      .map { it.notification.group }.toSet()
+    removed.map { it.notification.group }.toSet().filter { it !in remainingGroups }
+      .forEach { manager.cancel("$ALERT_TAG-summary:$it", 0) }
   }
 
   @Synchronized
@@ -149,12 +178,15 @@ object AgentNotifications {
       val resumed = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
         Lifecycle.State.RESUMED
       )
+      val path = data["alert_path"]
       val visibleThread = threadOnScreen
-      val onScreen = resumed && visibleThread != null && data["alert_path"] == visibleThread
+      val onScreen = resumed && visibleThread != null && path == visibleThread
+      // In front, the app already shows a waiting request. Our relay marks sudo pushes; upstream
+      // relays strip the marker, so an unmarked alert for a thread JS reports as waiting on a
+      // request is that request's push.
       if (SudoApprovals.isSudoApproval(data)) {
-        // The open thread already shows the request inline.
-        if (!onScreen) SudoApprovals.post(context, data, alertId)
-      } else if (!onScreen) {
+        if (!resumed) SudoApprovals.post(context, data, alertId)
+      } else if (!onScreen && !(resumed && path in sudoPendingThreads)) {
         postAlert(context, scheme, data, alertId)
       }
       prefs.edit().remove("seenAlerts").putString(
@@ -181,6 +213,7 @@ object AgentNotifications {
       .setAutoCancel(true)
       .setGroup(group)
       .setContentIntent(contentIntent(context, scheme, data["alert_path"], id))
+      .addExtras(Bundle().apply { putString(EXTRA_ALERT_PATH, data["alert_path"]) })
       .build()
     manager(context).notify(ALERT_TAG, id, notification)
     val children = manager(context).activeNotifications.filter {

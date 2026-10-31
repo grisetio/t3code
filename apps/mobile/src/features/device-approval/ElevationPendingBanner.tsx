@@ -1,7 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
+import { elevationHeadline } from "@t3tools/client-runtime/elevation";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
-import { elevationCommandDisplay } from "@t3tools/client-runtime/elevation-command";
-import { escapeElevationDisplayText } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
@@ -20,8 +19,10 @@ import {
 } from "../agent-awareness/notificationPayload";
 import { useElevationRequestContext } from "./ElevationApprovalCard";
 import {
+  claimedElevationRequestAtom,
   elevationApprovalTargetAtom,
   elevationLockScreenAtom,
+  isClaimedElevationRequest,
   openElevationApproval,
 } from "./elevationApprovalTarget";
 
@@ -34,12 +35,14 @@ export function ElevationPendingBanner(props: { readonly pathname: string }) {
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
   const target = useAtomValue(elevationApprovalTargetAtom);
   const lockScreen = useAtomValue(elevationLockScreenAtom);
+  const claim = useAtomValue(claimedElevationRequestAtom);
   const insets = useSafeAreaInsets();
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
   const threadOnScreen = threadDeepLinkOnScreen(props.pathname);
   const visible = pending.filter(
     (entry) =>
       !dismissed.has(entry.request.requestId) &&
+      !isClaimedElevationRequest(claim, entry) &&
       (entry.request.threadId === null ||
         encodeThreadDeepLink({
           environmentId: entry.environmentId,
@@ -77,14 +80,7 @@ function BannerContent(props: {
     request.threadId,
     view?.view.host ?? null,
   );
-  const reason = request.explanation?.trim();
-  const headline = view?.view.enroll
-    ? `Add device ${view.view.enroll.label}`
-    : reason
-      ? `“${escapeElevationDisplayText(reason)}”`
-      : view
-        ? elevationCommandDisplay(view.payload).collapsed
-        : "Approval needed";
+  const headline = elevationHeadline({ explanation: request.explanation, decoded });
   const where = [context.threadTitle, context.machine].filter(Boolean).join(" · ");
   const open = () => openElevationApproval({ environmentId, requestId: request.requestId });
   return (
@@ -104,8 +100,15 @@ function BannerContent(props: {
             />
           ) : null}
           <View className="min-w-0 flex-1">
-            <Text numberOfLines={2} className="font-t3-semibold text-sm text-foreground">
-              {headline}
+            <Text
+              numberOfLines={2}
+              className={
+                headline.command
+                  ? "font-mono text-sm text-foreground"
+                  : "font-t3-semibold text-sm text-foreground"
+              }
+            >
+              {headline.text}
             </Text>
             <Text numberOfLines={1} className="text-xs text-foreground-muted">
               {props.more > 0 ? `${where} · ${props.more} more` : where}

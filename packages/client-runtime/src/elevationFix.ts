@@ -19,7 +19,7 @@ type StatusFields = Pick<
   "ready" | "ownsApprovals" | "devices" | "checks" | "setupOutsideT3"
 >;
 
-export function deviceApprovalInstalled(status: Pick<StatusFields, "ownsApprovals" | "devices">) {
+function deviceApprovalInstalled(status: Pick<StatusFields, "ownsApprovals" | "devices">) {
   return status.ownsApprovals || status.devices.length > 0;
 }
 
@@ -148,6 +148,7 @@ export interface DeviceApprovalRepairAttempt {
 export function deviceApprovalCheckPaths(checks: readonly ElevationCheck[]): readonly string[] {
   const paths = new Set<string>();
   for (const check of checks) {
+    if (check.path !== undefined && check.path.startsWith("/")) paths.add(check.path);
     for (const match of check.message.matchAll(/(?:^|[\s(`'"])(\/[^\s`'",;:)]+)/g)) {
       const path = match[1]?.replace(/[.]+$/, "");
       if (path !== undefined && path.length > 1) paths.add(path);
@@ -178,11 +179,47 @@ export function pickDeviceApprovalFixProject<
   return best;
 }
 
+/** Who owns a failing part, in the words Settings shows beside it. */
+export function deviceApprovalCheckOwner(check: ElevationCheck): string | null {
+  return check.managedBy === "nix"
+    ? "managed by Nix"
+    : check.managedBy === "hand"
+      ? "customised by hand"
+      : null;
+}
+
 /**
- * The unsent prompt for the agent that fixes device approval. Check messages
- * and paths come from the server and stay plain data in the text.
+ * How Turn off undoes the setup: T3's helper removes what T3 installed; anything set up outside
+ * T3, such as a Nix config, would come back on the next rebuild, so an agent removes it there.
+ * Null when nothing is installed. Older servers don't send `installedByT3`; there the rest decides.
  */
-export function deviceApprovalAgentPrompt(input: {
+export function deviceApprovalTurnOff(
+  status: Pick<
+    ElevationStatus,
+    "ownsApprovals" | "devices" | "setupOutsideT3" | "helperInstalled" | "installedByT3"
+  >,
+): "uninstall" | "agent" | null {
+  if (!deviceApprovalInstalled(status)) return null;
+  return (status.installedByT3 ?? true) && !status.setupOutsideT3 && status.helperInstalled
+    ? "uninstall"
+    : "agent";
+}
+
+export const DEVICE_APPROVAL_DIAGNOSIS_FILE_NAME = "Device approval diagnosis.txt";
+
+export interface DeviceApprovalHandoff {
+  /** The short message the user reads and sends. */
+  readonly draft: string;
+  /** The full diagnosis, attached to the message as a file. */
+  readonly diagnosis: string;
+}
+
+/**
+ * The unsent message for the agent that fixes or turns off device approval, and the diagnosis it
+ * attaches. Check messages and paths come from the server and stay plain data in the text.
+ */
+export function deviceApprovalHandoff(input: {
+  readonly purpose: "fix" | "turn_off";
   readonly machine: string;
   readonly status: Pick<StatusFields, "checks" | "devices" | "setupOutsideT3"> & {
     readonly user?: string;
@@ -191,28 +228,34 @@ export function deviceApprovalAgentPrompt(input: {
   readonly repair: DeviceApprovalRepairAttempt | null;
   /** The project was picked because a failing part lives in it. */
   readonly projectOwnsConfig: boolean;
-}): string {
+}): DeviceApprovalHandoff {
   const { status } = input;
-  const why = input.repair
-    ? "T3 tried to repair it, but the checks still fail."
-    : input.projectOwnsConfig
-      ? "Part of the setup comes from this project, so fix it in the config rather than editing the machine directly."
-      : "T3 can't repair this part safely on its own.";
+  const draft =
+    input.purpose === "turn_off"
+      ? `Turn off device approval on ${input.machine}, so agents' sudo asks for the password again. Its setup comes from config outside T3; remove it there rather than editing the machine directly.`
+      : `Device approval on ${input.machine} needs fixing: agents' sudo asks for the password again. ${
+          input.repair
+            ? "T3 tried to repair it, but the checks still fail."
+            : input.projectOwnsConfig
+              ? "Part of the setup comes from this project, so fix it in the config rather than editing the machine directly."
+              : "T3 can't repair this part safely on its own."
+        } Find the cause and fix it.`;
   const lines = [
-    `Device approval on ${input.machine} needs fixing: agents' sudo asks for the password again. ${why} Find the cause and fix it.`,
-    "",
     "Device approval diagnosis",
     "",
     "Device approval is T3 Code's phone approval for sudo: a PAM module (pam_t3_elevation.so) in sudo's PAM stack, a per-user config and key directory under /etc/t3-elevation, and a root-owned helper at /usr/local/lib/t3-elevation/t3-elevation. Sudo you run while it's broken asks for the user's password; ask the user instead of piping a password in.",
     "",
     `Machine: ${input.machine}${status.user === undefined ? "" : ` (user ${status.user})`}`,
-    "",
-    "Failing checks:",
-    ...input.failing.map(
-      (check) =>
-        `- ${check.message} [${check.id}${check.fixBy === undefined ? "" : `, fix by ${check.fixBy}`}]`,
-    ),
   ];
+  const label = (check: ElevationCheck) => {
+    const tags = [
+      check.id,
+      ...(check.fixBy === undefined ? [] : [`fix by ${check.fixBy}`]),
+      ...(check.managedBy === undefined ? [] : [`managed by ${check.managedBy}`]),
+    ];
+    return `- ${check.message}${check.path === undefined ? "" : ` (${check.path})`} [${tags.join(", ")}]`;
+  };
+  if (input.failing.length > 0) lines.push("", "Failing checks:", ...input.failing.map(label));
   const passing = status.checks.filter((check) => check.ok);
   if (passing.length > 0) {
     lines.push("", "Passing checks:", ...passing.map((check) => `- ${check.message}`));
@@ -232,5 +275,5 @@ export function deviceApprovalAgentPrompt(input: {
       }${input.repair.error === null ? "; the re-check still fails." : `; it failed: ${input.repair.error}`}`,
     );
   }
-  return lines.join("\n");
+  return { draft, diagnosis: lines.join("\n") };
 }

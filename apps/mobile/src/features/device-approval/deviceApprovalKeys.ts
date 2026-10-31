@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as SecureStore from "expo-secure-store";
+import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * Which key this phone holds for an environment. The signer returns only a
@@ -35,10 +36,44 @@ function parseRecord(text: string | null): DeviceApprovalKeyRecord | null {
   }
 }
 
+// Rows ask for this phone's key ID on every render; SecureStore is async, so reads are cached.
+const keyIds = new Map<EnvironmentId, string | null>();
+const listeners = new Set<() => void>();
+
+function remember(environmentId: EnvironmentId, record: DeviceApprovalKeyRecord | null): void {
+  if (keyIds.has(environmentId) && keyIds.get(environmentId) === (record?.keyId ?? null)) return;
+  keyIds.set(environmentId, record?.keyId ?? null);
+  for (const listener of listeners) listener();
+}
+
 export const deviceApprovalKeys = {
-  read: async (environmentId: EnvironmentId) =>
-    parseRecord(await SecureStore.getItemAsync(storageKey(environmentId))),
-  write: (environmentId: EnvironmentId, record: DeviceApprovalKeyRecord) =>
-    SecureStore.setItemAsync(storageKey(environmentId), JSON.stringify(record)),
-  remove: (environmentId: EnvironmentId) => SecureStore.deleteItemAsync(storageKey(environmentId)),
+  read: async (environmentId: EnvironmentId) => {
+    const record = parseRecord(await SecureStore.getItemAsync(storageKey(environmentId)));
+    remember(environmentId, record);
+    return record;
+  },
+  write: async (environmentId: EnvironmentId, record: DeviceApprovalKeyRecord) => {
+    await SecureStore.setItemAsync(storageKey(environmentId), JSON.stringify(record));
+    remember(environmentId, record);
+  },
+  remove: async (environmentId: EnvironmentId) => {
+    await SecureStore.deleteItemAsync(storageKey(environmentId));
+    remember(environmentId, null);
+  },
 };
+
+/** This phone's key ID on a machine, so rows can say "on this phone". Null until known. */
+export function useThisPhoneKeyId(environmentId: EnvironmentId): string | null {
+  const keyId = useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => keyIds.get(environmentId) ?? null,
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads this environment's key record from the native keystore into the shared cache
+  useEffect(() => {
+    if (!keyIds.has(environmentId)) void deviceApprovalKeys.read(environmentId).catch(() => null);
+  }, [environmentId]);
+  return keyId;
+}

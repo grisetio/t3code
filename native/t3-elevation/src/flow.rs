@@ -99,6 +99,8 @@ pub struct Environment {
     pub window_override: Option<i64>,
     pub grants_dir: PathBuf,
     pub session: SessionSource,
+    /// Whether a sudo a live grant didn't cover goes to syslog.
+    pub log_grant_misses: bool,
 }
 
 impl Environment {
@@ -112,6 +114,7 @@ impl Environment {
             window_override: None,
             grants_dir: PathBuf::from(grant::GRANTS_DIR),
             session: SessionSource::Kernel,
+            log_grant_misses: true,
         }
     }
 
@@ -272,9 +275,6 @@ fn use_grant(
         return Some(fail_with(hint));
     }
     let command = &request.described.command;
-    if is_helper(command) || !command.warnings.is_empty() {
-        return None;
-    }
     let taken = grant::take(
         &environment.grants_dir,
         &environment.policy,
@@ -284,7 +284,8 @@ fn use_grant(
             anchor: grouping.anchor,
             leading: grouping.leading,
             args: request.argv.get(1..)?,
-            resolved_path: command.resolved_path.as_deref()?,
+            excluded: is_helper(command) || !command.warnings.is_empty(),
+            resolved_path: command.resolved_path.as_deref(),
             run_as: &request.described.run_as,
             run_as_group: request.described.run_as_group.as_deref(),
             cwd: &request.cwd,
@@ -296,7 +297,13 @@ fn use_grant(
             argv: |pid| environment.leader_argv(pid),
         },
     );
-    taken.then(|| Outcome::Approved.into())
+    if let Err(miss) = taken
+        && environment.log_grant_misses
+        && let Some(category) = miss.category()
+    {
+        sys::log_grant_miss(category, invocation.uid, grouping.anchor.session);
+    }
+    taken.is_ok().then(|| Outcome::Approved.into())
 }
 
 /// The session an approval of `request` would also cover: the other sudos
@@ -315,7 +322,10 @@ fn plan_session(
     let mut calls = crate::shell_words::sudo_calls(&scope.command)?;
     let own = calls.iter().position(|call| call.is(&request.argv[1..]))?;
     calls.remove(own);
-    let covered: Vec<grant::Covered> = calls
+    let non_literal = calls
+        .iter()
+        .any(|call| call.args.iter().any(Option::is_none));
+    let mut covered: Vec<grant::Covered> = calls
         .into_iter()
         .filter_map(|call| {
             let args: Vec<String> = call.args.into_iter().collect::<Option<_>>()?;
@@ -338,8 +348,8 @@ fn plan_session(
                 exec_tail: call.exec_tail,
             })
         })
-        .take(prepared.config.session_max_uses as usize)
         .collect();
+    let capped = covered.split_off(covered.len().min(prepared.config.session_max_uses as usize));
     if covered.is_empty() {
         return None;
     }
@@ -351,6 +361,11 @@ fn plan_session(
             command: Some(scope.command),
         },
         covered,
+        uncovered: grant::Uncovered {
+            non_literal,
+            capped: capped.into_iter().map(|call| call.args).collect(),
+            approved: request.argv[1..].to_vec(),
+        },
         leader_argv: scope.leader_argv,
     })
 }
@@ -358,6 +373,7 @@ fn plan_session(
 struct Planned {
     session: payload::Session,
     covered: Vec<grant::Covered>,
+    uncovered: grant::Uncovered,
     leader_argv: Vec<String>,
 }
 
@@ -613,7 +629,7 @@ fn exchange(
                             &payload.cwd,
                             response.key_id,
                             payload.expires_at,
-                            planned.covered,
+                            (planned.covered, planned.uncovered),
                         );
                         grant::record(
                             &environment.grants_dir,
@@ -845,6 +861,7 @@ mod tests {
             window_override: None,
             grants_dir: dir.join("grants"),
             session: SessionSource::Fixed(None),
+            log_grant_misses: false,
         };
         Setup {
             dir,
@@ -1515,5 +1532,38 @@ mod tests {
         assert_eq!(outcome, Outcome::Approved);
         assert!(exchange.payload.unwrap().get("session").is_none());
         assert_eq!(setup.later(&["sudo", "-n", "id"]), Outcome::Fail.into());
+    }
+
+    /// The grant keeps why written sudos aren't covered, for the miss log.
+    #[test]
+    fn a_grant_remembers_the_calls_it_doesnt_cover() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        let config = setup
+            .environment
+            .state_dir
+            .join("users")
+            .join(format!("{}.toml", setup.user));
+        test_fs::write(
+            &config,
+            format!(
+                "version = 1\nenabled = true\nsocket = \"{}\"\nsession_max_uses = 1\n",
+                setup.dir.join("s.sock").display()
+            ),
+        );
+        setup.environment.session =
+            leader.running("sudo id && sudo -n ls / && sudo -n whoami && sudo -n ls \"$f\"");
+        let (outcome, _) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        let file = setup.environment.grants_dir.join(format!(
+            "{}-{}.json",
+            unsafe { libc::getuid() },
+            leader.anchor.session
+        ));
+        let grant: grant::Grant = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+        assert_eq!(grant.sudos.len(), 1);
+        assert_eq!(grant.sudos[0].args, ["-n", "ls", "/"]);
+        assert!(grant.non_literal);
+        assert_eq!((grant.capped.len(), grant.used.len()), (1, 1));
     }
 }

@@ -248,7 +248,12 @@ export type ElevationSignedResponse = typeof ElevationSignedResponse.Type;
 
 /** Deny carries no signature: a forged deny is only a denial of service. */
 export const ElevationRespondInput = Schema.Union([
-  Schema.Struct({ requestId: ElevationRequestId, decision: Schema.Literal("deny") }),
+  Schema.Struct({
+    requestId: ElevationRequestId,
+    decision: Schema.Literal("deny"),
+    /** The denying phone's key, so its row reads "Denied on this phone". Names only; proves nothing. */
+    keyId: Schema.optionalKey(ElevationKeyId),
+  }),
   Schema.Struct({
     requestId: ElevationRequestId,
     decision: Schema.Literal("approve"),
@@ -296,8 +301,15 @@ export const ElevationCheck = Schema.Struct({
   id: Schema.String,
   ok: Schema.Boolean,
   message: Schema.String,
+  /** The file or directory the check looked at; Settings shows it under the message. */
+  path: Schema.optionalKey(Schema.String),
   /** Who repairs it when failing: T3 itself, or an agent given the diagnosis. Absent when ok. */
   fixBy: Schema.optionalKey(Schema.Literals(["t3", "agent"])),
+  /**
+   * Who owns a failing part when it isn't T3, if the server can tell: `nix` when a rebuild would
+   * undo a direct edit, `hand` when it was customised by hand. Settings names it beside the check.
+   */
+  managedBy: Schema.optionalKey(Schema.Literals(["nix", "hand"])),
 });
 export type ElevationCheck = typeof ElevationCheck.Type;
 
@@ -313,6 +325,8 @@ export const ElevationStatus = Schema.Struct({
   ownsApprovals: Schema.Boolean,
   /** Parts exist that `installed-by-t3.json` doesn't record; uninstall leaves them. */
   setupOutsideT3: Schema.Boolean,
+  /** `installed-by-t3.json` records an install for this user, so uninstall has something to undo. */
+  installedByT3: Schema.optionalKey(Schema.Boolean),
   /** The root-owned helper that adds and removes devices is in place, so T3 can manage them. */
   helperInstalled: Schema.Boolean,
   checks: Schema.Array(ElevationCheck),
@@ -373,7 +387,7 @@ const ELEVATION_FAILURE_MESSAGES = {
   not_found: "This approval request no longer exists.",
   already_resolved: "This approval request was already answered.",
   invalid_signature: "The device's signature didn't verify.",
-  wrong_password: "The sudo password was not accepted.",
+  wrong_password: "The Mac password was not accepted.",
   password_required: "No device approved this, so sudo needs the password.",
   helper_failed: "The device approval helper failed.",
 } as const;

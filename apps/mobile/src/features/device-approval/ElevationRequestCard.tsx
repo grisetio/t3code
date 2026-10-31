@@ -1,15 +1,14 @@
 import {
   decodeElevationRequestPayload,
+  elevationReason,
   elevationRequestFallbackView,
   elevationRequestStatusView,
 } from "@t3tools/client-runtime/elevation";
-import { elevationCommandDisplay } from "@t3tools/client-runtime/elevation-command";
 import {
-  escapeElevationDisplayText,
-  type EnvironmentId,
-  type OrchestrationV2ProjectedTurnItem,
-} from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
+  elevationCommandDisplay,
+  elevationCommandOneLine,
+} from "@t3tools/client-runtime/elevation-command";
+import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, View, type ColorValue } from "react-native";
@@ -17,19 +16,19 @@ import { Pressable, View, type ColorValue } from "react-native";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { approvalHaptic } from "./approvalHaptics";
+import { useThisPhoneKeyId } from "./deviceApprovalKeys";
 import { ElevationApprovalCard, useElevationRequestContext } from "./ElevationApprovalCard";
+import { ELEVATION_SETTLE_MS } from "./elevationApproval";
+import { wasDeniedHere } from "./elevationApprovalTarget";
+import { ElevationTechnicalDetails } from "./ElevationRequestDetails";
 
-type ResolvedKind = "done" | "approved" | "denied" | "expired" | "cancelled";
-
-const STATUS: Record<ResolvedKind, { readonly label: string; readonly symbol: AppSymbolName }> = {
-  done: { label: "Done", symbol: "checkmark" },
-  approved: { label: "Approved", symbol: "checkmark" },
-  denied: { label: "Denied", symbol: "xmark" },
-  expired: { label: "Expired", symbol: "clock" },
-  cancelled: { label: "Cancelled", symbol: "minus" },
+const SYMBOL: Record<"done" | "approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
+  done: "checkmark",
+  approved: "checkmark",
+  denied: "xmark",
+  expired: "clock",
+  cancelled: "minus",
 };
-
-const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -45,9 +44,21 @@ export function ElevationRequestCard(props: {
     () => (payload === null ? null : decodeElevationRequestPayload(payload)),
     [payload],
   );
+  // Approved on this card: it stays, showing "✓ Approved", a moment after the request resolves.
+  const [held, setHeld] = useState(false);
+  const [settled, setSettled] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the held card on a timer after the approval settles
+  useEffect(() => {
+    if (!settled) return;
+    const timer = setTimeout(() => setHeld(false), ELEVATION_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [settled]);
   if (item.type !== "elevation_request") return null;
 
-  if (item.elevationStatus === "pending" && visibility === "local" && decoded !== null) {
+  if (
+    (held || (item.elevationStatus === "pending" && visibility === "local")) &&
+    decoded !== null
+  ) {
     return (
       <View className="mb-3 rounded-[20px] border border-border bg-card-alt p-4">
         <ElevationApprovalCard
@@ -59,6 +70,10 @@ export function ElevationRequestCard(props: {
             decoded,
             explanation: item.explanation,
             changes: item.changes,
+          }}
+          onApproving={setHeld}
+          onAnswered={(decision) => {
+            if (decision === "approve") setSettled(true);
           }}
         />
       </View>
@@ -80,7 +95,7 @@ type ElevationItem = Extract<
   { readonly type: "elevation_request" }
 >;
 
-/** One line, tap for who asked, the whole command and how it ended. */
+/** One line; tap for who asked, the whole command, how it ended, and the technical details. */
 function ResolvedElevationRow(props: {
   readonly environmentId: EnvironmentId;
   readonly item: ElevationItem;
@@ -90,29 +105,31 @@ function ResolvedElevationRow(props: {
 }) {
   const { item } = props;
   const [expanded, setExpanded] = useState(false);
-  const status = elevationRequestStatusView(item);
-  const kind: ResolvedKind | "pending" =
-    status.kind === "approved" && !props.runActive ? "done" : status.kind;
-  const view =
-    props.decoded !== null && Result.isSuccess(props.decoded)
-      ? props.decoded.success.view
-      : elevationRequestFallbackView(item);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const thisKeyId = useThisPhoneKeyId(props.environmentId);
+  const status = elevationRequestStatusView(item, {
+    finished: !props.runActive,
+    thisKeyId,
+    deniedHere: wasDeniedHere(item.requestId),
+  });
+  const decodedSuccess =
+    props.decoded !== null && Result.isSuccess(props.decoded) ? props.decoded.success : null;
+  const view = decodedSuccess?.view ?? elevationRequestFallbackView(item);
   const context = useElevationRequestContext(props.environmentId, item.threadId, view.host);
   const display = elevationCommandDisplay(
-    props.decoded !== null && Result.isSuccess(props.decoded)
-      ? props.decoded.success.payload
-      : { command: { argv: item.argv } },
+    decodedSuccess?.payload ?? { command: { argv: item.argv } },
   );
+  const oneLine = elevationCommandOneLine(display);
 
   // A light tick when an approved command finishes while its row is on screen.
-  const previousKind = useRef(kind);
+  const previousKind = useRef(status.kind);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fires a haptic when this row's approved command finishes
   useEffect(() => {
-    if (previousKind.current === "approved" && kind === "done") approvalHaptic("done");
-    previousKind.current = kind;
-  }, [kind]);
+    if (previousKind.current === "approved" && status.kind === "done") approvalHaptic("done");
+    previousKind.current = status.kind;
+  }, [status.kind]);
 
-  if (kind === "pending") {
+  if (status.kind === "pending") {
     // Pending on another client: the request is answered there or from the banner.
     return (
       <View className="mb-3 min-h-9 flex-row items-center gap-2 px-1">
@@ -122,30 +139,18 @@ function ResolvedElevationRow(props: {
           tintColor={props.iconColor}
           type="monochrome"
         />
-        <Text className="flex-1 text-sm text-foreground-muted" numberOfLines={1}>
-          Waiting for approval · {display.lines.join(" ")}
+        <Text className="font-t3-medium text-sm text-foreground">{status.label}</Text>
+        <Text className="min-w-0 flex-1 font-mono text-sm text-foreground-muted" numberOfLines={1}>
+          {oneLine}
         </Text>
       </View>
     );
   }
 
-  const time = timeFormat.format(DateTime.toDateUtc(item.completedAt ?? item.updatedAt));
-  const device =
-    item.resolvedBy === null
-      ? ""
-      : ` on ${escapeElevationDisplayText(item.resolvedBy.deviceLabel)}`;
-  const how = {
-    done: `Approved${device} · ${time} · finished`,
-    approved: `Approved${device} · ${time}`,
-    denied: `Denied${device} · ${time}`,
-    expired: `Nobody approved in time · ${time}`,
-    cancelled: `Cancelled · ${time}`,
-  }[kind];
-  const reason =
-    item.explanation && item.explanation.trim() !== ""
-      ? escapeElevationDisplayText(item.explanation.trim())
-      : null;
-  const agentName = context.agent?.name ?? "The agent";
+  const reason = elevationReason(item.explanation);
+  const agentName = context.agent?.name ?? null;
+  const asked =
+    reason === null ? agentName : agentName === null ? `“${reason}”` : `${agentName}: “${reason}”`;
 
   return (
     <View className="mb-3 px-1">
@@ -156,15 +161,16 @@ function ResolvedElevationRow(props: {
         onPress={() => setExpanded((current) => !current)}
       >
         <SymbolView
-          name={STATUS[kind].symbol}
+          name={SYMBOL[status.kind]}
           size={13}
           tintColor={props.iconColor}
           type="monochrome"
         />
-        <Text className="font-t3-medium text-sm text-foreground">{STATUS[kind].label}</Text>
+        <Text className="font-t3-medium text-sm text-foreground">{status.label}</Text>
         <Text className="min-w-0 flex-1 font-mono text-sm text-foreground-muted" numberOfLines={1}>
-          {display.lines.map((line) => line.replace(/\\$/, "").trim()).join(" ")}
+          {oneLine}
         </Text>
+        <Text className="text-xs tabular-nums text-foreground-muted">{status.time}</Text>
         <SymbolView
           name={expanded ? "chevron.up" : "chevron.down"}
           size={12}
@@ -173,20 +179,42 @@ function ResolvedElevationRow(props: {
         />
       </Pressable>
       {expanded ? (
-        <View className="gap-1.5 pt-1 pb-2">
-          <Text className="text-sm text-foreground-muted">
-            {reason ? `${agentName}: “${reason}”` : agentName}
-          </Text>
-          {display.lines.map((line, index) => (
-            // oxlint-disable-next-line react/no-array-index-key -- Command lines are positional and can repeat.
-            <Text key={index} selectable className="font-mono text-sm text-foreground">
-              {line}
+        <View className="gap-1.5 pt-1 pb-2 pl-5">
+          {asked === null ? null : (
+            <Text selectable className="text-sm text-foreground-muted">
+              {asked}
             </Text>
-          ))}
-          <Text className="text-xs text-foreground-muted">{how}</Text>
-          {status.kind !== "pending" && status.detail ? (
+          )}
+          <Text selectable className="font-mono text-sm text-foreground">
+            {display.lines.join("\n")}
+          </Text>
+          <Text className="text-xs text-foreground-muted">{status.how}</Text>
+          {status.detail ? (
             <Text className="text-xs text-foreground-muted">{status.detail}</Text>
           ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: detailsOpen }}
+            className="min-h-9 flex-row items-center gap-1.5 self-start"
+            onPress={() => setDetailsOpen((current) => !current)}
+          >
+            <Text className="text-sm text-foreground-muted">Details</Text>
+            {view.warnings.length > 0 ? (
+              <SymbolView
+                name="exclamationmark.triangle"
+                size={12}
+                tintColor={props.iconColor}
+                type="monochrome"
+              />
+            ) : null}
+            <SymbolView
+              name={detailsOpen ? "chevron.up" : "chevron.down"}
+              size={11}
+              tintColor={props.iconColor}
+              type="monochrome"
+            />
+          </Pressable>
+          {detailsOpen ? <ElevationTechnicalDetails view={view} /> : null}
         </View>
       ) : null}
     </View>

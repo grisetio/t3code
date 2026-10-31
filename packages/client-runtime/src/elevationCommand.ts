@@ -400,10 +400,6 @@ export interface ElevationCommandDisplay {
   readonly hidden: boolean;
   /** Programs run as admin, with their target when it isn't root. */
   readonly programs: readonly string[];
-  /** How many sudo the approval covers, this one included, when it covers others. */
-  readonly covers: number | null;
-  /** True when the approval covers later sudo, but an older module didn't sign which. */
-  readonly coversSession: boolean;
 }
 
 function escapeLine(line: string): string {
@@ -444,7 +440,6 @@ export function elevationCommandDisplay(
   }
   const first = raw[0] ?? "";
   const collapsedRaw = first.replace(/[ \t]+/g, " ");
-  const covered = session !== undefined && session.maxUses > 0;
   return {
     lines: raw.map(escapeLine),
     collapsed: escapeLine(collapsedRaw),
@@ -453,8 +448,6 @@ export function elevationCommandDisplay(
       collapsedRaw !== first ||
       Array.from(collapsedRaw).length > COLLAPSED_VISIBLE_CHARS,
     programs: programs.map(escapeElevationDisplayText),
-    covers: covered && sessionCommand !== undefined ? session.maxUses + 1 : null,
-    coversSession: covered && sessionCommand === undefined,
   };
 }
 
@@ -466,8 +459,10 @@ export function elevationCommandMoreLabel(display: ElevationCommandDisplay): str
   return display.programs.length > 0 ? `${lead} · ${display.programs.join(", ")}` : lead;
 }
 
-/** Says in plain words that one approval covers other sudo, or null when it covers only this one. */
-export function elevationCoverageLabel(display: ElevationCommandDisplay): string | null {
-  if (display.covers !== null) return `Covers up to ${display.covers} sudo in this command`;
-  return display.coversSession ? "Also covers later sudo in this session" : null;
+/** The whole command on one line, continuations dropped, for a row that shows one line. */
+export function elevationCommandOneLine(display: Pick<ElevationCommandDisplay, "lines">): string {
+  return display.lines
+    .map((line) => line.replace(/\\$/, "").trim())
+    .filter((line) => line !== "")
+    .join(" ");
 }

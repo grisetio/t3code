@@ -83,6 +83,32 @@ describe("projectThreadAwarenessV2", () => {
     },
   );
 
+  it("publishes a subagent only while it waits on a sudo", () => {
+    const subagent = (elevation: boolean) =>
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({
+          lineage: {
+            rootThreadId: "parent" as ThreadId,
+            parentThreadId: "parent" as ThreadId,
+            relationshipToParent: "subagent",
+          },
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("request-sudo"),
+            kind: "command",
+            createdAt: updatedAt,
+            elevation,
+          },
+        }),
+      });
+    expect(subagent(true)).toMatchObject({
+      phase: "waiting_for_approval",
+      pendingRequestKind: "sudo",
+    });
+    expect(subagent(false)).toBeNull();
+  });
+
   it("keeps an older activity run visible over a newer cancelled run", () => {
     expect(
       projectThreadAwarenessV2({

@@ -3,10 +3,11 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  deviceApprovalAgentPrompt,
   deviceApprovalCheckPaths,
   deviceApprovalFailingChecks,
+  deviceApprovalHandoff,
   deviceApprovalState,
+  deviceApprovalTurnOff,
   pickDeviceApprovalFixProject,
   planDeviceApprovalFix,
 } from "./elevationFix.ts";
@@ -150,8 +151,8 @@ describe("pickDeviceApprovalFixProject", () => {
   });
 });
 
-describe("deviceApprovalAgentPrompt", () => {
-  it("carries the failing checks, the machine and T3's repair attempt", () => {
+describe("deviceApprovalHandoff", () => {
+  it("keeps the draft short and puts the checks and T3's repair attempt in the diagnosis", () => {
     const current = status({
       ready: false,
       checks: [
@@ -164,23 +165,40 @@ describe("deviceApprovalAgentPrompt", () => {
         }),
       ],
     });
-    const prompt = deviceApprovalAgentPrompt({
+    const { draft, diagnosis } = deviceApprovalHandoff({
+      purpose: "fix",
       machine: "Mac mini",
       status: current,
       failing: deviceApprovalFailingChecks(current, null),
       repair: { ran: ["install"], error: null },
       projectOwnsConfig: false,
     });
-    expect(prompt).toContain(
-      "Device approval on Mac mini needs fixing: agents' sudo asks for the password again. T3 tried to repair it, but the checks still fail.",
+    expect(draft).toBe(
+      "Device approval on Mac mini needs fixing: agents' sudo asks for the password again. T3 tried to repair it, but the checks still fail. Find the cause and fix it.",
     );
-    expect(prompt).toContain("Machine: Mac mini (user kim)");
-    expect(prompt).toContain(
+    expect(diagnosis).toContain("Machine: Mac mini (user kim)");
+    expect(diagnosis).toContain(
       "- PAM line in /etc/pam.d/sudo_local isn't first or has the wrong control [pam:sudo_local, fix by t3]",
     );
-    expect(prompt).toContain("- /etc/t3-elevation/users/kim.toml points at this server");
-    expect(prompt).toContain(
+    expect(diagnosis).toContain("- /etc/t3-elevation/users/kim.toml points at this server");
+    expect(diagnosis).toContain(
       "T3's repair attempt: ran t3-elevation install; the re-check still fails.",
+    );
+  });
+});
+
+describe("deviceApprovalTurnOff", () => {
+  it("uninstalls what T3 installed and hands a setup from elsewhere to an agent", () => {
+    expect(deviceApprovalTurnOff(status())).toBe("uninstall");
+    expect(deviceApprovalTurnOff(status({ setupOutsideT3: true }))).toBe("agent");
+    expect(deviceApprovalTurnOff(status({ ownsApprovals: false, devices: [] }))).toBeNull();
+  });
+
+  it("uninstalls only when the server says T3 installed it", () => {
+    expect(deviceApprovalTurnOff(status({ installedByT3: true }))).toBe("uninstall");
+    expect(deviceApprovalTurnOff(status({ installedByT3: false }))).toBe("agent");
+    expect(deviceApprovalTurnOff(status({ installedByT3: true, helperInstalled: false }))).toBe(
+      "agent",
     );
   });
 });

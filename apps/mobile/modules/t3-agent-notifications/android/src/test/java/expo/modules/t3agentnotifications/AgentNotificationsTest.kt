@@ -660,4 +660,51 @@ class AgentNotificationsTest {
     AgentNotifications.receive(context, message)
     assertEquals(2, manager.activeNotifications.size)
   }
+
+  private fun alerts() = manager.activeNotifications.filter { it.tag == "t3-agent-alert" }
+
+  @Test
+  fun inFrontSudoPushesNeverPostEvenForAnotherThread() {
+    lifecycle.currentState = Lifecycle.State.RESUMED
+    AgentNotifications.setThreadOnScreen("/threads/environment/other")
+    AgentNotifications.receive(
+      context,
+      update("sudo", false) + ("alert_request_kind" to "sudo")
+    )
+    assertTrue(alerts().isEmpty())
+  }
+
+  @Test
+  fun inFrontAlertsForAThreadWaitingOnSudoAreSuppressedOnlyWhileResumed() {
+    AgentNotifications.setThreadOnScreen("/threads/environment/other")
+    AgentNotifications.setSudoPendingThreads(context, listOf("/threads/environment/thread"))
+    lifecycle.currentState = Lifecycle.State.RESUMED
+    AgentNotifications.receive(context, update("unmarked", false))
+    assertTrue(alerts().isEmpty())
+
+    lifecycle.currentState = Lifecycle.State.CREATED
+    AgentNotifications.receive(context, update("background", false))
+    assertEquals("background".hashCode(), alerts().single().id)
+  }
+
+  @Test
+  fun reportingAWaitingThreadRemovesItsPostedAlertsAndEmptySummary() {
+    val other = update("other", false) + mapOf(
+      "alert_path" to "/threads/environment/other",
+      "alert_group" to "environment/other",
+    )
+    AgentNotifications.receive(context, update("first", false))
+    AgentNotifications.receive(context, update("second", false))
+    AgentNotifications.receive(context, other)
+    assertTrue(
+      manager.activeNotifications.any { it.tag == "t3-agent-alert-summary:environment/thread" }
+    )
+
+    AgentNotifications.setSudoPendingThreads(context, listOf("/threads/environment/thread"))
+
+    assertEquals("other".hashCode(), alerts().single().id)
+    assertFalse(
+      manager.activeNotifications.any { it.tag?.startsWith("t3-agent-alert-summary:") == true }
+    )
+  }
 }

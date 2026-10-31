@@ -1,58 +1,38 @@
 import { sha256 } from "@noble/hashes/sha2";
-import {
-  ELEVATION_EXPLANATION_LABEL,
-  type ElevationRequestView,
-} from "@t3tools/client-runtime/elevation";
-import { elevationComparisonCode, escapeElevationDisplayText } from "@t3tools/contracts";
+import type { ElevationRequestView } from "@t3tools/client-runtime/elevation";
+import { elevationComparisonCode } from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 
 /**
- * What a sudo request will do, from the payload. Every string arrives escaped,
- * the argv is shown whole with one entry per line, and warnings come first.
+ * The technical side of a request, behind a resolved row's Details: module warnings, who it ran
+ * as, where, and which program. Every string arrives escaped.
  */
-export function ElevationRequestDetails(props: {
-  readonly view: Pick<ElevationRequestView, "host" | "runAs" | "commandArgv" | "cwd" | "warnings"> &
-    Partial<Pick<ElevationRequestView, "user" | "runAsGroup" | "resolvedPath" | "enroll">>;
-  readonly explanation: string | null;
+export function ElevationTechnicalDetails(props: {
+  readonly view: Pick<ElevationRequestView, "host" | "runAs" | "cwd" | "warnings"> &
+    Partial<Pick<ElevationRequestView, "user" | "runAsGroup" | "resolvedPath">>;
 }) {
   const { view } = props;
   return (
-    <div className="flex min-w-0 flex-col gap-2 text-xs">
-      {view.enroll ? (
-        <p className="text-sm font-medium text-foreground">
-          Add device {view.enroll.label} · code{" "}
-          <span className="font-mono tracking-wider">
-            {elevationComparisonCode(sha256(view.enroll.publicKey))}
-          </span>
-        </p>
-      ) : null}
+    <div className="flex min-w-0 flex-col gap-2 text-xs text-muted-foreground">
       {view.warnings.length > 0 ? (
-        <ul className="flex flex-col gap-1 text-destructive">
+        <ul className="flex flex-col gap-1">
           {view.warnings.map((warning, index) => (
             // oxlint-disable-next-line react/no-array-index-key -- Warnings can repeat and have no local state.
-            <ElevationWarningLine key={`${warning.code}:${index}`} message={warning.message} />
+            <li key={`${warning.code}:${index}`} className="flex min-w-0 items-start gap-1.5">
+              <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0 break-words">{warning.message}</span>
+            </li>
           ))}
         </ul>
       ) : null}
-      <ol
-        aria-label="Command"
-        className="flex min-w-0 flex-col rounded-md bg-muted/40 px-2.5 py-1.5 font-mono text-foreground"
-      >
-        {view.commandArgv.map((arg, index) => (
-          // oxlint-disable-next-line react/no-array-index-key -- argv is positional; entries can repeat.
-          <li key={index} className="break-all whitespace-pre-wrap">
-            {arg}
-          </li>
-        ))}
-      </ol>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-muted-foreground">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
         <dt>Runs as</dt>
         <dd className="break-all text-foreground">
           {view.user ? `${view.user} → ` : ""}
           {view.runAs}
           {view.runAsGroup ? ` (group ${view.runAsGroup})` : ""}
         </dd>
-        <dt>Host</dt>
+        <dt>Machine</dt>
         <dd className="break-all text-foreground">{view.host}</dd>
         <dt>Directory</dt>
         <dd className="break-all font-mono text-foreground">{view.cwd}</dd>
@@ -63,23 +43,20 @@ export function ElevationRequestDetails(props: {
           </>
         ) : null}
       </dl>
-      {props.explanation ? (
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <p className="text-muted-foreground">{ELEVATION_EXPLANATION_LABEL}</p>
-          <p className="break-words whitespace-pre-wrap text-foreground/80">
-            {escapeElevationDisplayText(props.explanation)}
-          </p>
-        </div>
-      ) : null}
     </div>
   );
 }
 
-function ElevationWarningLine({ message }: { readonly message: string }) {
+/** The code both phones show for a new key; matching codes mean it is the same key. */
+export function ElevationComparisonCode(props: { readonly publicKey: Uint8Array }) {
   return (
-    <li className="flex min-w-0 items-start gap-1.5">
-      <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{message}</span>
-    </li>
+    <div className="flex min-w-0 flex-col gap-0.5 rounded-lg bg-muted/40 px-3 py-2">
+      <span className="font-mono text-lg tracking-widest text-foreground">
+        {elevationComparisonCode(sha256(props.publicKey))}
+      </span>
+      <span className="text-xs text-muted-foreground">
+        Approve only if the new phone shows this same code.
+      </span>
+    </div>
   );
 }
