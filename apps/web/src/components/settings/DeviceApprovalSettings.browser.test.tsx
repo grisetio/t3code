@@ -16,9 +16,9 @@ describe("SudoConfirmForm", () => {
     await userEvent.click(screen.getByRole("button", { name: "Turn off" }));
     expect(run).toHaveBeenLastCalledWith(undefined);
 
-    await userEvent.click(screen.getByRole("button", { name: "Use the sudo password instead" }));
+    await userEvent.click(screen.getByRole("button", { name: "Use the Mac password instead" }));
     await expect.element(screen.getByText(/goes through the T3 server/)).toBeVisible();
-    await userEvent.type(screen.getByPlaceholder("sudo password (optional)"), "hunter2");
+    await userEvent.type(screen.getByPlaceholder("Mac password (optional)"), "hunter2");
     await userEvent.click(screen.getByRole("button", { name: "Turn off" }));
     expect(run).toHaveBeenLastCalledWith("hunter2");
   });
@@ -36,7 +36,7 @@ describe("SudoConfirmForm", () => {
     );
     const submit = screen.getByRole("button", { name: "Turn off" });
     await expect.element(submit).toBeDisabled();
-    await userEvent.type(screen.getByPlaceholder("sudo password"), "hunter2");
+    await userEvent.type(screen.getByPlaceholder("Mac password"), "hunter2");
     await userEvent.click(submit);
     expect(run).toHaveBeenLastCalledWith("hunter2");
   });
