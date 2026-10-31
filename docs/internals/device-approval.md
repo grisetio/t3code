@@ -1,8 +1,8 @@
 # Device approval
 
 When an agent that T3 started runs `sudo`, a phone approves that command with
-a hardware-backed key, and the approval covers the other sudos of the same
-agent command (see [Session grants](#session-grants)). Four components share the formats below: the root-owned
+a hardware-backed key, and the approval can cover the other sudos written in
+the same agent command (see [Session grants](#session-grants)). Four components share the formats below: the root-owned
 PAM module and `t3-elevation` helper (Rust), the T3 server (TypeScript), the
 Android signer (Kotlin), and the clients. Every format here is versioned; a
 change that an older peer would misread needs a new version number.
@@ -17,9 +17,8 @@ change that an older peer would misread needs a new version number.
   rendered. No component re-serializes the payload, so there is no
   canonicalization.
 - Thread attribution, the explanation, and every display field outside the
-  payload are UX only. That includes the agent's command line: when a payload
-  carries `session`, what the later sudos run is only as trustworthy as that
-  unsigned display.
+  payload are UX only. Clients show the signed `session.command` (or the
+  signed argv), never the server's `agentCommand`, as the command line.
 - A grant is root-owned module state. The server never sees the sudos it
   approves.
 
@@ -39,22 +38,22 @@ The module emits one compact JSON object, UTF-8, no BOM, no trailing newline,
 at most **16384 bytes**. Keys appear in this order, with no others (`session`
 only when present):
 
-| Field                   | Type                               | Meaning                                                                                                                                                            |
-| ----------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `v`                     | `1`                                | Payload version.                                                                                                                                                   |
-| `kind`                  | `"sudo"`                           | Closed enum. Clients refuse kinds they don't know.                                                                                                                 |
-| `nonce`                 | base64url, 32 bytes                | Fresh per request.                                                                                                                                                 |
-| `issuedAt`, `expiresAt` | int                                | Module clock. `0 < expiresAt − issuedAt ≤ 300`.                                                                                                                    |
-| `host`                  | `{ name, machineId }`              | `name` is `gethostname()`. `machineId` is base64url `SHA-256` of `/etc/machine-id` without its trailing newline (Linux) or of the `IOPlatformUUID` string (macOS). |
-| `user`, `uid`           | string, int ≥ 0                    | The requesting user (real uid).                                                                                                                                    |
-| `runAs`                 | string                             | Target user (`-u`, default `root`). An id names its user: `#0 (root)`.                                                                                             |
-| `runAsGroup`            | string \| null                     | Target group from `-g`, else `null`. An id names its group: `#0 (wheel)`.                                                                                          |
-| `argv`                  | string[]                           | sudo's own argv, unchanged.                                                                                                                                        |
-| `command`               | `{ argv, resolvedPath, warnings }` | What sudo will run, from the module's parse of sudo's options.                                                                                                     |
-| `cwd`                   | string                             | The caller's working directory.                                                                                                                                    |
-| `service`               | string                             | `PAM_SERVICE` (`sudo`, `sudo-i`).                                                                                                                                  |
-| `keyIds`                | string[]                           | keyIds enrolled for `user`, sorted.                                                                                                                                |
-| `session`               | `{ id, leaderStart, maxUses }`     | Optional. Present when approving also covers later sudos in this kernel session. See [Session grants](#session-grants).                                            |
+| Field                   | Type                                     | Meaning                                                                                                                                                                 |
+| ----------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `v`                     | `1`                                      | Payload version.                                                                                                                                                        |
+| `kind`                  | `"sudo"`                                 | Closed enum. Clients refuse kinds they don't know.                                                                                                                      |
+| `nonce`                 | base64url, 32 bytes                      | Fresh per request.                                                                                                                                                      |
+| `issuedAt`, `expiresAt` | int                                      | Module clock. `0 < expiresAt − issuedAt ≤ 300`.                                                                                                                         |
+| `host`                  | `{ name, machineId }`                    | `name` is `gethostname()`. `machineId` is base64url `SHA-256` of `/etc/machine-id` without its trailing newline (Linux) or of the `IOPlatformUUID` string (macOS).      |
+| `user`, `uid`           | string, int ≥ 0                          | The requesting user (real uid).                                                                                                                                         |
+| `runAs`                 | string                                   | Target user (`-u`, default `root`). An id names its user: `#0 (root)`.                                                                                                  |
+| `runAsGroup`            | string \| null                           | Target group from `-g`, else `null`. An id names its group: `#0 (wheel)`.                                                                                               |
+| `argv`                  | string[]                                 | sudo's own argv, unchanged.                                                                                                                                             |
+| `command`               | `{ argv, resolvedPath, warnings }`       | What sudo will run, from the module's parse of sudo's options.                                                                                                          |
+| `cwd`                   | string                                   | The caller's working directory.                                                                                                                                         |
+| `service`               | string                                   | `PAM_SERVICE` (`sudo`, `sudo-i`).                                                                                                                                       |
+| `keyIds`                | string[]                                 | keyIds enrolled for `user`, sorted.                                                                                                                                     |
+| `session`               | `{ id, leaderStart, maxUses, command? }` | Optional. Present when approving also covers up to `maxUses` other sudos written in `command`, the session leader's `-c` string. See [Session grants](#session-grants). |
 
 `command`:
 
@@ -262,8 +261,9 @@ handled like "T3 down".
 - `hello_reply` carries no thread or explanation; attribution stays inside the
   server. A server that doesn't speak the hello's `v` answers `not_mine`.
 - `ownSudo: true` marks a sudo the server runs itself (its live test, helper
-  operations). The module then skips declines and never adds `session`. A
-  lying server can only use it to send a request to the phone.
+  operations). The module never adds `session` to it, and skips declines only
+  for probes and the helper, so a lying server can only send a probe to the
+  phone.
 - After `mine`, the module either sends `request`; sends `result` with
   `too_large` / `invalid_encoding` and closes; or declines by closing without a
   request (the server records nothing).
@@ -310,43 +310,47 @@ only to sudo T3 claimed, so a person's own sudo behaves as before.
 ## Session grants
 
 An agent command such as `sudo apt update && sudo apt install x` would
-otherwise ask once per sudo. When the phone approves a payload with
-`session`, the module records a grant, and later sudos pass without the phone
-when all of these hold:
+otherwise ask once per sudo. The module reads the session leader's `-c` string
+from the kernel, finds the sudos written at command positions in it
+(`native/t3-elevation/src/shell_words.rs`, ported to
+`packages/client-runtime/src/elevationCommand.ts` and pinned by
+`packages/contracts/test-vectors/elevation-commands.json`), and signs that
+string as `session.command`. On approval it records each other written sudo
+with literal arguments, resolved and checked as if it were the request, and a
+later sudo passes without the phone only when:
 
-- the same kernel session (`getsid`), whose leader is alive with the same start
-  time (Linux: field 22 of `/proc/<pid>/stat`; macOS: `p_starttime` in
-  microseconds);
-- the same user, uid, `runAs` and `runAsGroup`, and the approving key is still
-  enrolled;
-- within the approval window, counted from the approval;
-- fewer than `maxUses` sudos so far (`session_max_uses`, default 16).
+- it is one of those calls, used once: the same argv, resolved program, `-u`
+  and `-g`, and cwd;
+- the session (`getsid`) is the same, and its leader is alive with the same
+  start time and argv (Linux: `/proc`; macOS: `KERN_PROCARGS2`);
+- it is the command's last call when it leads the session itself (zsh and bash
+  exec a `-c` string's last command);
+- it is within the approval window, counted from the request, and the
+  approving key is still enrolled.
 
-The program is not part of the grant: the scope is the agent's command, as
-shown in the thread. Declines still apply inside it, and the helper
-(`t3-elevation`) always asks the phone, so an approval can't enroll a key.
+The module adds `session` only when the session can't carry other commands,
+judged from root-readable kernel facts: the leader and every process between it
+and sudo are shells listed in `/etc/shells` whose path is root-owned and not
+writable by the user, the leader has a `-c` string and no controlling
+terminal. Anything the tokenizer can't read statically means no grant:
+command substitution, `$'…'`, process substitution, `case`, `[[`, functions,
+or an operand that expands. Claude Code's wrapper (`… && eval '<cmd>' <
+/dev/null && pwd -P >| /tmp/claude-…-cwd`) is unwrapped and the inner command
+read the same way. Sudos with their own warnings, declines, and the helper
+(`t3-elevation`) are not covered and ask the phone.
 
-The module adds `session` only when the session can't carry later, unrelated
-commands, judged from root-readable kernel facts. The leader must be a shell
-(`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, …) started with a `-c` string,
-every process between sudo and the leader must be a shell, and the leader must
-have no controlling terminal. That excludes a provider process leading the
-session (Codex's app-server), interactive and stdin-fed shells, terminals, and
-`xargs sudo` or `timeout 5 sudo`. Those fall back to one approval per sudo.
-zsh and bash exec a `-c` string's last command, so the last sudo of
-`sudo a && sudo b` leads the session itself with the shell's pid and start
-time. It can use the grant an earlier sudo recorded but never records one.
-
-Residual risks: a `-c` string can itself loop over input (`while read l; do
-eval "$l"; done`), and background jobs it starts keep the session alive until
-the leader exits. A same-uid process that can ptrace the leader (Linux
-`kernel.yama.ptrace_scope` 0) can make it run more sudos within the cap and
-window. Both stay inside the approved command's session, window and cap.
+Residual risks: a same-uid process can run a covered call itself, once, inside
+the window, the session and the same cwd; relative arguments resolve against
+that cwd. A process that can ptrace or preload into the leader before the first
+sudo changes the string the phone shows rather than what it covers. zsh-only
+syntax is read with POSIX rules, which can only drop calls. On macOS with Nix,
+`/etc/shells` must list the store shell an agent runs (nix-darwin
+`environment.shells`) for its sessions to qualify.
 
 Grants live in `/run/t3-elevation` (Linux tmpfs) or `/var/db/t3-elevation`
 (macOS, where `/var/run` isn't root-only), one `<uid>-<sid>.json` per session.
 The directory is created 0700 and checked like the rest of the root-owned
-state; files are 0600, read without following symlinks, at most 4096 bytes,
+state; files are 0600, read without following symlinks, at most 128 KiB,
 written to a temporary file and renamed under an exclusive lock on the
 directory. An unreadable, unsafe or malformed grant is no grant, and expired,
 spent or orphaned grants are removed on the next approval.

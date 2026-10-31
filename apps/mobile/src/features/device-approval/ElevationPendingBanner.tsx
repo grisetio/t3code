@@ -83,10 +83,7 @@ function BannerContent(props: {
     : reason
       ? `“${escapeElevationDisplayText(reason)}”`
       : view
-        ? (elevationCommandDisplay({
-            commandArgv: view.payload.command.argv,
-            agentCommand: request.agentCommand,
-          }).lines[0] ?? "")
+        ? elevationCommandDisplay(view.payload).collapsed
         : "Approval needed";
   const where = [context.threadTitle, context.machine].filter(Boolean).join(" · ");
   const open = () => openElevationApproval({ environmentId, requestId: request.requestId });

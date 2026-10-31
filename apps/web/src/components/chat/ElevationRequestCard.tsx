@@ -10,6 +10,7 @@ import {
 import {
   elevationCommandDisplay,
   elevationCommandMoreLabel,
+  elevationCoverageLabel,
   type ElevationCommandDisplay,
 } from "@t3tools/client-runtime/elevation-command";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -58,15 +59,16 @@ const STATUS_ICONS = {
 function itemView(item: ElevationRequestItem) {
   // Unsigned fallbacks never claim to be an enrollment.
   const fallback = { ...elevationRequestFallbackView(item), enroll: null };
+  const unsigned = { command: { argv: item.argv } };
   if (item.payload === null) {
-    return { view: fallback, argv: item.argv, problem: null };
+    return { view: fallback, signed: unsigned, problem: null };
   }
   const decoded = decodeElevationRequestPayload(item.payload);
   return Result.isSuccess(decoded)
-    ? { view: decoded.success.view, argv: decoded.success.payload.command.argv, problem: null }
+    ? { view: decoded.success.view, signed: decoded.success.payload, problem: null }
     : {
         view: fallback,
-        argv: item.argv,
+        signed: unsigned,
         problem: elevationDecodeFailureMessage(decoded.failure),
       };
 }
@@ -84,8 +86,8 @@ export function ElevationRequestCard(props: {
   const { item } = props;
   const status = elevationRequestStatusView(item);
   const [expanded, setExpanded] = useState(false);
-  const { view, argv, problem } = itemView(item);
-  const command = elevationCommandDisplay({ agentCommand: item.agentCommand, commandArgv: argv });
+  const { view, signed, problem } = itemView(item);
+  const command = elevationCommandDisplay(signed);
   const reason = item.explanation ? escapeElevationDisplayText(item.explanation) : null;
   if (status.kind === "pending" && props.visibility === "local") {
     return (
@@ -110,7 +112,7 @@ export function ElevationRequestCard(props: {
       icon={<Icon className="size-3.5 text-icon-muted" aria-hidden />}
       label={
         <>
-          {status.label} · {command.lines[0]}
+          {status.label} · {command.collapsed}
         </>
       }
       aria-expanded={expanded}
@@ -144,6 +146,8 @@ function PendingElevationRequest(props: {
     environments.find((environment) => environment.environmentId === props.environmentId)?.label ??
     view.host;
   const enroll = view.enroll;
+  const coverage = elevationCoverageLabel(props.command);
+  const detailsOpen = view.warnings.length > 0 || Boolean(enroll) || showDetails;
   return (
     <div
       data-v2-item-type={item.type}
@@ -162,6 +166,10 @@ function PendingElevationRequest(props: {
         <span className="truncate">{machine}</span>
       </p>
       {reason || enroll ? <CommandLine command={props.command} /> : null}
+      {detailsOpen || view.runAs === "root" ? null : (
+        <p className="text-xs text-muted-foreground">Runs as {view.runAs}</p>
+      )}
+      {coverage ? <p className="text-xs text-muted-foreground">{coverage}</p> : null}
       {item.changes ? (
         <ChangesPointer
           environmentId={props.environmentId}
@@ -170,9 +178,7 @@ function PendingElevationRequest(props: {
         />
       ) : null}
       {props.problem ? <p className="text-xs text-destructive">{props.problem}</p> : null}
-      {view.warnings.length > 0 || enroll || showDetails ? (
-        <ElevationRequestDetails view={view} explanation={null} />
-      ) : null}
+      {detailsOpen ? <ElevationRequestDetails view={view} explanation={null} /> : null}
       {deny.error ? (
         <p role="alert" className="text-xs text-destructive">
           {deny.error}
@@ -212,7 +218,7 @@ function PendingElevationRequest(props: {
   );
 }
 
-/** First line, two rows at most; a long command expands on click. */
+/** Whitespace-collapsed, two rows at most; hidden text expands on click. */
 function CommandLine(props: {
   readonly command: ElevationCommandDisplay;
   readonly lead?: boolean;
@@ -230,7 +236,7 @@ function CommandLine(props: {
             : "line-clamp-2 font-mono break-all"
         }
       >
-        {open ? command.lines.join("\n") : command.lines[0]}
+        {open ? command.lines.join("\n") : command.collapsed}
       </code>
       {expandable && !open ? <span className="text-muted-foreground">{more}</span> : null}
     </>

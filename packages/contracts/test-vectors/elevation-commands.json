@@ -1,0 +1,411 @@
+{
+  "description": "How a session leader's -c string reads: the agent's command shown to the user, and every sudo in command position with its arguments (null for a word an expansion may change), or sudos null when the string can't be read with certainty. Shared by the Rust module (native/t3-elevation/src/shell_words.rs) and the clients (packages/client-runtime/src/elevationCommand.ts). See docs/internals/device-approval.md, Session grants.",
+  "commands": [
+    {
+      "name": "two_sudos",
+      "command": "sudo apt update && sudo apt install -y nginx",
+      "agentCommand": "sudo apt update && sudo apt install -y nginx",
+      "sudos": [
+        {
+          "args": ["apt", "update"],
+          "execTail": false
+        },
+        {
+          "args": ["apt", "install", "-y", "nginx"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "echo_is_not_a_command",
+      "command": "echo sudo rm -rf / && sudo id",
+      "agentCommand": "echo sudo rm -rf / && sudo id",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "quoted_text",
+      "command": "printf 'sudo rm -rf /\\n' && sudo id",
+      "agentCommand": "printf 'sudo rm -rf /\\n' && sudo id",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "heredoc_body",
+      "command": "sudo tee /etc/x <<'EOF'\nsudo rm -rf /\nEOF\nsudo id",
+      "agentCommand": "sudo tee /etc/x <<'EOF'\nsudo rm -rf /\nEOF\nsudo id",
+      "sudos": [
+        {
+          "args": ["tee", "/etc/x"],
+          "execTail": false
+        },
+        {
+          "args": ["id"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "heredoc_tabs",
+      "command": "cat <<-EOF\n\tsudo rm -rf /\n\tEOF\n",
+      "agentCommand": "cat <<-EOF\n\tsudo rm -rf /\n\tEOF\n",
+      "sudos": []
+    },
+    {
+      "name": "heredoc_unterminated",
+      "command": "sudo id; cat <<EOF\nsudo rm -rf /\n",
+      "agentCommand": "sudo id; cat <<EOF\nsudo rm -rf /\n",
+      "sudos": null
+    },
+    {
+      "name": "run_as",
+      "command": "sudo -u postgres psql -c 'select 1'",
+      "agentCommand": "sudo -u postgres psql -c 'select 1'",
+      "sudos": [
+        {
+          "args": ["-u", "postgres", "psql", "-c", "select 1"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "redirects",
+      "command": "sudo tee /etc/x >/dev/null 2>&1 < in",
+      "agentCommand": "sudo tee /etc/x >/dev/null 2>&1 < in",
+      "sudos": [
+        {
+          "args": ["tee", "/etc/x"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "pipe",
+      "command": "echo hi | sudo tee -a /etc/x > /dev/null",
+      "agentCommand": "echo hi | sudo tee -a /etc/x > /dev/null",
+      "sudos": [
+        {
+          "args": ["tee", "-a", "/etc/x"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "background",
+      "command": "sudo id &",
+      "agentCommand": "sudo id &",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "expansions",
+      "command": "sudo rm -rf $DIR ~/x *.log \"${HOME}\"",
+      "agentCommand": "sudo rm -rf $DIR ~/x *.log \"${HOME}\"",
+      "sudos": [
+        {
+          "args": ["rm", "-rf", null, null, null, null],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "command_substitution",
+      "command": "sudo id $(whoami)",
+      "agentCommand": "sudo id $(whoami)",
+      "sudos": null
+    },
+    {
+      "name": "backticks",
+      "command": "sudo id `whoami`",
+      "agentCommand": "sudo id `whoami`",
+      "sudos": null
+    },
+    {
+      "name": "substitution_in_quotes",
+      "command": "echo \"$(sudo rm -rf /)\"; sudo id",
+      "agentCommand": "echo \"$(sudo rm -rf /)\"; sudo id",
+      "sudos": null
+    },
+    {
+      "name": "parameter_operator",
+      "command": "sudo rm -rf ${DIR:-/}",
+      "agentCommand": "sudo rm -rf ${DIR:-/}",
+      "sudos": null
+    },
+    {
+      "name": "ansi_c_quote",
+      "command": "sudo printf $'\\x41'",
+      "agentCommand": "sudo printf $'\\x41'",
+      "sudos": null
+    },
+    {
+      "name": "unbalanced_quote",
+      "command": "sudo id 'x",
+      "agentCommand": "sudo id 'x",
+      "sudos": null
+    },
+    {
+      "name": "trailing_backslash",
+      "command": "sudo id \\",
+      "agentCommand": "sudo id \\",
+      "sudos": null
+    },
+    {
+      "name": "case",
+      "command": "case x in a) sudo id;; esac",
+      "agentCommand": "case x in a) sudo id;; esac",
+      "sudos": null
+    },
+    {
+      "name": "double_bracket",
+      "command": "[[ -f x ]] && sudo id",
+      "agentCommand": "[[ -f x ]] && sudo id",
+      "sudos": null
+    },
+    {
+      "name": "process_substitution",
+      "command": "diff <(sudo cat /etc/a) /etc/b",
+      "agentCommand": "diff <(sudo cat /etc/a) /etc/b",
+      "sudos": null
+    },
+    {
+      "name": "arithmetic",
+      "command": "((x = 1)) && sudo id",
+      "agentCommand": "((x = 1)) && sudo id",
+      "sudos": null
+    },
+    {
+      "name": "zsh_process_substitution",
+      "command": "sudo cp =(echo x) /etc/x",
+      "agentCommand": "sudo cp =(echo x) /etc/x",
+      "sudos": null
+    },
+    {
+      "name": "extglob",
+      "command": "ls !(sudo) && sudo id",
+      "agentCommand": "ls !(sudo) && sudo id",
+      "sudos": null
+    },
+    {
+      "name": "if",
+      "command": "if true; then sudo id; fi",
+      "agentCommand": "if true; then sudo id; fi",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "subshell_and_group",
+      "command": "(sudo id) && { sudo ls /; }",
+      "agentCommand": "(sudo id) && { sudo ls /; }",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": false
+        },
+        {
+          "args": ["ls", "/"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "negation_and_loop",
+      "command": "! sudo id; for f in a b; do sudo rm \"$f\"; done",
+      "agentCommand": "! sudo id; for f in a b; do sudo rm \"$f\"; done",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": false
+        },
+        {
+          "args": ["rm", null],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "not_command_position",
+      "command": "FOO=1 sudo id; time sudo id; nohup sudo id; eval 'sudo id'; bash -c 'sudo id'",
+      "agentCommand": "FOO=1 sudo id; time sudo id; nohup sudo id; eval 'sudo id'; bash -c 'sudo id'",
+      "sudos": []
+    },
+    {
+      "name": "sudo_spellings",
+      "command": "/usr/bin/sudo -n id && 'sudo' ls && \\sudo -- pwd",
+      "agentCommand": "/usr/bin/sudo -n id && 'sudo' ls && \\sudo -- pwd",
+      "sudos": [
+        {
+          "args": ["-n", "id"],
+          "execTail": false
+        },
+        {
+          "args": ["ls"],
+          "execTail": false
+        },
+        {
+          "args": ["--", "pwd"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "comments",
+      "command": "# sudo rm -rf /\nsudo id # sudo ls\necho a#b sudo ls",
+      "agentCommand": "# sudo rm -rf /\nsudo id # sudo ls\necho a#b sudo ls",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "continuation",
+      "command": "sudo apt \\\n  install x",
+      "agentCommand": "sudo apt \\\n  install x",
+      "sudos": [
+        {
+          "args": ["apt", "install", "x"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "quoted_operators",
+      "command": "sudo sh -c \"a && sudo b\"",
+      "agentCommand": "sudo sh -c \"a && sudo b\"",
+      "sudos": [
+        {
+          "args": ["sh", "-c", "a && sudo b"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "function_definition",
+      "command": "f() { sudo id; }",
+      "agentCommand": "f() { sudo id; }",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "bare_sudo",
+      "command": "sudo",
+      "agentCommand": "sudo",
+      "sudos": []
+    },
+    {
+      "name": "reserved_word_quoted",
+      "command": "'then' sudo id",
+      "agentCommand": "'then' sudo id",
+      "sudos": []
+    },
+    {
+      "name": "whitespace_run",
+      "command": "echo start                                                                                                                                                                                                                                                                                                            && sudo id",
+      "agentCommand": "echo start                                                                                                                                                                                                                                                                                                            && sudo id",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "trailing_separator",
+      "command": "sudo apt update;\n",
+      "agentCommand": "sudo apt update;\n",
+      "sudos": [
+        {
+          "args": ["apt", "update"],
+          "execTail": true
+        }
+      ]
+    },
+    {
+      "name": "claude_real_no_sudo",
+      "command": "source /Users/me/.claude/shell-snapshots/snapshot-bash-1793469983230-32gag1.sh 2>/dev/null || true && export LIVE_WEB_SESSION=00000000-0000-0000-0000-000000000000\n: && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'mkdir -p /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1 && cat > /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/procargs.py <<'\"'\"'EOF'\"'\"'\nimport ctypes, ctypes.util, struct, sys, json\nlibc = ctypes.CDLL(ctypes.util.find_library(\"c\"))\npid = int(sys.argv[1])\nmib = (ctypes.c_int*3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2\nsize = ctypes.c_size_t(1<<20)\nbuf = ctypes.create_string_buffer(size.value)\nassert libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) == 0\nb = buf.raw[:size.value]\nargc = struct.unpack(\"i\", b[:4])[0]\np = b.index(b\"\\0\", 4)\nwhile b[p] == 0: p += 1\nargv = []\nfor _ in range(argc):\n    e = b.index(b\"\\0\", p); argv.append(b[p:e].decode()); p = e+1\nprint(json.dumps(argv))\nEOF\npython3 -I /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/procargs.py $$ > /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/claude-leader-1.json; cat /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/claude-leader-1.json' < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd",
+      "agentCommand": "mkdir -p /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1 && cat > /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/procargs.py <<'EOF'\nimport ctypes, ctypes.util, struct, sys, json\nlibc = ctypes.CDLL(ctypes.util.find_library(\"c\"))\npid = int(sys.argv[1])\nmib = (ctypes.c_int*3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2\nsize = ctypes.c_size_t(1<<20)\nbuf = ctypes.create_string_buffer(size.value)\nassert libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) == 0\nb = buf.raw[:size.value]\nargc = struct.unpack(\"i\", b[:4])[0]\np = b.index(b\"\\0\", 4)\nwhile b[p] == 0: p += 1\nargv = []\nfor _ in range(argc):\n    e = b.index(b\"\\0\", p); argv.append(b[p:e].decode()); p = e+1\nprint(json.dumps(argv))\nEOF\npython3 -I /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/procargs.py $$ > /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/claude-leader-1.json; cat /Users/me/.local/state/t3-code-visuals/scratch/t3-elevation/h1/claude-leader-1.json",
+      "sudos": []
+    },
+    {
+      "name": "claude_two_sudos",
+      "command": "source /Users/me/.claude/shell-snapshots/snapshot-bash-1793469983230-32gag1.sh 2>/dev/null || true && export LIVE_WEB_SESSION=00000000-0000-0000-0000-000000000000\n: && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sudo apt update && sudo apt install -y nginx' < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd",
+      "agentCommand": "sudo apt update && sudo apt install -y nginx",
+      "sudos": [
+        {
+          "args": ["apt", "update"],
+          "execTail": false
+        },
+        {
+          "args": ["apt", "install", "-y", "nginx"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "claude_quotes",
+      "command": "source /Users/me/.claude/shell-snapshots/snapshot-bash-1793469983230-32gag1.sh 2>/dev/null || true && export LIVE_WEB_SESSION=00000000-0000-0000-0000-000000000000\n: && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sudo sh -c '\"'\"'echo x > /etc/f'\"'\"' && sudo id' < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd",
+      "agentCommand": "sudo sh -c 'echo x > /etc/f' && sudo id",
+      "sudos": [
+        {
+          "args": ["sh", "-c", "echo x > /etc/f"],
+          "execTail": false
+        },
+        {
+          "args": ["id"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "claude_unreadable_command",
+      "command": "source /Users/me/.claude/shell-snapshots/snapshot-bash-1793469983230-32gag1.sh 2>/dev/null || true && export LIVE_WEB_SESSION=00000000-0000-0000-0000-000000000000\n: && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sudo id $(whoami)' < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd",
+      "agentCommand": "sudo id $(whoami)",
+      "sudos": null
+    },
+    {
+      "name": "claude_shape_hides_nothing",
+      "command": "sudo rm -rf / && eval 'sudo id' < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd",
+      "agentCommand": "sudo id",
+      "sudos": [
+        {
+          "args": ["id"],
+          "execTail": false
+        }
+      ]
+    },
+    {
+      "name": "eval_of_an_expansion",
+      "command": "true && eval \"$CMD\" < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd",
+      "agentCommand": "true && eval \"$CMD\" < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd",
+      "sudos": []
+    },
+    {
+      "name": "codex_real",
+      "command": "./identity.sh full-call1; P=$PPID; ps -o pid,ppid,pgid,tty,lstart,command -p \"$P,$(ps -o ppid= -p $P | tr -d ' ')\" | cut -c1-250",
+      "agentCommand": "./identity.sh full-call1; P=$PPID; ps -o pid,ppid,pgid,tty,lstart,command -p \"$P,$(ps -o ppid= -p $P | tr -d ' ')\" | cut -c1-250",
+      "sudos": null
+    }
+  ]
+}

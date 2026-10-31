@@ -78,6 +78,12 @@ pub fn chain(start: i32) -> Vec<ChainEntry> {
     entries
 }
 
+/// A process's whole argv from the kernel, or None when it can't be read or
+/// isn't UTF-8 (a lossy read could hide a change).
+pub fn process_argv(pid: i32) -> Option<Vec<String>> {
+    crate::payload::utf8_strings(&proc_argv(pid)?)
+}
+
 #[cfg(target_os = "linux")]
 pub fn own_argv() -> Option<Vec<Vec<u8>>> {
     std::fs::read("/proc/self/cmdline")

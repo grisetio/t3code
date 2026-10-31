@@ -7,6 +7,8 @@ import {
 import {
   elevationCommandDisplay,
   elevationCommandMoreLabel,
+  elevationCoverageLabel,
+  type ElevationCommandDisplay,
 } from "@t3tools/client-runtime/elevation-command";
 import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
@@ -154,12 +156,11 @@ function ElevationRequestMeta(props: {
 
 /** One quiet line; a long command collapses to its first line and the programs run as admin. */
 function ElevationCommandLine(props: {
-  readonly commandArgv: readonly string[];
-  readonly agentCommand: string | undefined;
+  readonly display: ElevationCommandDisplay;
   readonly lead: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const display = elevationCommandDisplay(props);
+  const { display } = props;
   const more = elevationCommandMoreLabel(display);
   const textClass = props.lead
     ? "font-mono text-base text-foreground"
@@ -182,7 +183,7 @@ function ElevationCommandLine(props: {
       ) : (
         <>
           <Text numberOfLines={2} className={textClass}>
-            {display.lines[0]}
+            {display.collapsed}
           </Text>
           {more ? <Text className="text-xs text-foreground-muted">{more}</Text> : null}
         </>
@@ -233,7 +234,6 @@ interface ElevationApprovalRequest {
   readonly threadId: ThreadId | null;
   readonly decoded: Result.Result<DecodedElevationPayload, ElevationPayloadDecodeFailure>;
   readonly explanation: string | null;
-  readonly agentCommand?: string | undefined;
   readonly changes?: OrchestrationV2ElevationChanges | undefined;
 }
 
@@ -368,6 +368,8 @@ export function ElevationApprovalCard(props: {
     request.explanation && request.explanation.trim() !== ""
       ? escapeElevationDisplayText(request.explanation.trim())
       : null;
+  const command = decoded === null ? null : elevationCommandDisplay(decoded.payload);
+  const coverage = command === null ? null : elevationCoverageLabel(command);
 
   return (
     <View className="gap-3">
@@ -386,24 +388,15 @@ export function ElevationApprovalCard(props: {
             <Text selectable className="font-t3-bold text-lg text-foreground">
               “{reason}”
             </Text>
-          ) : (
-            <ElevationCommandLine
-              commandArgv={decoded.payload.command.argv}
-              agentCommand={request.agentCommand}
-              lead
-            />
-          )}
-          <ElevationRequestMeta context={context} showThread={!props.inline} />
-          {reason ? (
-            <ElevationCommandLine
-              commandArgv={decoded.payload.command.argv}
-              agentCommand={request.agentCommand}
-              lead={false}
-            />
+          ) : command ? (
+            <ElevationCommandLine display={command} lead />
           ) : null}
+          <ElevationRequestMeta context={context} showThread={!props.inline} />
+          {reason && command ? <ElevationCommandLine display={command} lead={false} /> : null}
           {decoded.view.runAs === "root" ? null : (
             <Text className="text-sm text-foreground-muted">Runs as {decoded.view.runAs}</Text>
           )}
+          {coverage ? <Text className="text-sm text-foreground-muted">{coverage}</Text> : null}
           {decoded.view.warnings.map((warning, index) => (
             <View key={`${warning.code}:${index}`} className="flex-row items-start gap-2">
               <SymbolView

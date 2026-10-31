@@ -58,7 +58,6 @@ export function ElevationRequestCard(props: {
             threadId: item.threadId,
             decoded,
             explanation: item.explanation,
-            agentCommand: item.agentCommand,
             changes: item.changes,
           }}
         />
@@ -99,13 +98,11 @@ function ResolvedElevationRow(props: {
       ? props.decoded.success.view
       : elevationRequestFallbackView(item);
   const context = useElevationRequestContext(props.environmentId, item.threadId, view.host);
-  const display = elevationCommandDisplay({
-    commandArgv:
-      props.decoded !== null && Result.isSuccess(props.decoded)
-        ? props.decoded.success.payload.command.argv
-        : item.argv,
-    agentCommand: item.agentCommand,
-  });
+  const display = elevationCommandDisplay(
+    props.decoded !== null && Result.isSuccess(props.decoded)
+      ? props.decoded.success.payload
+      : { command: { argv: item.argv } },
+  );
 
   // A light tick when an approved command finishes while its row is on screen.
   const previousKind = useRef(kind);

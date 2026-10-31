@@ -58,6 +58,19 @@ fn check_components(path: &Path, policy: &Policy) -> Result<(), Unsafe> {
     Ok(())
 }
 
+/// Every component of `path` belongs to an accepted owner. Unlike
+/// `check_path` a group-writable directory passes, so a program under
+/// `/nix/store` (root:nixbld, sticky) can be judged by whether the user can
+/// change it (`sudo_argv::replaceable_by`) instead.
+pub fn owned(path: &Path, policy: &Policy) -> bool {
+    let mut prefix = PathBuf::new();
+    path.is_absolute()
+        && path.components().all(|component| {
+            prefix.push(component);
+            std::fs::symlink_metadata(&prefix).is_ok_and(|meta| policy.owners.contains(&meta.uid()))
+        })
+}
+
 /// Checks the lexical path and the canonical path, so a root-owned symlink
 /// into a writable location is rejected as well as a writable directory.
 pub fn check_path(path: &Path, policy: &Policy, kind: Kind) -> Result<(), Unsafe> {

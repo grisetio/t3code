@@ -64,15 +64,17 @@ export const ElevationPayload = Schema.Struct({
   service: Schema.String,
   keyIds: Schema.Array(ElevationKeyId),
   /**
-   * The kernel session the approval also covers: later sudos in it pass
-   * without the phone while its leader lives, within the window, up to
-   * `maxUses`. Absent when only this sudo is approved.
+   * The kernel session the approval also covers: up to `maxUses` other sudos
+   * written in `command` pass without the phone while its leader lives,
+   * within the window. Absent when only this sudo is approved.
    */
   session: Schema.optionalKey(
     Schema.Struct({
       id: PositiveInt,
       leaderStart: NonNegativeInt,
       maxUses: NonNegativeInt,
+      /** The session leader's `-c` string, read from the kernel. Older modules omit it. */
+      command: Schema.optionalKey(Schema.String),
     }),
   ),
 }).check(
