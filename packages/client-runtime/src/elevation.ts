@@ -34,6 +34,7 @@ export interface ElevationEnrollView {
   /** SPKI DER; callers hash it for the comparison code with their platform's SHA-256. */
   readonly publicKey: Uint8Array;
   readonly allowDevAttestation: boolean;
+  readonly allowTestAttestation: boolean;
 }
 
 /** What a client shows for one request, all text escaped. */
@@ -96,10 +97,15 @@ function elevationRequestViewFromPayload(payload: ElevationPayload): ElevationRe
   const enroll = parseElevationEnrollCommand(payload);
   const publicKey = enroll === null ? null : decodeElevationBase64Url(enroll.publicKey);
   // Flagged even when the module doesn't warn, as the enroll grammar requires.
+  const attestationCode = enroll?.allowTestAttestation
+    ? "test_attestation"
+    : enroll?.allowDevAttestation
+      ? "dev_attestation"
+      : null;
   const warnings: ReadonlyArray<ElevationWarning> =
-    enroll?.allowDevAttestation &&
-    !payload.command.warnings.some((warning) => warning.code === "dev_attestation")
-      ? [{ code: "dev_attestation" }, ...payload.command.warnings]
+    attestationCode !== null &&
+    !payload.command.warnings.some((warning) => warning.code === attestationCode)
+      ? [{ code: attestationCode }, ...payload.command.warnings]
       : payload.command.warnings;
   return {
     host: escapeElevationDisplayText(payload.host.name),
@@ -125,6 +131,7 @@ function elevationRequestViewFromPayload(payload: ElevationPayload): ElevationRe
             label: escapeElevationDisplayText(enroll.label),
             publicKey,
             allowDevAttestation: enroll.allowDevAttestation,
+            allowTestAttestation: enroll.allowTestAttestation,
           },
   };
 }

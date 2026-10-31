@@ -153,12 +153,12 @@ fn enroll_parse() {
         assert_eq!(parsed.public_key, str_of(expected, "publicKey"));
         assert_eq!(parsed.challenge, str_of(expected, "challenge"));
         assert_eq!(
-            parsed.trust != Trust::Release,
+            parsed.trust == Trust::Dev,
             expected["allowDevAttestation"].as_bool().unwrap()
         );
         assert_eq!(
             parsed.trust == Trust::Test,
-            expected["allowTestAttestation"].as_bool().unwrap_or(false)
+            expected["allowTestAttestation"].as_bool().unwrap()
         );
         let spki = b64::decode(&parsed.public_key).unwrap();
         assert_eq!(

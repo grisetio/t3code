@@ -157,6 +157,7 @@ export interface ElevationEnrollCommand {
   readonly publicKey: string;
   readonly challenge: string;
   readonly allowDevAttestation: boolean;
+  readonly allowTestAttestation: boolean;
 }
 
 /** Where install leaves the root-owned helper; the only copy the server runs once installed. */
@@ -188,11 +189,14 @@ export function parseElevationEnrollCommand(
     Record<(typeof ENROLL_VALUE_OPTIONS)[keyof typeof ENROLL_VALUE_OPTIONS], string>
   > = {};
   let allowDevAttestation = false;
+  let allowTestAttestation = false;
   for (let index = 0; index < rest.length; index++) {
     const option = rest[index];
-    if (option === "--allow-dev-attestation") {
-      if (allowDevAttestation) return null;
-      allowDevAttestation = true;
+    if (option === "--allow-dev-attestation" || option === "--allow-test-attestation") {
+      // The helper takes at most one of the two.
+      if (allowDevAttestation || allowTestAttestation) return null;
+      if (option === "--allow-dev-attestation") allowDevAttestation = true;
+      else allowTestAttestation = true;
       continue;
     }
     if (option === undefined || !Object.hasOwn(ENROLL_VALUE_OPTIONS, option)) return null;
@@ -206,7 +210,7 @@ export function parseElevationEnrollCommand(
   if (user === undefined || label === undefined || publicKey === undefined) return null;
   if (challenge === undefined) return null;
   if (decodeElevationBase64Url(publicKey) === null || !Schema.is(Bytes32)(challenge)) return null;
-  return { user, label, publicKey, challenge, allowDevAttestation };
+  return { user, label, publicKey, challenge, allowDevAttestation, allowTestAttestation };
 }
 
 export const ElevationSignedResponse = Schema.Struct({

@@ -88,6 +88,34 @@ describe("decodeElevationRequestPayload", () => {
     expect(Base64Url.encode(decoded.view.enroll!.publicKey)).toBe(NEW_DEVICE_SPKI);
   });
 
+  it("flags --allow-test-attestation in the enroll argv when the module doesn't", () => {
+    const decoded = Result.getOrThrow(
+      decodeElevationRequestPayload(
+        encodePayload({
+          argv: [
+            "/usr/local/lib/t3-elevation/t3-elevation",
+            "enroll",
+            "--user",
+            "kgriset",
+            "--label",
+            "Pixel",
+            "--public-key",
+            NEW_DEVICE_SPKI,
+            "--challenge",
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+            "--allow-test-attestation",
+          ],
+          resolvedPath: "/usr/local/lib/t3-elevation/t3-elevation",
+          warnings: [],
+        }),
+      ),
+    );
+    expect(decoded.view.enroll?.allowTestAttestation).toBe(true);
+    expect(decoded.view.warnings.map((warning) => warning.message)).toEqual([
+      "Accepts emulators and test keys.",
+    ]);
+  });
+
   it("names attestation shortcuts once, whether the module or the enroll argv flags them", () => {
     const decoded = Result.getOrThrow(
       decodeElevationRequestPayload(

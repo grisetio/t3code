@@ -439,6 +439,31 @@
         "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ",
         "challenge": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
         "allowDevAttestation": false,
+        "allowTestAttestation": false,
+        "comparisonCode": "JFQ3W-VF500"
+      }
+    },
+    {
+      "name": "enroll_dev_attestation",
+      "expected": {
+        "user": "kgriset",
+        "label": "Pixel 9 Pro Fold",
+        "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ",
+        "challenge": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+        "allowDevAttestation": true,
+        "allowTestAttestation": false,
+        "comparisonCode": "JFQ3W-VF500"
+      }
+    },
+    {
+      "name": "enroll_test_attestation",
+      "expected": {
+        "user": "kgriset",
+        "label": "Pixel 9 Pro Fold",
+        "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ",
+        "challenge": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+        "allowDevAttestation": false,
+        "allowTestAttestation": true,
         "comparisonCode": "JFQ3W-VF500"
       }
     },

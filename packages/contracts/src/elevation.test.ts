@@ -95,6 +95,8 @@ describe("elevation enrollment", () => {
     const argv = payload.command.argv;
 
     expect(withArgv([...argv, "--allow-dev-attestation"])?.allowDevAttestation).toBe(true);
+    expect(withArgv([...argv, "--allow-dev-attestation", "--allow-test-attestation"])).toBeNull();
+    expect(withArgv([...argv, "--allow-test-attestation", "--allow-test-attestation"])).toBeNull();
     expect(withArgv([...argv, "--label", "Second"])).toBeNull();
     expect(withArgv([...argv, "--bogus"])).toBeNull();
     expect(withArgv([...argv, "--user"])).toBeNull();
