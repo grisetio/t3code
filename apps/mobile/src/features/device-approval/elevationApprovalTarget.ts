@@ -88,3 +88,38 @@ export function pendingRequestForNotificationIntent(
     ) ?? null
   );
 }
+
+/**
+ * Requests this phone denied in this session. A deny records no device on the server, so the
+ * resolved row learns "on this phone" from here.
+ */
+const deniedHere = new Set<ElevationRequestId>();
+
+export function rememberDeniedHere(requestId: ElevationRequestId): void {
+  deniedHere.add(requestId);
+}
+
+export function wasDeniedHere(requestId: ElevationRequestId): boolean {
+  return deniedHere.has(requestId);
+}
+
+/**
+ * A request this phone raised itself and answers in its own flow, such as the sudo behind
+ * "Remove this phone". The banner, sheet and push skip it so it never shows twice.
+ */
+export interface ClaimedElevationRequest {
+  readonly environmentId: EnvironmentId;
+  readonly matches: (entry: PendingElevationRequest) => boolean;
+}
+
+export const claimedElevationRequestAtom = Atom.make<ClaimedElevationRequest | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:elevation-claimed-request"),
+);
+
+export function isClaimedElevationRequest(
+  claim: ClaimedElevationRequest | null,
+  entry: PendingElevationRequest,
+): boolean {
+  return claim !== null && claim.environmentId === entry.environmentId && claim.matches(entry);
+}

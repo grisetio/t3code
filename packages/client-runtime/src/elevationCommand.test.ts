@@ -5,7 +5,7 @@ import {
   elevationAgentCommand,
   elevationCommandDisplay,
   elevationCommandMoreLabel,
-  elevationCoverageLabel,
+  elevationCommandOneLine,
   elevationSudoCalls,
 } from "./elevationCommand.ts";
 
@@ -34,10 +34,9 @@ describe("elevationCommandDisplay", () => {
       lines: ["killall coreaudiod"],
       programs: ["killall"],
       hidden: false,
-      covers: null,
     });
     expect(elevationCommandMoreLabel(display)).toBeNull();
-    expect(elevationCoverageLabel(display)).toBeNull();
+    expect(elevationCommandOneLine(display)).toBe("killall coreaudiod");
   });
 
   it("shows the signed command string and the programs of its sudos", () => {
@@ -53,7 +52,9 @@ describe("elevationCommandDisplay", () => {
       "  && system_profiler SPAudioDataType",
     ]);
     expect(elevationCommandMoreLabel(display)).toBe("+2 more lines · darwin-rebuild, launchctl");
-    expect(elevationCoverageLabel(display)).toBe("Covers up to 2 sudo in this command");
+    expect(elevationCommandOneLine(display)).toBe(
+      "sudo darwin-rebuild switch --flake .#mbp && sudo launchctl kickstart -k system/x && system_profiler SPAudioDataType",
+    );
   });
 
   // Review H2: the card's agent line could misstate what the signed sudo runs.
@@ -97,13 +98,12 @@ describe("elevationCommandDisplay", () => {
     expect(display.programs).toEqual(["apt"]);
   });
 
-  it("says when an older module covers the session without signing the command", () => {
+  it("shows the signed argv when an older module covers the session without signing the command", () => {
     const display = elevationCommandDisplay({
       command: { argv: ["id"] },
       session: { id: 10, leaderStart: 1, maxUses: 16 },
     });
     expect(display.lines).toEqual(["id"]);
-    expect(elevationCoverageLabel(display)).toBe("Also covers later sudo in this session");
   });
 
   it("escapes control characters", () => {

@@ -293,8 +293,15 @@ export const ElevationCheck = Schema.Struct({
   id: Schema.String,
   ok: Schema.Boolean,
   message: Schema.String,
+  /** The file or directory the check looked at; Settings shows it under the message. */
+  path: Schema.optionalKey(Schema.String),
   /** Who repairs it when failing: T3 itself, or an agent given the diagnosis. Absent when ok. */
   fixBy: Schema.optionalKey(Schema.Literals(["t3", "agent"])),
+  /**
+   * Who owns a failing part when it isn't T3, if the server can tell: `nix` when a rebuild would
+   * undo a direct edit, `hand` when it was customised by hand. Settings names it beside the check.
+   */
+  managedBy: Schema.optionalKey(Schema.Literals(["nix", "hand"])),
 });
 export type ElevationCheck = typeof ElevationCheck.Type;
 
@@ -370,7 +377,7 @@ const ELEVATION_FAILURE_MESSAGES = {
   not_found: "This approval request no longer exists.",
   already_resolved: "This approval request was already answered.",
   invalid_signature: "The device's signature didn't verify.",
-  wrong_password: "The sudo password was not accepted.",
+  wrong_password: "The Mac password was not accepted.",
   password_required: "No device approved this, so sudo needs the password.",
   helper_failed: "The device approval helper failed.",
 } as const;

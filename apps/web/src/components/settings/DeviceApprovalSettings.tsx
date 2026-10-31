@@ -5,9 +5,10 @@ import {
   elevationSudoApproval,
 } from "@t3tools/client-runtime/elevation";
 import {
+  deviceApprovalCheckOwner,
   deviceApprovalFailingChecks,
-  deviceApprovalInstalled,
   deviceApprovalState,
+  deviceApprovalTurnOff,
   planDeviceApprovalFix,
 } from "@t3tools/client-runtime/elevation-fix";
 import { environmentSupportsDeviceApproval } from "@t3tools/client-runtime/state/elevation";
@@ -22,7 +23,7 @@ import type {
   ElevationStatus,
   EnvironmentId,
 } from "@t3tools/contracts";
-import { CheckIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 
 import { useEnvironments } from "../../state/environments";
@@ -95,8 +96,6 @@ function EnvironmentDeviceApproval(props: {
           environmentId={props.environmentId}
           machine={props.machine}
           status={status.data}
-          refreshing={status.isPending}
-          onRefresh={status.refresh}
         />
       )}
     </SettingsSection>
@@ -113,8 +112,6 @@ function DeviceApprovalStatus(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
   readonly status: ElevationStatus;
-  readonly refreshing: boolean;
-  readonly onRefresh: () => void;
 }) {
   const { status } = props;
   const handoff = useDeviceApprovalAgentHandoff();
@@ -123,15 +120,16 @@ function DeviceApprovalStatus(props: {
   if (!status.supported) {
     return (
       <SettingsRow
-        title="Not supported on this machine"
+        title={props.machine}
         description={status.unsupportedReason ?? "Agents' sudo keeps asking for the password here."}
+        status={<Badge variant={STATE_BADGES.off.variant}>{STATE_BADGES.off.label}</Badge>}
       />
     );
   }
   // Web holds no phone key, and every repair T3 does itself sends one.
   const state = deviceApprovalState(status, null);
-  const installed = deviceApprovalInstalled(status);
   const approval = elevationSudoApproval(status);
+  const turnOff = deviceApprovalTurnOff(status);
   const badge = STATE_BADGES[state];
   const fix = () => {
     const plan = planDeviceApprovalFix(status, null, { canRepair: false });
@@ -140,6 +138,7 @@ function DeviceApprovalStatus(props: {
     } else if (plan.kind === "agent") {
       setFixNote(null);
       void handoff({
+        purpose: "fix",
         environmentId: props.environmentId,
         machine: props.machine,
         status,
@@ -153,10 +152,10 @@ function DeviceApprovalStatus(props: {
         title={props.machine}
         description={
           state === "on"
-            ? "An agent's sudo waits for approval on your phone, one command per approval."
+            ? undefined
             : state === "needs_fixing"
               ? "Agents' sudo will ask for the password"
-              : "Approve agents' sudo on this machine with your phone. Set it up in the T3 app on Android, under Settings → Device approval."
+              : `Approve agents' sudo on ${props.machine} with your phone. Set it up in the T3 app on Android, under Settings → Device approval.`
         }
         status={<Badge variant={badge.variant}>{badge.label}</Badge>}
         control={
@@ -164,31 +163,23 @@ function DeviceApprovalStatus(props: {
             <Button size="xs" onClick={fix}>
               Fix
             </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="xs"
-              disabled={props.refreshing}
-              onClick={props.onRefresh}
-            >
-              Check again
-            </Button>
-          )
+          ) : null
         }
       >
         {fixNote !== null ? <p className="text-xs text-muted-foreground">{fixNote}</p> : null}
       </SettingsRow>
-      {installed ? (
+      {state === "off" ? null : (
         <SettingsRow
           title="Details"
           control={
             <Button
               variant="ghost"
-              size="xs"
+              size="icon-xs"
+              aria-label="Details"
               aria-expanded={detailsOpen}
               onClick={() => setDetailsOpen((open) => !open)}
             >
-              {detailsOpen ? "Hide" : "Show"}
+              <ChevronDownIcon className={detailsOpen ? "rotate-180" : undefined} aria-hidden />
             </Button>
           }
         >
@@ -202,7 +193,7 @@ function DeviceApprovalStatus(props: {
             </ul>
           ) : null}
         </SettingsRow>
-      ) : null}
+      )}
       {detailsOpen
         ? status.devices.map((device) => (
             <DeviceRow
@@ -213,18 +204,35 @@ function DeviceApprovalStatus(props: {
             />
           ))
         : null}
-      {detailsOpen && status.setupOutsideT3 ? (
-        <SettingsRow
-          title="Other parts were set up outside T3"
-          description="Turning device approval off leaves them in place."
-        />
-      ) : null}
-      {/* Without the root-owned helper these would fail; the helper check says why. */}
-      {detailsOpen && installed && status.helperInstalled ? (
+      {detailsOpen && turnOff === "uninstall" ? (
         <TurnOffRow
           environmentId={props.environmentId}
+          machine={props.machine}
           phoneFirst={status.devices.length > 0}
           passwordRequired={approval.passwordRequired}
+        />
+      ) : null}
+      {detailsOpen && turnOff === "agent" ? (
+        <SettingsRow
+          title="Turn off"
+          description={`Its setup on ${props.machine} comes from config outside T3, so an agent removes it there.`}
+          control={
+            <Button
+              variant="destructive-outline"
+              size="xs"
+              onClick={() =>
+                void handoff({
+                  purpose: "turn_off",
+                  environmentId: props.environmentId,
+                  machine: props.machine,
+                  status,
+                  failing: [],
+                })
+              }
+            >
+              Turn off
+            </Button>
+          }
         />
       ) : null}
     </>
@@ -232,14 +240,24 @@ function DeviceApprovalStatus(props: {
 }
 
 function CheckLine(props: { readonly check: ElevationCheck }) {
+  const { check } = props;
+  const owner = check.ok ? null : deviceApprovalCheckOwner(check);
   return (
     <span className="flex min-w-0 items-start gap-1.5">
-      {props.check.ok ? (
+      {check.ok ? (
         <CheckIcon className="mt-px size-3.5 shrink-0 text-success" aria-label="Passed" />
       ) : (
-        <XIcon className="mt-px size-3.5 shrink-0 text-destructive" aria-label="Failed" />
+        <XIcon className="mt-px size-3.5 shrink-0 text-warning" aria-label="Failed" />
       )}
-      <span className="min-w-0 break-words text-muted-foreground">{props.check.message}</span>
+      <span className="flex min-w-0 flex-col break-words text-muted-foreground">
+        <span>
+          {check.message}
+          {owner === null ? "" : ` · ${owner}`}
+        </span>
+        {check.path === undefined ? null : (
+          <code className="font-mono break-all">{check.path}</code>
+        )}
+      </span>
     </span>
   );
 }
@@ -291,6 +309,7 @@ function DeviceRow(props: {
 
 function TurnOffRow(props: {
   readonly environmentId: EnvironmentId;
+  readonly machine: string;
   readonly phoneFirst: boolean;
   readonly passwordRequired: boolean;
 }) {
@@ -300,7 +319,7 @@ function TurnOffRow(props: {
   return (
     <SettingsRow
       title="Turn off"
-      description="Restores the PAM and sudoers files T3 changed; agent sudo asks for the password again."
+      description={`Agents' sudo on ${props.machine} asks for the password again, and every phone stops approving there.`}
       control={
         confirming ? null : (
           <Button
@@ -369,8 +388,8 @@ export function SudoConfirmForm(props: {
       {usePassword ? (
         <label htmlFor={inputId} className="text-xs text-muted-foreground">
           {props.passwordRequired
-            ? "No phone is enrolled to approve this, so enter the sudo password."
-            : "Approve on your phone, or enter the sudo password."}{" "}
+            ? "No phone is enrolled to approve this, so enter the Mac password."
+            : "Approve on your phone, or enter the Mac password."}{" "}
           The password goes through the T3 server to sudo once and is never stored.{" "}
           {ELEVATION_TOUCH_ID_HINT}
         </label>
@@ -383,7 +402,7 @@ export function SudoConfirmForm(props: {
             id={inputId}
             type="password"
             autoComplete="off"
-            placeholder={props.passwordRequired ? "sudo password" : "sudo password (optional)"}
+            placeholder={props.passwordRequired ? "Mac password" : "Mac password (optional)"}
             value={password}
             disabled={submitting}
             onChange={(event) => setPassword(event.currentTarget.value)}
@@ -414,7 +433,7 @@ export function SudoConfirmForm(props: {
             disabled={submitting}
             onClick={() => setUsePassword(true)}
           >
-            Use the sudo password instead
+            Use the Mac password instead
           </Button>
         )}
       </div>

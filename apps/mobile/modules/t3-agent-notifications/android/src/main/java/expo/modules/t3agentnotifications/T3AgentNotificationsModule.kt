@@ -73,6 +73,10 @@ class T3AgentNotificationsModule : Module() {
       appContext.reactContext?.let { SudoApprovals.setMachines(it, machines) }
     }
 
+    Function("setSudoPendingThreads") { paths: List<String> ->
+      appContext.reactContext?.let { AgentNotifications.setSudoPendingThreads(it, paths) }
+    }
+
     Function("clearSudoApprovals") {
       appContext.reactContext?.let { SudoApprovals.clear(it) }
     }

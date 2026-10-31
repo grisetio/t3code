@@ -69,12 +69,23 @@ function normalizeThreadDeepLink(value: string): string | null {
   }
 }
 
+/**
+ * The open thread in the form deep links and pushes use. React Navigation's path leaves RFC 3986
+ * pchars such as `:` and `@` unencoded, so the segments are decoded and encoded again.
+ */
 export function threadDeepLinkOnScreen(pathname: string): string | null {
   const match = /^\/threads\/([^/]+)\/([^/]+)(?:\/|$)/.exec(pathname);
   if (!match?.[1] || !match[2]) {
     return null;
   }
-  return `/threads/${match[1]}/${match[2]}`;
+  try {
+    return encodeThreadDeepLink({
+      environmentId: decodeURIComponent(match[1]),
+      threadId: decodeURIComponent(match[2]),
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function extractAgentNotificationDeepLink(response: unknown): string | null {
