@@ -7,7 +7,7 @@ use crate::keys::{self, EnrolledKey};
 use crate::payload::{self, Payload};
 use crate::rootsafe::{self, Policy};
 use crate::socket::{Connection, deadline_in};
-use crate::sudo_argv::{self, SearchPath};
+use crate::sudo_argv::{self, Flavor, Search};
 use crate::sys::{self, ChainEntry};
 use crate::verify::{self, Response};
 use crate::{MAX_LINE_BYTES, MAX_PAYLOAD_BYTES, json};
@@ -37,7 +37,9 @@ pub struct Invocation {
     pub pam_user: Option<String>,
     pub cwd: Option<Vec<u8>>,
     pub env_shell: Option<String>,
-    pub env_path: Option<String>,
+    /// Every `PATH=` value in sudo's environment, in order. sudo.ws and
+    /// sudo-rs pick different ones when there are several.
+    pub env_paths: Vec<Vec<u8>>,
 }
 
 /// Where the module looks and how strict it is. Tests swap these out.
@@ -365,15 +367,24 @@ fn build_payload(
         host: &prepared.host_name,
         run_as: &run_as_for_sudoers,
     };
-    let caller_path = invocation.env_path.clone().unwrap_or_default();
-    let alternatives: Vec<String> = crate::sudoers::secure_path(&environment.sudoers, &subject)
-        .into_iter()
-        .map(|value| value.unwrap_or_else(|| caller_path.clone()))
-        .collect();
-    let search = if alternatives.len() == 1 {
-        SearchPath::Known(alternatives[0].clone())
-    } else {
-        SearchPath::Uncertain(alternatives)
+    let setting = |name| crate::sudoers::setting(&environment.sudoers, &subject, name);
+    let search = Search {
+        secure_path: crate::sudoers::secure_path(&environment.sudoers, &subject),
+        // sudo.ws is built with ignore_dot on by default (checked with `sudo -V`
+        // on macOS, Ubuntu, Fedora and Arch).
+        ignore_dot: setting("ignore_dot")
+            .into_iter()
+            .map(|value| value != crate::sudoers::Setting::Negated)
+            .collect(),
+        chroot: setting("runchroot")
+            .iter()
+            .any(|value| matches!(value, crate::sudoers::Setting::Value(root) if root != "*")),
+        env_paths: invocation
+            .env_paths
+            .iter()
+            .map(|path| String::from_utf8(path.clone()).ok())
+            .collect(),
+        flavors: Flavor::platform(),
     };
     let target_shell = target_login_shell(&run_as_for_sudoers);
     let caller_shell = invocation
@@ -500,7 +511,7 @@ mod tests {
                 pam_user: Some(self.user.clone()),
                 cwd: Some(self.dir.as_os_str().as_encoded_bytes().to_vec()),
                 env_shell: None,
-                env_path: Some("/usr/bin:/bin".into()),
+                env_paths: vec![b"/usr/bin:/bin".to_vec()],
             }
         }
 

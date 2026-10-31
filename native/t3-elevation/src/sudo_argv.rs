@@ -226,14 +226,63 @@ pub fn shell_command_string(command: &[String]) -> String {
     out
 }
 
-/// Where sudo searches for a program without a slash.
+/// Which sudo the module may be running inside. They resolve programs
+/// differently, so a result is certain only when every candidate agrees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flavor {
+    /// sudo.ws: searches relative PATH entries against the cwd, `.` last
+    /// unless `ignore_dot`; reads the last non-empty `PATH=` in its environment.
+    Classic,
+    /// sudo-rs: skips relative entries; reads `getenv("PATH")`, the first one.
+    Rs,
+}
+
+impl Flavor {
+    /// macOS only ships sudo.ws; Linux may run either.
+    pub fn platform() -> &'static [Flavor] {
+        if cfg!(target_os = "macos") {
+            &[Flavor::Classic]
+        } else {
+            &[Flavor::Classic, Flavor::Rs]
+        }
+    }
+}
+
+/// Everything that decides where sudo finds a program without a slash.
+#[derive(Clone, Debug)]
+pub struct Search {
+    /// Every value sudoers' `secure_path` may have; `None` means unset.
+    pub secure_path: Vec<Option<String>>,
+    /// Every value `ignore_dot` may have.
+    pub ignore_dot: Vec<bool>,
+    /// sudoers may set `runchroot`, which resolves inside another root.
+    pub chroot: bool,
+    /// Each `PATH=` value in sudo's environment, in order; `None` when one
+    /// isn't valid UTF-8.
+    pub env_paths: Option<Vec<String>>,
+    pub flavors: &'static [Flavor],
+}
+
+impl Search {
+    /// The caller's PATH with no sudoers settings in the way.
+    pub fn caller(path: &str) -> Self {
+        Self {
+            secure_path: vec![None],
+            ignore_dot: vec![true],
+            chroot: false,
+            env_paths: Some(vec![path.to_string()]),
+            flavors: Flavor::platform(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SearchPath {
-    /// One known value: sudoers `secure_path`, or the caller's PATH.
-    Known(String),
-    /// sudoers has a `secure_path` whose binding we can't evaluate; each
-    /// alternative is resolved and the path is shown only if they agree.
-    Uncertain(Vec<String>),
+pub enum Resolved {
+    Found(String),
+    /// sudo won't find it either, so nothing runs.
+    NotFound,
+    /// The candidates disagree; showing any one of them could be wrong.
+    Uncertain,
 }
 
 pub struct Context<'a> {
@@ -245,7 +294,7 @@ pub struct Context<'a> {
     pub caller_shell: Option<&'a str>,
     /// The target user's passwd shell (`-i`).
     pub target_shell: Option<&'a str>,
-    pub search: SearchPath,
+    pub search: Search,
     pub shells: &'a [String],
 }
 
@@ -309,7 +358,14 @@ pub fn describe(sudo_argv: &[String], parsed: &Parsed, context: &Context) -> Des
             (argv, resolved, true, false)
         }
         Mode::Run(command) => {
-            let resolved = resolve_program(&command[0], context);
+            let resolved = match resolve_program(&command[0], context) {
+                Resolved::Found(path) => Some(path),
+                Resolved::NotFound => None,
+                Resolved::Uncertain => {
+                    warnings.push(Warning::new("unresolved_program"));
+                    None
+                }
+            };
             let is_shell = is_shell_program(&command[0], resolved.as_deref(), context.shells);
             (command.clone(), resolved, is_shell, true)
         }
@@ -354,40 +410,92 @@ fn executable_file(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.mode() & 0o111 != 0)
 }
 
-fn search_one(program: &str, search: &str) -> Option<String> {
-    search
-        .split(':')
-        .filter(|dir| dir.starts_with('/'))
-        .map(|dir| Path::new(dir).join(program))
-        .find(|candidate| executable_file(candidate))
-        .map(|candidate| candidate.to_string_lossy().into_owned())
+/// sudo's `sudo_goodpath`: a regular file with any execute bit, symlinks followed.
+fn good_path(candidate: &str, cwd: &str) -> Option<String> {
+    let path: PathBuf = Path::new(cwd).join(candidate).components().collect();
+    executable_file(&path).then(|| path.to_string_lossy().into_owned())
 }
 
-pub fn resolve_program(program: &str, context: &Context) -> Option<String> {
-    if program.contains('/') {
-        let path = if program.starts_with('/') {
-            PathBuf::from(program)
-        } else {
-            Path::new(context.cwd).join(program)
-        };
-        // `components()` drops `.` and repeated slashes but keeps `..`,
-        // which a symlinked directory makes non-lexical.
-        let path: PathBuf = path.components().collect();
-        return executable_file(&path).then(|| path.to_string_lossy().into_owned());
-    }
-    match &context.search {
-        SearchPath::Known(search) => search_one(program, search),
-        SearchPath::Uncertain(alternatives) => {
-            let mut results = alternatives
-                .iter()
-                .map(|search| search_one(program, search));
-            let first = results.next()?;
-            results
-                .all(|other| other == first)
-                .then_some(first)
-                .flatten()
+/// sudo.ws `find_path`: empty entries are skipped, other relative entries
+/// are searched in order against the cwd, and `.` is tried last; a match
+/// there counts only without `ignore_dot`.
+fn classic_search(
+    program: &str,
+    path: Option<&str>,
+    cwd: &str,
+    ignore_dot: bool,
+) -> Option<String> {
+    let mut check_dot = false;
+    for dir in path?.split(':').filter(|dir| !dir.is_empty()) {
+        if dir == "." {
+            check_dot = true;
+            continue;
+        }
+        if let Some(found) = good_path(&format!("{dir}/{program}"), cwd) {
+            return Some(found);
         }
     }
+    if check_dot && !ignore_dot {
+        return good_path(&format!("./{program}"), cwd);
+    }
+    None
+}
+
+/// sudo-rs `resolve_path`: absolute entries only.
+fn rs_search(program: &str, path: &str) -> Option<String> {
+    path.split(':')
+        .filter(|dir| dir.starts_with('/'))
+        .find_map(|dir| good_path(&format!("{dir}/{program}"), "/"))
+}
+
+/// Mirrors sudo's own lookup: `secure_path` when set, else the caller's PATH.
+pub fn resolve_program(program: &str, context: &Context) -> Resolved {
+    let search = &context.search;
+    if search.chroot {
+        return Resolved::Uncertain;
+    }
+    let mut outcomes = Vec::new();
+    if program.contains('/') {
+        // `components()` drops `.` and repeated slashes but keeps `..`,
+        // which a symlinked directory makes non-lexical.
+        outcomes.push(good_path(program, context.cwd));
+    } else {
+        let Some(env_paths) = &search.env_paths else {
+            return Resolved::Uncertain;
+        };
+        for flavor in search.flavors {
+            for secure in &search.secure_path {
+                match flavor {
+                    Flavor::Classic => {
+                        let path = secure.as_deref().or_else(|| {
+                            env_paths
+                                .iter()
+                                .rev()
+                                .find(|path| !path.is_empty())
+                                .map(String::as_str)
+                        });
+                        for ignore_dot in &search.ignore_dot {
+                            outcomes.push(classic_search(program, path, context.cwd, *ignore_dot));
+                        }
+                    }
+                    Flavor::Rs => {
+                        let path = secure
+                            .as_deref()
+                            .or_else(|| env_paths.first().map(String::as_str))
+                            .unwrap_or_default();
+                        outcomes.push(rs_search(program, path));
+                    }
+                }
+            }
+        }
+    }
+    let Some(first) = outcomes.first().cloned() else {
+        return Resolved::Uncertain;
+    };
+    if outcomes.iter().any(|outcome| *outcome != first) {
+        return Resolved::Uncertain;
+    }
+    first.map_or(Resolved::NotFound, Resolved::Found)
 }
 
 fn writable_by(meta: &std::fs::Metadata, context: &Context) -> bool {
@@ -573,7 +681,7 @@ mod tests {
             cwd: dir,
             caller_shell: Some("/bin/zsh"),
             target_shell: Some("/bin/bash"),
-            search: SearchPath::Known("relative:/usr/bin:/bin".into()),
+            search: Search::caller("/usr/bin:/bin"),
             shells,
         }
     }
@@ -656,16 +764,79 @@ mod tests {
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
+    fn planted(name: &str) -> (PathBuf, String) {
+        let tmp = std::env::temp_dir().join(format!("t3e-argv-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("bin")).unwrap();
+        let planted = tmp.join("bin/true");
+        std::fs::write(&planted, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(
+            &planted,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let cwd = tmp.to_string_lossy().into_owned();
+        (tmp, cwd)
+    }
+
     #[test]
-    fn uncertain_search_path_needs_agreement() {
+    fn classic_and_rs_search_like_sudo() {
+        let (tmp, cwd) = planted("search");
+        let bin_true = tmp.join("bin/true").to_string_lossy().into_owned();
+        let classic = |path: &str, ignore_dot| classic_search("true", Some(path), &cwd, ignore_dot);
+        assert_eq!(classic("bin:/nonexistent", true), Some(bin_true.clone()));
+        assert_eq!(classic("./bin", true), Some(bin_true.clone()));
+        // Empty entries are skipped, not the cwd; `.` comes last.
+        assert_eq!(classic("::/nonexistent", false), None);
+        std::fs::copy(tmp.join("bin/true"), tmp.join("true")).unwrap();
+        let dot_true = tmp.join("true").to_string_lossy().into_owned();
+        assert_eq!(classic(".:bin", false), Some(bin_true.clone()));
+        assert_eq!(classic(".:/nonexistent", false), Some(dot_true));
+        assert_eq!(classic(".:/nonexistent", true), None);
+        assert_eq!(classic_search("true", None, &cwd, true), None);
+        assert_eq!(rs_search("true", "bin:."), None);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn disagreement_is_uncertain() {
+        let (tmp, cwd) = planted("disagree");
         let shells = vec![];
-        let mut ctx = context("/", &[], &shells);
-        ctx.search = SearchPath::Uncertain(vec!["/usr/bin:/bin".into(), "/bin:/usr/bin".into()]);
-        let both = resolve_program("true", &ctx);
-        ctx.search = SearchPath::Uncertain(vec!["/usr/bin".into(), "/nonexistent".into()]);
-        assert_eq!(resolve_program("true", &ctx), None);
-        // `true` exists in both /usr/bin and /bin on Linux, only /usr/bin on macOS.
-        let _ = both;
+        let mut ctx = context(&cwd, &[], &shells);
+        let sudo = argv(&["sudo", "true"]);
+        let describe_true = |ctx: &Context| describe(&sudo, &parse(&sudo), ctx).command;
+
+        ctx.search.env_paths = Some(vec!["bin:/usr/bin:/bin".into()]);
+        ctx.search.flavors = &[Flavor::Classic, Flavor::Rs];
+        let command = describe_true(&ctx);
+        assert_eq!(command.resolved_path, None);
+        assert!(
+            command
+                .warnings
+                .contains(&Warning::new("unresolved_program"))
+        );
+
+        // Classic reads the last PATH, sudo-rs the first.
+        ctx.search.env_paths = Some(vec!["/nonexistent".into(), "/usr/bin:/bin".into()]);
+        ctx.search.flavors = &[Flavor::Classic];
+        assert!(describe_true(&ctx).resolved_path.is_some());
+        ctx.search.flavors = &[Flavor::Classic, Flavor::Rs];
+        assert_eq!(describe_true(&ctx).resolved_path, None);
+
+        ctx.search.secure_path = vec![Some("/usr/bin:/bin".into())];
+        assert!(
+            describe_true(&ctx).resolved_path.is_some(),
+            "secure_path wins"
+        );
+        ctx.search.secure_path = vec![Some("/usr/bin".into()), Some("/nonexistent".into())];
+        assert_eq!(describe_true(&ctx).resolved_path, None);
+        ctx.search.secure_path = vec![None];
+        ctx.search.env_paths = None;
+        assert_eq!(describe_true(&ctx).resolved_path, None);
+        ctx.search.env_paths = Some(vec!["/usr/bin:/bin".into()]);
+        ctx.search.chroot = true;
+        assert_eq!(describe_true(&ctx).resolved_path, None);
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     /// Review finding (R2): an option sudo reads an argument for, or an
@@ -689,21 +860,12 @@ mod tests {
     /// cwd when sudoers has no `secure_path` (macOS), but `search_one` skips
     /// them, so the phone shows `/usr/bin/true` while sudo runs `./bin/true`.
     #[test]
-    #[ignore = "review: relative PATH entries are skipped but sudo searches them; remove when fixed"]
     fn relative_search_entries_are_not_skipped() {
-        let tmp = std::env::temp_dir().join(format!("t3e-argv-relpath-{}", std::process::id()));
-        std::fs::create_dir_all(tmp.join("bin")).unwrap();
+        let (tmp, cwd) = planted("relpath");
         let planted = tmp.join("bin/true");
-        std::fs::write(&planted, "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(
-            &planted,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        let cwd = tmp.to_string_lossy().into_owned();
         let shells = vec![];
         let mut ctx = context(&cwd, &[], &shells);
-        ctx.search = SearchPath::Known("bin:/usr/bin:/bin".into());
+        ctx.search = Search::caller("bin:/usr/bin:/bin");
         let sudo = argv(&["sudo", "true"]);
         let command = describe(&sudo, &parse(&sudo), &ctx).command;
         std::fs::remove_dir_all(&tmp).unwrap();

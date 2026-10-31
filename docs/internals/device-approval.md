@@ -56,7 +56,11 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   `["sudoedit", ...files]`. If sudo's argv has any option the module does not
   fully understand, `argv` is sudo's argv without `argv[0]`, unparsed.
 - `resolvedPath`: absolute path of the program sudo will execute, resolved with
-  sudo's own PATH and `secure_path` rules, or `null` (unparsed, `-e`, not found).
+  sudo's own PATH and `secure_path` rules, or `null` (unparsed, `-e`, not found,
+  or not certain). sudo.ws searches relative PATH entries against the cwd and
+  reads the last `PATH=` in its environment; sudo-rs skips relative entries and
+  reads the first. On Linux either may be installed, so the module resolves
+  with both and shows a path only when they agree.
 - `warnings`: objects `{ "code": string, "arg"?: int }`. `arg` indexes
   `command.argv`. Codes in v1:
 
@@ -67,6 +71,7 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   | `shell`                  | `-s`, `-i`, or the program is a shell.                                              |
   | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                          |
   | `edit`                   | `-e` / sudoedit.                                                                    |
+  | `unresolved_program`     | The module can't tell which file sudo will run; `resolvedPath` is `null`.           |
 
   Clients render an unknown code as a generic red warning showing the code. A
   warning only adds caution, so this is safe without a version bump.
