@@ -789,6 +789,26 @@ describe("ElevationService helper", () => {
   );
 });
 
+describe("elevationSudoPath", () => {
+  // A user-writable folder early in PATH (Homebrew on Apple Silicon) could
+  // hold a sudo that takes the setup password or fakes the helper's reply.
+  it("runs the system sudo by absolute path, NixOS's wrapper where it exists", () => {
+    const exists = (present: ReadonlyArray<string>) => (path: string) => present.includes(path);
+    assert.deepStrictEqual(
+      [
+        ElevationService.elevationSudoPath("darwin", exists(["/usr/bin/sudo"])),
+        ElevationService.elevationSudoPath("linux", exists(["/usr/bin/sudo"])),
+        ElevationService.elevationSudoPath(
+          "linux",
+          exists(["/run/wrappers/bin/sudo", "/usr/bin/sudo"]),
+        ),
+        ElevationService.elevationSudoPath("linux", exists([])),
+      ],
+      ["/usr/bin/sudo", "/usr/bin/sudo", "/run/wrappers/bin/sudo", "/usr/bin/sudo"],
+    );
+  });
+});
+
 describe("elevationAttestation", () => {
   it("takes test attestation from the environment only when running from source", () => {
     const test = { T3_ELEVATION_ALLOW_TEST_ATTESTATION: "1" };

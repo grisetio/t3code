@@ -7,6 +7,7 @@
  * helper for setup.
  */
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
@@ -1060,6 +1061,19 @@ export function elevationAttestation(input: {
   return input.env.T3_ELEVATION_ALLOW_DEV_ATTESTATION === "1" ? "dev" : "release";
 }
 
+/**
+ * sudo by absolute path: a folder early in PATH can be user-writable (Homebrew
+ * on Apple Silicon), and a sudo planted there would get the setup password or
+ * fake the helper's reply. NixOS keeps its setuid sudo in /run/wrappers.
+ */
+export function elevationSudoPath(
+  platform: NodeJS.Platform,
+  exists: (path: string) => boolean,
+): string {
+  if (platform === "linux" && exists("/run/wrappers/bin/sudo")) return "/run/wrappers/bin/sudo";
+  return "/usr/bin/sudo";
+}
+
 export const layer = Layer.effect(
   ElevationService,
   Effect.gen(function* () {
@@ -1079,7 +1093,7 @@ export const layer = Layer.effect(
       },
       helperOverride: process.env.T3_ELEVATION_HELPER ?? null,
       bundledHelperPath: BUNDLED_HELPER_PATH,
-      sudoPath: "sudo",
+      sudoPath: elevationSudoPath(platform, NodeFS.existsSync),
       attestation: elevationAttestation({
         env: process.env,
         packaged: typeof __T3CODE_BUILD_CHANNEL__ !== "undefined",
