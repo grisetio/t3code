@@ -249,6 +249,29 @@ describe("elevationRequestStatusView", () => {
     });
   });
 
+  it("names the phone that denied, from the item or from this session", () => {
+    const item = {
+      ...ended,
+      elevationStatus: "denied" as const,
+      resolvedBy: { deviceLabel: "Fold", keyId: "doBaY6aYDBgHVCShPzJ3LQ" },
+    };
+    expect(
+      elevationRequestStatusView(item, { finished: true, thisKeyId: "doBaY6aYDBgHVCShPzJ3LQ" }),
+    ).toMatchObject({ label: "Denied", how: `Denied on this phone · ${time}` });
+    expect(elevationRequestStatusView(item, { finished: true })).toMatchObject({
+      how: `Denied on Fold · ${time}`,
+    });
+    expect(
+      elevationRequestStatusView(
+        { ...item, resolvedBy: null },
+        { finished: true, deniedHere: true },
+      ),
+    ).toMatchObject({ how: `Denied on this phone · ${time}` });
+    expect(
+      elevationRequestStatusView({ ...item, resolvedBy: null }, { finished: true }),
+    ).toMatchObject({ how: `Denied · ${time}` });
+  });
+
   it("uses one expired text and keeps the failure reason", () => {
     expect(
       elevationRequestStatusView(

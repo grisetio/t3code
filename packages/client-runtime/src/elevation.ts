@@ -271,7 +271,7 @@ export function elevationRequestStatusView(
     readonly finished: boolean;
     /** This phone's key on the machine; null on clients without one. */
     readonly thisKeyId?: string | null;
-    /** This phone denied it. Denials carry no device, so only the phone that sent one knows. */
+    /** This phone denied it, for servers that don't record the denying device. */
     readonly deniedHere?: boolean;
   },
 ): ElevationRequestStatusView {
@@ -307,7 +307,7 @@ export function elevationRequestStatusView(
         kind: "denied",
         label: "Denied",
         time,
-        how: `Denied${options.deniedHere ? " on this phone" : ""} · ${time}`,
+        how: `Denied${options.deniedHere ? " on this phone" : approvedOn} · ${time}`,
         detail,
       };
     case "expired":

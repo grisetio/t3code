@@ -245,7 +245,12 @@ export type ElevationSignedResponse = typeof ElevationSignedResponse.Type;
 
 /** Deny carries no signature: a forged deny is only a denial of service. */
 export const ElevationRespondInput = Schema.Union([
-  Schema.Struct({ requestId: ElevationRequestId, decision: Schema.Literal("deny") }),
+  Schema.Struct({
+    requestId: ElevationRequestId,
+    decision: Schema.Literal("deny"),
+    /** The denying phone's key, so its row reads "Denied on this phone". Names only; proves nothing. */
+    keyId: Schema.optionalKey(ElevationKeyId),
+  }),
   Schema.Struct({
     requestId: ElevationRequestId,
     decision: Schema.Literal("approve"),
@@ -317,6 +322,8 @@ export const ElevationStatus = Schema.Struct({
   ownsApprovals: Schema.Boolean,
   /** Parts exist that `installed-by-t3.json` doesn't record; uninstall leaves them. */
   setupOutsideT3: Schema.Boolean,
+  /** `installed-by-t3.json` records an install for this user, so uninstall has something to undo. */
+  installedByT3: Schema.optionalKey(Schema.Boolean),
   /** The root-owned helper that adds and removes devices is in place, so T3 can manage them. */
   helperInstalled: Schema.Boolean,
   checks: Schema.Array(ElevationCheck),

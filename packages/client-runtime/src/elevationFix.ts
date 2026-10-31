@@ -191,15 +191,18 @@ export function deviceApprovalCheckOwner(check: ElevationCheck): string | null {
 /**
  * How Turn off undoes the setup: T3's helper removes what T3 installed; anything set up outside
  * T3, such as a Nix config, would come back on the next rebuild, so an agent removes it there.
- * Null when nothing is installed.
+ * Null when nothing is installed. Older servers don't send `installedByT3`; there the rest decides.
  */
 export function deviceApprovalTurnOff(
-  status: Pick<StatusFields, "ownsApprovals" | "devices" | "setupOutsideT3"> & {
-    readonly helperInstalled: boolean;
-  },
+  status: Pick<
+    ElevationStatus,
+    "ownsApprovals" | "devices" | "setupOutsideT3" | "helperInstalled" | "installedByT3"
+  >,
 ): "uninstall" | "agent" | null {
   if (!deviceApprovalInstalled(status)) return null;
-  return status.setupOutsideT3 || !status.helperInstalled ? "agent" : "uninstall";
+  return (status.installedByT3 ?? true) && !status.setupOutsideT3 && status.helperInstalled
+    ? "uninstall"
+    : "agent";
 }
 
 export const DEVICE_APPROVAL_DIAGNOSIS_FILE_NAME = "Device approval diagnosis.txt";

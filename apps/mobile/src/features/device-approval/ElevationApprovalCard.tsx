@@ -43,7 +43,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { REVIEW_WORKING_TREE_SECTION_ID } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
 import { approvalHaptic } from "./approvalHaptics";
-import { deviceApprovalKeys } from "./deviceApprovalKeys";
+import { deviceApprovalKeys, useThisPhoneKeyId } from "./deviceApprovalKeys";
 import {
   deviceApprovalSigner,
   deviceApprovalSignerErrorCode,
@@ -260,6 +260,7 @@ export function ElevationApprovalCard(props: {
 }) {
   const { request } = props;
   const answer = useElevationRespond(request.environmentId);
+  const thisKeyId = useThisPhoneKeyId(request.environmentId);
   const [approved, setApproved] = useState(false);
   const decoded = Result.isSuccess(request.decoded) ? request.decoded.success : null;
   const context = useElevationRequestContext(
@@ -272,7 +273,8 @@ export function ElevationApprovalCard(props: {
 
   const deny = async () => {
     rememberDeniedHere(request.requestId);
-    if (await answer.run({ requestId: request.requestId, decision: "deny" })) {
+    const input = { requestId: request.requestId, decision: "deny" as const };
+    if (await answer.run(thisKeyId === null ? input : { ...input, keyId: thisKeyId })) {
       approvalHaptic("denied");
       props.onAnswered?.("deny");
     }

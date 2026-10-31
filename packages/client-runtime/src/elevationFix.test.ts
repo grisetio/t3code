@@ -193,4 +193,12 @@ describe("deviceApprovalTurnOff", () => {
     expect(deviceApprovalTurnOff(status({ setupOutsideT3: true }))).toBe("agent");
     expect(deviceApprovalTurnOff(status({ ownsApprovals: false, devices: [] }))).toBeNull();
   });
+
+  it("uninstalls only when the server says T3 installed it", () => {
+    expect(deviceApprovalTurnOff(status({ installedByT3: true }))).toBe("uninstall");
+    expect(deviceApprovalTurnOff(status({ installedByT3: false }))).toBe("agent");
+    expect(deviceApprovalTurnOff(status({ installedByT3: true, helperInstalled: false }))).toBe(
+      "agent",
+    );
+  });
 });

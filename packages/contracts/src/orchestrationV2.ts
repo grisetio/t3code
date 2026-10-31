@@ -1368,7 +1368,7 @@ export type OrchestrationV2ElevationRequestFailure =
 
 export const OrchestrationV2ElevationResolvedBy = Schema.Struct({
   deviceLabel: Schema.String,
-  /** Present for approvals; a deny carries no signature. */
+  /** The approving key, or the enrolled key a phone named when it denied. */
   keyId: Schema.optionalKey(ElevationKeyId),
 });
 export type OrchestrationV2ElevationResolvedBy = typeof OrchestrationV2ElevationResolvedBy.Type;

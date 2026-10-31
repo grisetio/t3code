@@ -90,8 +90,8 @@ export function pendingRequestForNotificationIntent(
 }
 
 /**
- * Requests this phone denied in this session. A deny records no device on the server, so the
- * resolved row learns "on this phone" from here.
+ * Requests this phone denied in this session. Servers that predate recording the denying device
+ * leave it off the item, so the resolved row learns "on this phone" from here.
  */
 const deniedHere = new Set<ElevationRequestId>();
 
