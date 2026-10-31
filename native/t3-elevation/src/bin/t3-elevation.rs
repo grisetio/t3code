@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 use std::io::{IsTerminal as _, Read as _, Write as _};
-use t3_elevation::attestation::{self, Enrollment, Pins};
+use t3_elevation::attestation::{self, Enrollment, Pins, Trust};
 use t3_elevation::install::{self, KeyError, Layout, Sources};
 use t3_elevation::{HELPER_VERSION, PROTOCOL_VERSION, b64, config, keys, sys};
 
@@ -130,9 +130,9 @@ fn read_enrollment(source: &str) -> Result<Enrollment, Failure> {
 
 fn verify_enrollment(
     enrollment: &Enrollment,
-    allow_dev: bool,
+    trust: Trust,
 ) -> Result<(Vec<u8>, attestation::Verified), Failure> {
-    let verified = attestation::verify(enrollment, sys::now(), &Pins::release(), allow_dev)
+    let verified = attestation::verify(enrollment, sys::now(), &Pins::release(), trust)
         .map_err(|rejected| fail(rejected.code, rejected.message))?;
     let spki = b64::decode(&enrollment.public_key)
         .ok_or_else(|| fail("invalid_enrollment", "publicKey isn't base64url"))?;
@@ -157,7 +157,8 @@ fn key_result(key_id: &str, spki: &[u8], label: &str, verified: &attestation::Ve
         "label": label,
         "comparisonCode": keys::comparison_code(spki),
         "securityLevel": verified.security_level,
-        "devAttestation": verified.dev_attestation,
+        "devAttestation": verified.trust != Trust::Release,
+        "testAttestation": verified.trust == Trust::Test,
     })
 }
 
@@ -220,7 +221,7 @@ fn install(args: &[String]) -> Outcome {
     let options = Options::parse(
         args,
         &["--user", "--socket", "--key", "--window"],
-        &["--allow-dev-attestation"],
+        &["--allow-dev-attestation", "--allow-test-attestation"],
     )?;
     require_root()?;
     let user = user(&options)?;
@@ -250,7 +251,21 @@ fn install(args: &[String]) -> Outcome {
     }
     // Verify the device before changing anything.
     let enrollment = read_enrollment(options.require("--key")?)?;
-    let (spki, verified) = verify_enrollment(&enrollment, options.flag("--allow-dev-attestation"))?;
+    let trust = match (
+        options.flag("--allow-dev-attestation"),
+        options.flag("--allow-test-attestation"),
+    ) {
+        (false, false) => Trust::Release,
+        (true, false) => Trust::Dev,
+        (false, true) => Trust::Test,
+        (true, true) => {
+            return Err(fail(
+                "usage",
+                "use one of --allow-dev-attestation and --allow-test-attestation",
+            ));
+        }
+    };
+    let (spki, verified) = verify_enrollment(&enrollment, trust)?;
     let (module, helper) = bundled();
     let plan = install::plan_install(
         &layout,
@@ -288,7 +303,7 @@ fn install(args: &[String]) -> Outcome {
 
 fn enroll(args: &[String]) -> Outcome {
     let command = t3_elevation::enroll::parse_options(args).ok_or_else(|| {
-        fail("usage", "usage: t3-elevation enroll --user U --label L --public-key K --challenge C [--allow-dev-attestation]")
+        fail("usage", "usage: t3-elevation enroll --user U --label L --public-key K --challenge C [--allow-dev-attestation | --allow-test-attestation]")
     })?;
     require_root()?;
     let user = known_user(&command.user)?;
@@ -303,7 +318,7 @@ fn enroll(args: &[String]) -> Outcome {
             "the enrollment doesn't match the approved command",
         ));
     }
-    let (spki, verified) = verify_enrollment(&enrollment, command.allow_dev_attestation)?;
+    let (spki, verified) = verify_enrollment(&enrollment, command.trust)?;
     let layout = Layout::system(&user);
     let (key_id, bytes) = install::key_file_bytes(&spki, &enrollment.label, &verified, sys::now());
     install::write_key(&layout, &user, &key_id, &bytes).map_err(key_error)?;

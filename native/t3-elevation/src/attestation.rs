@@ -1,8 +1,10 @@
 //! Android key attestation for enrollment (spec §8). A key is enrolled only if
 //! its certificate chain ends at a pinned Google root and the attested key is
 //! a fresh, hardware-backed, biometric-per-use P-256 signing key made by a
-//! pinned T3 app. `--allow-dev-attestation` relaxes exactly the parts that
-//! emulators and debug builds can't satisfy, and the key file records it.
+//! pinned T3 app. `--allow-dev-attestation` admits debug builds of the app on
+//! real phones: only the app pins widen, to the dev ones this helper was built
+//! with. `--allow-test-attestation` admits emulators and fixture chains, which
+//! prove nothing about the device. The key file records either.
 
 use crate::b64;
 use crate::der::{self, Class, Reader, Tlv};
@@ -28,7 +30,22 @@ const RELEASE_SIGNING_DIGESTS: &str = match option_env!("T3_ELEVATION_ANDROID_SI
     Some(value) => value,
     None => "",
 };
+/// Debug signing certificates `--allow-dev-attestation` accepts, as above.
+const DEV_SIGNING_DIGESTS: &str = match option_env!("T3_ELEVATION_ANDROID_DEV_SIGNING_DIGESTS") {
+    Some(value) => value,
+    None => "",
+};
 const DEV_PACKAGES: [&str; 2] = ["com.t3tools.t3code.preview", "com.t3tools.t3code.dev"];
+
+/// How much an enrollment's attestation must prove.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trust {
+    Release,
+    /// `--allow-dev-attestation`.
+    Dev,
+    /// `--allow-test-attestation`.
+    Test,
+}
 
 const KEY_ATTESTATION_OID: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0xd6, 0x79, 0x02, 0x01, 0x11];
 const MAX_CREATION_SKEW_MS: i64 = 10 * 60 * 1000;
@@ -39,6 +56,14 @@ pub struct Pins {
     pub root_spki_sha256: Vec<[u8; 32]>,
     pub packages: Vec<String>,
     pub signing_digests: Vec<[u8; 32]>,
+    pub dev_signing_digests: Vec<[u8; 32]>,
+}
+
+fn digests(list: &str) -> Vec<[u8; 32]> {
+    list.split(',')
+        .filter(|text| !text.trim().is_empty())
+        .filter_map(parse_digest)
+        .collect()
 }
 
 fn parse_digest(text: &str) -> Option<[u8; 32]> {
@@ -66,11 +91,8 @@ impl Pins {
                 .filter(|name| !name.is_empty())
                 .map(str::to_string)
                 .collect(),
-            signing_digests: RELEASE_SIGNING_DIGESTS
-                .split(',')
-                .filter(|text| !text.trim().is_empty())
-                .filter_map(parse_digest)
-                .collect(),
+            signing_digests: digests(RELEASE_SIGNING_DIGESTS),
+            dev_signing_digests: digests(DEV_SIGNING_DIGESTS),
         }
     }
 }
@@ -89,7 +111,7 @@ pub struct Verified {
     pub security_level: &'static str,
     pub package_name: String,
     pub signing_cert_digest: String,
-    pub dev_attestation: bool,
+    pub trust: Trust,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -355,8 +377,10 @@ pub fn verify(
     enrollment: &Enrollment,
     now: i64,
     pins: &Pins,
-    allow_dev: bool,
+    trust: Trust,
 ) -> Result<Verified, Rejected> {
+    // Only test attestation lets the device itself go unproven.
+    let any_device = trust == Trust::Test;
     let label_ok = !enrollment.label.trim().is_empty()
         && enrollment.label.chars().count() <= 100
         && !enrollment.label.chars().any(char::is_control);
@@ -425,7 +449,7 @@ pub fn verify(
         .root_spki_sha256
         .iter()
         .any(|pin| Sha256::digest(root.spki).as_slice() == pin);
-    if !root_pinned && !allow_dev {
+    if !root_pinned && !any_device {
         return Err(reject(
             "untrusted_root",
             "chain does not end at a Google attestation root",
@@ -465,7 +489,7 @@ pub fn verify(
     let keymint_level = level_name(parsed.keymint_level)
         .ok_or_else(|| reject("invalid_attestation", "unknown security level"))?;
     let hardware = parsed.attestation_level >= 1 && parsed.keymint_level >= 1;
-    if !hardware && !allow_dev {
+    if !hardware && !any_device {
         return Err(reject(
             "insecure_key",
             format!("key is {keymint_level}/{attestation_level}, not hardware-backed"),
@@ -517,7 +541,7 @@ pub fn verify(
             "key allows use without authentication for each signature",
         ));
     }
-    if !allow_dev {
+    if !any_device {
         let root_of_trust = enforced
             .get(TAG_ROOT_OF_TRUST)
             .and_then(parse_root_of_trust);
@@ -550,7 +574,7 @@ pub fn verify(
     };
     let package_pinned = pins.packages.iter().any(|name| name == package);
     let package_dev = DEV_PACKAGES.contains(&package.as_str());
-    if !(package_pinned || allow_dev && package_dev) {
+    if !(package_pinned || trust != Trust::Release && package_dev) {
         return Err(reject(
             "unknown_app",
             format!("app {package} is not a pinned T3 app"),
@@ -562,15 +586,26 @@ pub fn verify(
             "attestation has no signing certificate digest",
         ));
     }
-    if !allow_dev {
-        if pins.signing_digests.is_empty() {
+    if trust != Trust::Test {
+        let mut accepted = pins.signing_digests.clone();
+        if trust == Trust::Dev {
+            accepted.extend(&pins.dev_signing_digests);
+        }
+        if accepted.is_empty() {
             return Err(reject(
                 "signing_digest_not_pinned",
-                "this helper was built without a pinned T3 app signing digest; use --allow-dev-attestation for development",
+                match trust {
+                    Trust::Dev => {
+                        "this helper was built without a pinned T3 app signing digest, release or dev"
+                    }
+                    _ => {
+                        "this helper was built without a pinned T3 app signing digest; use --allow-dev-attestation with a dev build"
+                    }
+                },
             ));
         }
         if !application.digests.iter().all(|digest| {
-            pins.signing_digests
+            accepted
                 .iter()
                 .any(|pin| pin.as_slice() == digest.as_slice())
         }) {
@@ -584,7 +619,7 @@ pub fn verify(
         security_level: keymint_level,
         package_name: package.clone(),
         signing_cert_digest: b64::encode(&application.digests[0]),
-        dev_attestation: allow_dev,
+        trust,
     })
 }
 
@@ -651,7 +686,7 @@ fn parse_application_id(bytes: &[u8]) -> Option<Application> {
 }
 
 /// Fake attestation chains for tests and the VM test server. A chain from here
-/// never verifies without `--allow-dev-attestation`: its root isn't Google's.
+/// never verifies without `--allow-test-attestation`: its root isn't Google's.
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixture {
     use crate::der::write::*;
@@ -839,63 +874,120 @@ mod tests {
             root_spki_sha256: vec![],
             packages: vec!["com.t3tools.t3code".into()],
             signing_digests: vec![],
+            dev_signing_digests: vec![],
         }
     }
 
-    fn check(options: &Options, allow_dev: bool) -> Result<Verified, &'static str> {
-        verify(&enrollment(options, &key()), NOW, &dev_pins(), allow_dev)
+    fn check(options: &Options, trust: Trust) -> Result<Verified, &'static str> {
+        verify(&enrollment(options, &key()), NOW, &dev_pins(), trust)
             .map_err(|rejected| rejected.code)
     }
 
     #[test]
-    fn accepts_a_dev_chain_only_with_the_dev_flag() {
+    fn accepts_a_fixture_chain_only_with_the_test_flag() {
         let options = Options::new(&[7; 32], NOW);
-        let verified = check(&options, true).unwrap();
+        let verified = check(&options, Trust::Test).unwrap();
         assert_eq!(verified.security_level, "tee");
         assert_eq!(verified.package_name, "com.t3tools.t3code.dev");
-        assert!(verified.dev_attestation);
-        assert_eq!(check(&options, false), Err("untrusted_root"));
+        assert_eq!(verified.trust, Trust::Test);
+        assert_eq!(check(&options, Trust::Dev), Err("untrusted_root"));
+        assert_eq!(check(&options, Trust::Release), Err("untrusted_root"));
+    }
+
+    /// Pins whose root is the fixture's, standing in for Google's.
+    fn pinned_root(options: &Options) -> Pins {
+        let spki = key()
+            .verifying_key()
+            .to_public_key_der()
+            .unwrap()
+            .into_vec();
+        let root = chain(&spki, options)[1].clone();
+        let root = parse_certificate(&root).unwrap();
+        let mut pins = dev_pins();
+        pins.root_spki_sha256 = vec![Sha256::digest(root.spki).into()];
+        pins
+    }
+
+    fn check_pinned(options: &Options, pins: &Pins, trust: Trust) -> Result<Trust, &'static str> {
+        verify(&enrollment(options, &key()), NOW, pins, trust)
+            .map(|verified| verified.trust)
+            .map_err(|rejected| rejected.code)
     }
 
     #[test]
     fn pinned_root_still_needs_package_and_digest_pins() {
         let mut options = Options::new(&[7; 32], NOW);
         options.package = "com.t3tools.t3code".into();
-        let spki_root = chain(
-            &key()
-                .verifying_key()
-                .to_public_key_der()
-                .unwrap()
-                .into_vec(),
-            &options,
-        )[1]
-        .clone();
-        let root = parse_certificate(&spki_root).unwrap();
-        let mut pins = dev_pins();
-        pins.root_spki_sha256 = vec![Sha256::digest(root.spki).into()];
-        let result = verify(&enrollment(&options, &key()), NOW, &pins, false).map_err(|r| r.code);
-        assert_eq!(result, Err("signing_digest_not_pinned"));
+        let mut pins = pinned_root(&options);
+        assert_eq!(
+            check_pinned(&options, &pins, Trust::Release),
+            Err("signing_digest_not_pinned")
+        );
         pins.signing_digests = vec![[0xab; 32]];
-        assert!(
-            !verify(&enrollment(&options, &key()), NOW, &pins, false)
-                .unwrap()
-                .dev_attestation
+        assert_eq!(
+            check_pinned(&options, &pins, Trust::Release),
+            Ok(Trust::Release)
         );
         pins.signing_digests = vec![[0xcd; 32]];
         assert_eq!(
-            verify(&enrollment(&options, &key()), NOW, &pins, false).map_err(|r| r.code),
+            check_pinned(&options, &pins, Trust::Release),
             Err("unknown_app")
         );
         options.package = "com.t3tools.t3code.dev".into();
         pins.signing_digests = vec![[0xab; 32]];
         assert_eq!(
-            verify(&enrollment(&options, &key()), NOW, &pins, false).map_err(|r| r.code),
+            check_pinned(&options, &pins, Trust::Release),
             Err("unknown_app")
         );
     }
 
+    /// Review finding 6: dev attestation is for debug builds on real phones,
+    /// so it keeps every device check and widens only the app pins.
     #[test]
-    fn rejects_each_weak_property_even_with_the_dev_flag() {
+    fn dev_flag_widens_only_the_app_pins() {
+        let options = Options::new(&[7; 32], NOW);
+        let mut pins = pinned_root(&options);
+        assert_eq!(
+            check_pinned(&options, &pins, Trust::Dev),
+            Err("signing_digest_not_pinned")
+        );
+        pins.signing_digests = vec![[0xcd; 32]];
+        assert_eq!(
+            check_pinned(&options, &pins, Trust::Dev),
+            Err("unknown_app"),
+            "a debug build's digest must be one this helper was built with"
+        );
+        pins.dev_signing_digests = vec![[0xab; 32]];
+        assert_eq!(check_pinned(&options, &pins, Trust::Dev), Ok(Trust::Dev));
+        assert_eq!(
+            check_pinned(&options, &pins, Trust::Release),
+            Err("unknown_app"),
+            "dev digests and packages are not release pins"
+        );
+        let mut other_app = options.clone();
+        other_app.package = "com.example.evil".into();
+        assert_eq!(
+            check_pinned(&other_app, &pins, Trust::Dev),
+            Err("unknown_app")
+        );
+        let mut software = options.clone();
+        software.attestation_level = 0;
+        software.keymint_level = 0;
+        assert_eq!(
+            check_pinned(&software, &pins, Trust::Dev),
+            Err("insecure_key")
+        );
+        let mut unlocked = options.clone();
+        unlocked.device_locked = false;
+        assert_eq!(
+            check_pinned(&unlocked, &pins, Trust::Dev),
+            Err("unverified_boot")
+        );
+        assert_eq!(check_pinned(&unlocked, &pins, Trust::Test), Ok(Trust::Test));
+    }
+
+    #[test]
+    fn rejects_each_weak_property_even_with_the_test_flag() {
         let base = Options::new(&[7; 32], NOW);
         type Case = (&'static str, Box<dyn Fn(&mut Options)>);
         let cases: Vec<Case> = vec![
@@ -928,22 +1020,25 @@ mod tests {
         for (expected, mutate) in cases {
             let mut options = base.clone();
             mutate(&mut options);
-            assert_eq!(check(&options, true).map(|_| ()), Err(expected));
+            assert_eq!(check(&options, Trust::Test).map(|_| ()), Err(expected));
         }
         let mut per_use_zero = base.clone();
         per_use_zero.auth_timeout = Some(0);
-        assert!(check(&per_use_zero, true).is_ok());
+        assert!(check(&per_use_zero, Trust::Test).is_ok());
     }
 
     #[test]
-    fn software_keys_and_unlocked_boot_need_the_dev_flag() {
+    fn software_keys_and_unlocked_boot_need_the_test_flag() {
         let mut software = Options::new(&[7; 32], NOW);
         software.attestation_level = 0;
         software.keymint_level = 0;
-        assert_eq!(check(&software, true).unwrap().security_level, "software");
+        assert_eq!(
+            check(&software, Trust::Test).unwrap().security_level,
+            "software"
+        );
         let mut unlocked = Options::new(&[7; 32], NOW);
         unlocked.device_locked = false;
-        assert!(check(&unlocked, true).is_ok());
+        assert!(check(&unlocked, Trust::Test).is_ok());
     }
 
     #[test]
@@ -959,7 +1054,7 @@ mod tests {
                 .into_vec(),
         );
         assert_eq!(
-            verify(&substituted, NOW, &dev_pins(), true).map_err(|r| r.code),
+            verify(&substituted, NOW, &dev_pins(), Trust::Test).map_err(|r| r.code),
             Err("key_mismatch")
         );
         let mut tampered = enrollment(&options, &key());
@@ -967,11 +1062,11 @@ mod tests {
         let last = leaf.len() - 40;
         leaf[last] ^= 1;
         tampered.attestation_chain[0] = b64::encode(&leaf);
-        assert!(verify(&tampered, NOW, &dev_pins(), true).is_err());
+        assert!(verify(&tampered, NOW, &dev_pins(), Trust::Test).is_err());
         let mut short = enrollment(&options, &key());
         short.attestation_chain.truncate(1);
         assert_eq!(
-            verify(&short, NOW, &dev_pins(), true).map_err(|r| r.code),
+            verify(&short, NOW, &dev_pins(), Trust::Test).map_err(|r| r.code),
             Err("invalid_chain")
         );
     }

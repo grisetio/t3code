@@ -3,6 +3,7 @@
 //! missing and writable; everything it writes is recorded with a backup in
 //! `installed-by-t3.json` so uninstall can restore files byte for byte.
 
+use crate::attestation::Trust;
 use crate::config::{self, UserConfig};
 use crate::rootsafe::{self, Policy};
 use crate::{MODULE_INSTALL_PATH, PROTOCOL_MARKER, keys};
@@ -1419,7 +1420,8 @@ pub fn key_file_bytes(
         attestation_summary: keys::AttestationSummary {
             package_name: verified.package_name.clone(),
             signing_cert_digest: verified.signing_cert_digest.clone(),
-            dev_attestation: verified.dev_attestation,
+            dev_attestation: verified.trust != Trust::Release,
+            test_attestation: verified.trust == Trust::Test,
         },
     };
     let mut bytes = serde_json::to_vec(&file).unwrap_or_default();

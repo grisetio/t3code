@@ -2,6 +2,7 @@
 //! TypeScript contracts and the Android signer.
 
 use serde_json::Value;
+use t3_elevation::attestation::Trust;
 use t3_elevation::keys::{self, EnrolledKey};
 use t3_elevation::verify::{self, Response};
 use t3_elevation::{b64, enroll, escape, payload};
@@ -152,8 +153,12 @@ fn enroll_parse() {
         assert_eq!(parsed.public_key, str_of(expected, "publicKey"));
         assert_eq!(parsed.challenge, str_of(expected, "challenge"));
         assert_eq!(
-            parsed.allow_dev_attestation,
+            parsed.trust != Trust::Release,
             expected["allowDevAttestation"].as_bool().unwrap()
+        );
+        assert_eq!(
+            parsed.trust == Trust::Test,
+            expected["allowTestAttestation"].as_bool().unwrap_or(false)
         );
         let spki = b64::decode(&parsed.public_key).unwrap();
         assert_eq!(
@@ -184,10 +189,24 @@ fn enroll_grammar_is_strict() {
         argv.into_iter().map(str::to_string).collect()
     };
     assert!(enroll::parse_command(&argv(&[])).is_some());
-    assert!(
+    assert_eq!(
         enroll::parse_command(&argv(&["--allow-dev-attestation"]))
             .unwrap()
-            .allow_dev_attestation
+            .trust,
+        Trust::Dev
+    );
+    assert_eq!(
+        enroll::parse_command(&argv(&["--allow-test-attestation"]))
+            .unwrap()
+            .trust,
+        Trust::Test
+    );
+    assert!(
+        enroll::parse_command(&argv(&[
+            "--allow-dev-attestation",
+            "--allow-test-attestation"
+        ]))
+        .is_none()
     );
     assert!(
         enroll::parse_command(&argv(&[

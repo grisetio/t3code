@@ -263,6 +263,171 @@
         "alg": "es256-der",
         "signature": "MEQCIC7rVEKfA3zyhkhDCty1_r0LyiimcloRNIqyhaJ1NaLQAiAcWL5eIe0XbST_a3mF2tHHI2PDhklHdflXMvV1ko1NBA"
       }
+    },
+    {
+      "name": "enroll_test_attestation",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsIi1uIiwiL3Vzci9sb2NhbC9saWIvdDMtZWxldmF0aW9uL3QzLWVsZXZhdGlvbiIsImVucm9sbCIsIi0tdXNlciIsImtncmlzZXQiLCItLWxhYmVsIiwiUGl4ZWwgOSBQcm8gRm9sZCIsIi0tcHVibGljLWtleSIsIk1Ga3dFd1lIS29aSXpqMENBUVlJS29aSXpqMERBUWNEUWdBRVVhZFlDRE9KanFHeGc4dlhOUXBBbVFlTWJ2SEI0WTZYRE5kb01EWHlYbjBCRUZJbkVyQzFwOF93Z1doVWhwaEtsT2FESHRyRWJuTmctcDJEU25xQm9RIiwiLS1jaGFsbGVuZ2UiLCJCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjIiwiLS1hbGxvdy10ZXN0LWF0dGVzdGF0aW9uIl0sImNvbW1hbmQiOnsiYXJndiI6WyIvdXNyL2xvY2FsL2xpYi90My1lbGV2YXRpb24vdDMtZWxldmF0aW9uIiwiZW5yb2xsIiwiLS11c2VyIiwia2dyaXNldCIsIi0tbGFiZWwiLCJQaXhlbCA5IFBybyBGb2xkIiwiLS1wdWJsaWMta2V5IiwiTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFVWFkWUNET0pqcUd4Zzh2WE5RcEFtUWVNYnZIQjRZNlhETmRvTURYeVhuMEJFRkluRXJDMXA4X3dnV2hVaHBoS2xPYURIdHJFYm5OZy1wMkRTbnFCb1EiLCItLWNoYWxsZW5nZSIsIkJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2MiLCItLWFsbG93LXRlc3QtYXR0ZXN0YXRpb24iXSwicmVzb2x2ZWRQYXRoIjoiL3Vzci9sb2NhbC9saWIvdDMtZWxldmF0aW9uL3QzLWVsZXZhdGlvbiIsIndhcm5pbmdzIjpbeyJjb2RlIjoidGVzdF9hdHRlc3RhdGlvbiIsImFyZyI6MTB9XX0sImN3ZCI6Ii9Vc2Vycy9rZ3Jpc2V0L3NyYy94Iiwic2VydmljZSI6InN1ZG8iLCJrZXlJZHMiOlsiZG9CYVk2YVlEQmdIVkNTaFB6SjNMUSIsInY4dWl0MEtvQjd1M0sxSXZwR2xNUmciXX0",
+      "decoded": {
+        "v": 1,
+        "kind": "sudo",
+        "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "issuedAt": 1793318400,
+        "expiresAt": 1793318500,
+        "host": {
+          "name": "macbook",
+          "machineId": "PrG9Q5lH63YpmOVmzMLgmceREYsvQFecxPfaK1Bht_k"
+        },
+        "user": "kgriset",
+        "uid": 501,
+        "runAs": "root",
+        "runAsGroup": null,
+        "argv": [
+          "sudo",
+          "-n",
+          "/usr/local/lib/t3-elevation/t3-elevation",
+          "enroll",
+          "--user",
+          "kgriset",
+          "--label",
+          "Pixel 9 Pro Fold",
+          "--public-key",
+          "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ",
+          "--challenge",
+          "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+          "--allow-test-attestation"
+        ],
+        "command": {
+          "argv": [
+            "/usr/local/lib/t3-elevation/t3-elevation",
+            "enroll",
+            "--user",
+            "kgriset",
+            "--label",
+            "Pixel 9 Pro Fold",
+            "--public-key",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ",
+            "--challenge",
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+            "--allow-test-attestation"
+          ],
+          "resolvedPath": "/usr/local/lib/t3-elevation/t3-elevation",
+          "warnings": [
+            {
+              "code": "test_attestation",
+              "arg": 10
+            }
+          ]
+        },
+        "cwd": "/Users/kgriset/src/x",
+        "service": "sudo",
+        "keyIds": ["doBaY6aYDBgHVCShPzJ3LQ", "v8uit0KoB7u3K1IvpGlMRg"]
+      },
+      "signature": {
+        "keyId": "doBaY6aYDBgHVCShPzJ3LQ",
+        "alg": "es256-der",
+        "signature": "MEQCIFYEGn7-CWBiTtICNPznslcj6FjbWjcKets6K9rNWW0EAiA1_s120piUJGYNPYZbSJt8pnfgVZusjSucwxTz_hyuNA"
+      }
+    },
+    {
+      "name": "enroll_dev_attestation",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsIi1uIiwiL3Vzci9sb2NhbC9saWIvdDMtZWxldmF0aW9uL3QzLWVsZXZhdGlvbiIsImVucm9sbCIsIi0tdXNlciIsImtncmlzZXQiLCItLWxhYmVsIiwiUGl4ZWwgOSBQcm8gRm9sZCIsIi0tcHVibGljLWtleSIsIk1Ga3dFd1lIS29aSXpqMENBUVlJS29aSXpqMERBUWNEUWdBRVVhZFlDRE9KanFHeGc4dlhOUXBBbVFlTWJ2SEI0WTZYRE5kb01EWHlYbjBCRUZJbkVyQzFwOF93Z1doVWhwaEtsT2FESHRyRWJuTmctcDJEU25xQm9RIiwiLS1jaGFsbGVuZ2UiLCJCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjIiwiLS1hbGxvdy1kZXYtYXR0ZXN0YXRpb24iXSwiY29tbWFuZCI6eyJhcmd2IjpbIi91c3IvbG9jYWwvbGliL3QzLWVsZXZhdGlvbi90My1lbGV2YXRpb24iLCJlbnJvbGwiLCItLXVzZXIiLCJrZ3Jpc2V0IiwiLS1sYWJlbCIsIlBpeGVsIDkgUHJvIEZvbGQiLCItLXB1YmxpYy1rZXkiLCJNRmt3RXdZSEtvWkl6ajBDQVFZSUtvWkl6ajBEQVFjRFFnQUVVYWRZQ0RPSmpxR3hnOHZYTlFwQW1RZU1idkhCNFk2WEROZG9NRFh5WG4wQkVGSW5FckMxcDhfd2dXaFVocGhLbE9hREh0ckVibk5nLXAyRFNucUJvUSIsIi0tY2hhbGxlbmdlIiwiQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3YyIsIi0tYWxsb3ctZGV2LWF0dGVzdGF0aW9uIl0sInJlc29sdmVkUGF0aCI6Ii91c3IvbG9jYWwvbGliL3QzLWVsZXZhdGlvbi90My1lbGV2YXRpb24iLCJ3YXJuaW5ncyI6W3siY29kZSI6ImRldl9hdHRlc3RhdGlvbiIsImFyZyI6MTB9XX0sImN3ZCI6Ii9Vc2Vycy9rZ3Jpc2V0L3NyYy94Iiwic2VydmljZSI6InN1ZG8iLCJrZXlJZHMiOlsiZG9CYVk2YVlEQmdIVkNTaFB6SjNMUSIsInY4dWl0MEtvQjd1M0sxSXZwR2xNUmciXX0",
+      "decoded": {
+        "v": 1,
+        "kind": "sudo",
+        "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "issuedAt": 1793318400,
+        "expiresAt": 1793318500,
+        "host": {
+          "name": "macbook",
+          "machineId": "PrG9Q5lH63YpmOVmzMLgmceREYsvQFecxPfaK1Bht_k"
+        },
+        "user": "kgriset",
+        "uid": 501,
+        "runAs": "root",
+        "runAsGroup": null,
+        "argv": [
+          "sudo",
+          "-n",
+          "/usr/local/lib/t3-elevation/t3-elevation",
+          "enroll",
+          "--user",
+          "kgriset",
+          "--label",
+          "Pixel 9 Pro Fold",
+          "--public-key",
+          "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ",
+          "--challenge",
+          "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+          "--allow-dev-attestation"
+        ],
+        "command": {
+          "argv": [
+            "/usr/local/lib/t3-elevation/t3-elevation",
+            "enroll",
+            "--user",
+            "kgriset",
+            "--label",
+            "Pixel 9 Pro Fold",
+            "--public-key",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ",
+            "--challenge",
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+            "--allow-dev-attestation"
+          ],
+          "resolvedPath": "/usr/local/lib/t3-elevation/t3-elevation",
+          "warnings": [
+            {
+              "code": "dev_attestation",
+              "arg": 10
+            }
+          ]
+        },
+        "cwd": "/Users/kgriset/src/x",
+        "service": "sudo",
+        "keyIds": ["doBaY6aYDBgHVCShPzJ3LQ", "v8uit0KoB7u3K1IvpGlMRg"]
+      },
+      "signature": {
+        "keyId": "doBaY6aYDBgHVCShPzJ3LQ",
+        "alg": "es256-der",
+        "signature": "MEUCIHqdzE1zC1WH4EaRWnjSGp02TR4AbudRMlirHXmdbCqxAiEA3nnND_3Ikw7sAdAMWuMHmAEw6sWpMYWIDlsRDKZ2gYc"
+      }
+    },
+    {
+      "name": "unresolved_program_by_uid",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoiIzAgKHJvb3QpIiwicnVuQXNHcm91cCI6bnVsbCwiYXJndiI6WyJzdWRvIiwiLXUiLCIjMCIsInRydWUiXSwiY29tbWFuZCI6eyJhcmd2IjpbInRydWUiXSwicmVzb2x2ZWRQYXRoIjpudWxsLCJ3YXJuaW5ncyI6W3siY29kZSI6InVucmVzb2x2ZWRfcHJvZ3JhbSJ9XX0sImN3ZCI6Ii9Vc2Vycy9rZ3Jpc2V0L3NyYy94Iiwic2VydmljZSI6InN1ZG8iLCJrZXlJZHMiOlsiZG9CYVk2YVlEQmdIVkNTaFB6SjNMUSJdfQ",
+      "decoded": {
+        "v": 1,
+        "kind": "sudo",
+        "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "issuedAt": 1793318400,
+        "expiresAt": 1793318500,
+        "host": {
+          "name": "macbook",
+          "machineId": "PrG9Q5lH63YpmOVmzMLgmceREYsvQFecxPfaK1Bht_k"
+        },
+        "user": "kgriset",
+        "uid": 501,
+        "runAs": "#0 (root)",
+        "runAsGroup": null,
+        "argv": ["sudo", "-u", "#0", "true"],
+        "command": {
+          "argv": ["true"],
+          "resolvedPath": null,
+          "warnings": [
+            {
+              "code": "unresolved_program"
+            }
+          ]
+        },
+        "cwd": "/Users/kgriset/src/x",
+        "service": "sudo",
+        "keyIds": ["doBaY6aYDBgHVCShPzJ3LQ"]
+      },
+      "signature": {
+        "keyId": "doBaY6aYDBgHVCShPzJ3LQ",
+        "alg": "es256-der",
+        "signature": "MEUCIAEni8L4nZXnhUOzJWs1NaQZlXadACWnE0bRm4zlofurAiEA1U964YijSKuaqOiWdhZIlBm3izAqhUsMMdRcGgkg1cM"
+      }
     }
   ],
   "enrollParse": [

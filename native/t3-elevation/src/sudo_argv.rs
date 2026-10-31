@@ -547,6 +547,27 @@ pub struct Described {
 }
 
 pub fn describe(sudo_argv: &[String], parsed: &Parsed, context: &Context) -> Described {
+    let mut described = describe_command(sudo_argv, parsed, context);
+    // Approving this enrolls a device the helper checks less strictly. Any
+    // argv, parsed or not, since approving an unparsed one runs it too.
+    let command = &mut described.command;
+    for (index, arg) in command.argv.iter().enumerate() {
+        match crate::enroll::trust_flag(arg) {
+            Some(crate::attestation::Trust::Dev) => {
+                command.warnings.push(Warning::at("dev_attestation", index));
+            }
+            Some(crate::attestation::Trust::Test) => {
+                command
+                    .warnings
+                    .push(Warning::at("test_attestation", index));
+            }
+            _ => {}
+        }
+    }
+    described
+}
+
+fn describe_command(sudo_argv: &[String], parsed: &Parsed, context: &Context) -> Described {
     let run_as = match (&parsed.user, &parsed.group) {
         (Some(user), _) => with_name(user, |uid| {
             crate::sys::user_by_uid(uid).map(|user| user.name)
@@ -1223,6 +1244,41 @@ mod tests {
             let sudo = argv(&["sudo", "-u", user, "/usr/bin/true"]);
             assert_eq!(parse(&sudo).mode, Mode::Unparsed, "{user}");
         }
+    }
+
+    /// Review finding 6: the phone says when approving enrolls a device with
+    /// relaxed attestation.
+    #[test]
+    fn relaxed_attestation_flags_are_warned() {
+        let tmp = std::env::temp_dir();
+        let shells = vec![];
+        let ctx = context(tmp.to_str().unwrap(), &[], &shells);
+        let helper = "/usr/local/lib/t3-elevation/t3-elevation";
+        let codes = |sudo: &[&str]| -> Vec<(String, Option<usize>)> {
+            let sudo = argv(sudo);
+            describe(&sudo, &parse(&sudo), &ctx)
+                .command
+                .warnings
+                .into_iter()
+                .filter(|warning| warning.code.ends_with("_attestation"))
+                .map(|warning| (warning.code, warning.arg))
+                .collect()
+        };
+        let enroll = ["sudo", helper, "enroll", "--user", "u"];
+        assert_eq!(codes(&enroll), vec![]);
+        assert_eq!(
+            codes(&[&enroll[..], &["--allow-dev-attestation"]].concat()),
+            vec![("dev_attestation".to_string(), Some(4))]
+        );
+        assert_eq!(
+            codes(&[&enroll[..], &["--allow-test-attestation"]].concat()),
+            vec![("test_attestation".to_string(), Some(4))]
+        );
+        // Unparsed sudo options show the raw argv, which still runs.
+        assert_eq!(
+            codes(&["sudo", "-E", helper, "install", "--allow-test-attestation"]),
+            vec![("test_attestation".to_string(), Some(3))]
+        );
     }
 
     #[test]

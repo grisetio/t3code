@@ -2,6 +2,7 @@
 //! request's `command.argv` matches it (`parseElevationEnrollCommand`), so
 //! the helper must accept nothing looser.
 
+use crate::attestation::Trust;
 use crate::b64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,7 +11,7 @@ pub struct EnrollCommand {
     pub label: String,
     pub public_key: String,
     pub challenge: String,
-    pub allow_dev_attestation: bool,
+    pub trust: Trust,
 }
 
 /// `<path>/t3-elevation enroll <options>`.
@@ -23,16 +24,17 @@ pub fn parse_command(argv: &[String]) -> Option<EnrollCommand> {
 }
 
 /// The options after `enroll`: each at most once, any order, nothing else.
+/// At most one of `--allow-dev-attestation` and `--allow-test-attestation`.
 pub fn parse_options(rest: &[String]) -> Option<EnrollCommand> {
     let mut values: [Option<&String>; 4] = [None; 4];
-    let mut allow_dev_attestation = false;
+    let mut trust = Trust::Release;
     let mut args = rest.iter();
     while let Some(option) = args.next() {
-        if option == "--allow-dev-attestation" {
-            if allow_dev_attestation {
+        if let Some(flag) = trust_flag(option) {
+            if trust != Trust::Release {
                 return None;
             }
-            allow_dev_attestation = true;
+            trust = flag;
             continue;
         }
         let slot = ["--user", "--label", "--public-key", "--challenge"]
@@ -53,6 +55,14 @@ pub fn parse_options(rest: &[String]) -> Option<EnrollCommand> {
         label: label.clone(),
         public_key: public_key.clone(),
         challenge: challenge.clone(),
-        allow_dev_attestation,
+        trust,
     })
+}
+
+pub fn trust_flag(option: &str) -> Option<Trust> {
+    match option {
+        "--allow-dev-attestation" => Some(Trust::Dev),
+        "--allow-test-attestation" => Some(Trust::Test),
+        _ => None,
+    }
 }
