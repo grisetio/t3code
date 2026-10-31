@@ -71,10 +71,14 @@ import { uncommittedChanges } from "./changes.ts";
 import { ElevationRunCancellation } from "./runCancellation.ts";
 import {
   checkSignature,
+  type HostCheck,
+  isManagedPath,
   isTrustedHelper,
   readEnrolledKeys,
+  readPathsWrittenByT3,
   readUserConfig,
   staticChecks,
+  withFixBy,
   type HostPaths,
 } from "./hostState.ts";
 import {
@@ -755,10 +759,34 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     }));
     // Agent sudo doesn't need the helper, so it doesn't count against `ready`;
     // adding and removing devices does.
-    const helperCheck =
+    const helperCheck: ReadonlyArray<HostCheck> =
       !helperInstalled && (listening || devices.length > 0)
-        ? [{ id: "helper", ok: false, message: untrustedHelperMessage }]
+        ? [
+            {
+              id: "helper",
+              ok: false,
+              message: untrustedHelperMessage,
+              missingPath: options.hostPaths.helperPath,
+            },
+          ]
         : [];
+    const hostChecks = [...host.checks, ...helperCheck];
+    const plannedChanges = helper?.plannedChanges ?? [];
+    const missingPaths = hostChecks.flatMap((check) =>
+      check.missingPath === undefined ? [] : [check.missingPath],
+    );
+    const managed = new Set<string>();
+    for (const path of missingPaths) {
+      if (yield* isManagedPath(path)) managed.add(path);
+    }
+    const fixContext = {
+      plannedChanges,
+      writtenByT3:
+        missingPaths.length === 0
+          ? new Set<string>()
+          : yield* readPathsWrittenByT3(options.hostPaths),
+      managed,
+    };
     return {
       supported: unsupported === null,
       ...(unsupported === null ? {} : { unsupportedReason: unsupported }),
@@ -767,8 +795,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       user: options.user,
       setupOutsideT3: helper?.setupOutsideT3 ?? false,
       helperInstalled,
-      checks: [...host.checks, ...helperCheck],
-      plannedChanges: helper?.plannedChanges ?? [],
+      checks: hostChecks.map((check) => withFixBy(check, fixContext)),
+      plannedChanges,
       devices,
     };
   }).pipe(Effect.withSpan("ElevationService.status"));
@@ -968,7 +996,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   const test: Effect.Effect<ElevationCheck, ElevationError> = Effect.gen(function* () {
     yield* requireSupported;
     if (listener === null) {
-      return { id: "live_test", ok: false, message: "This server doesn't receive approvals" };
+      return {
+        id: "live_test",
+        ok: false,
+        message: "This server doesn't receive approvals",
+        fixBy: "agent",
+      };
     }
     const own: OwnSudo = {
       argv: [options.sudoPath, "-n", "true"],
@@ -992,14 +1025,21 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         message: succeeded
           ? "sudo -n succeeded without asking a device"
           : "sudo -n doesn't reach device approval",
+        fixBy: "agent",
       };
     }
+    // The user declined or let it expire; nothing is broken.
     if (own.outcome !== "approved") {
       return { id: "live_test", ok: false, message: "The test wasn't approved on a device" };
     }
     return succeeded
       ? { id: "live_test", ok: true, message: "sudo -n is approved on a device" }
-      : { id: "live_test", ok: false, message: "sudo -n failed after approval" };
+      : {
+          id: "live_test",
+          ok: false,
+          message: "sudo -n failed after approval",
+          fixBy: "agent",
+        };
   }).pipe(Effect.withSpan("ElevationService.test"));
 
   const respond = Effect.fn("ElevationService.respond")(function* (input: ElevationRespondInput) {

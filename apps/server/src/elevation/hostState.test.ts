@@ -16,9 +16,13 @@ import * as Result from "effect/Result";
 
 import {
   checkSignature,
+  type FixContext,
+  isManagedPath,
   isTrustedHelper,
   moduleProtocol,
+  readPathsWrittenByT3,
   staticChecks,
+  withFixBy,
   type HostPaths,
 } from "./hostState.ts";
 
@@ -166,6 +170,8 @@ describe("staticChecks", () => {
       expect(result.checks.find((check) => check.id === "config")?.message).toContain(
         "points at another T3 server",
       );
+      // A misplaced line and an incompatible module aren't missing parts.
+      expect(result.checks.flatMap((check) => check.missingPath ?? [])).toEqual([]);
     }).pipe(Effect.scoped),
   );
 
@@ -187,6 +193,14 @@ describe("staticChecks", () => {
       );
       const missingInclude = yield* staticChecks(paths, { user: "me", socketPath });
       expect(okIds(missingInclude.checks)[0]).toBe("pam_include:fail");
+
+      const local = NodePath.join(paths.pamDir, "sudo_local");
+      yield* Effect.promise(() => NodeFSP.writeFile(local, "auth sufficient pam_tid.so\n"));
+      const missingLine = yield* staticChecks(paths, { user: "me", socketPath });
+      expect(missingLine.checks.find((check) => check.id === "pam:sudo_local")).toMatchObject({
+        ok: false,
+        missingPath: local,
+      });
     }).pipe(Effect.scoped),
   );
 });
@@ -215,6 +229,103 @@ describe("isTrustedHelper", () => {
 
       yield* Effect.promise(() => NodeFSP.rm(paths.helperPath));
       expect(yield* isTrustedHelper(paths)).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("withFixBy", () => {
+  const pam = "/etc/pam.d/sudo_local";
+  const missingLine = {
+    id: "pam:sudo_local",
+    ok: false,
+    message: `PAM line missing in ${pam}`,
+    missingPath: pam,
+  };
+  const repairable: FixContext = {
+    plannedChanges: [{ path: pam, summary: "add the device approval lines" }],
+    writtenByT3: new Set([pam]),
+    managed: new Set(),
+  };
+  const fixBy = (check: typeof missingLine | object, context: Partial<FixContext> = {}) =>
+    withFixBy({ id: "x", ok: false, message: "", ...check }, { ...repairable, ...context }).fixBy;
+
+  it("leaves passing checks without a fixer and keeps missingPath off the wire", () => {
+    expect(withFixBy({ ...missingLine, ok: true }, repairable)).toEqual({
+      id: "pam:sudo_local",
+      ok: true,
+      message: `PAM line missing in ${pam}`,
+    });
+  });
+
+  it("re-adds a missing line T3 wrote on a file nothing else manages", () => {
+    expect(fixBy(missingLine)).toBe("t3");
+  });
+
+  it("re-adds this phone's key anywhere", () => {
+    expect(fixBy({ id: "devices" }, { plannedChanges: [], writtenByT3: new Set() })).toBe("t3");
+  });
+
+  it("hands the same line to an agent when Nix manages the file", () => {
+    expect(fixBy(missingLine, { managed: new Set([pam]) })).toBe("agent");
+  });
+
+  it("hands parts T3 didn't write, or that install can't write, to an agent", () => {
+    expect(fixBy(missingLine, { writtenByT3: new Set() })).toBe("agent");
+    expect(fixBy(missingLine, { plannedChanges: [] })).toBe("agent");
+    // Install refuses to change anything while one path is blocked.
+    expect(
+      fixBy(missingLine, {
+        plannedChanges: [
+          ...repairable.plannedChanges,
+          { path: "/etc/t3-elevation/users/me.toml", summary: "can't change: points elsewhere" },
+        ],
+      }),
+    ).toBe("agent");
+  });
+
+  it("hands a hand-edited stack or an unknown cause to an agent", () => {
+    expect(fixBy({ id: "pam:sudo_local", message: "PAM line isn't first" })).toBe("agent");
+    expect(fixBy({ id: "pam_include" })).toBe("agent");
+  });
+});
+
+describe("isManagedPath", () => {
+  it.effect("treats symlinks and Nix store paths as managed elsewhere", () =>
+    Effect.gen(function* () {
+      const { paths } = yield* layout({
+        platform: "darwin",
+        pam: { sudo_local: "auth sufficient MODULE\n" },
+        protocol: 1,
+      });
+      const local = NodePath.join(paths.pamDir, "sudo_local");
+      expect(yield* isManagedPath(local)).toBe(false);
+      expect(yield* isManagedPath(NodePath.join(paths.pamDir, "missing"))).toBe(false);
+      expect(yield* isManagedPath("/nix/store/abc-t3-elevation/lib/pam_t3_elevation.so")).toBe(
+        true,
+      );
+      const linked = NodePath.join(paths.pamDir, "sudo_linked");
+      yield* Effect.promise(() => NodeFSP.symlink(local, linked));
+      expect(yield* isManagedPath(linked)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("readPathsWrittenByT3", () => {
+  it.effect("reads the paths installed-by-t3.json records, and none without it", () =>
+    Effect.gen(function* () {
+      const { paths } = yield* layout({ platform: "darwin", pam: {}, protocol: 1 });
+      expect([...(yield* readPathsWrittenByT3(paths))]).toEqual([]);
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(paths.etcDir, "installed-by-t3.json"),
+          JSON.stringify({
+            version: 1,
+            user: "me",
+            changes: [{ path: "/etc/pam.d/sudo_local", action: "created" }],
+          }),
+        ),
+      );
+      expect([...(yield* readPathsWrittenByT3(paths))]).toEqual(["/etc/pam.d/sudo_local"]);
     }).pipe(Effect.scoped),
   );
 });

@@ -248,8 +248,13 @@ const includesSudo = (text: string) =>
     /^(@include\s+sudo|-?auth\s+(include|substack)\s+sudo)$/.test(line),
   );
 
+/** A check plus, when it fails because a part is gone, where install would put it back. */
+export interface HostCheck extends ElevationCheck {
+  readonly missingPath?: string;
+}
+
 export interface StaticChecks {
-  readonly checks: ReadonlyArray<ElevationCheck>;
+  readonly checks: ReadonlyArray<HostCheck>;
   readonly config: UserConfig | null;
   readonly keys: ReadonlyArray<EnrolledKey>;
 }
@@ -258,9 +263,10 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
   paths: HostPaths,
   input: { readonly user: string; readonly socketPath: string },
 ) {
-  const checks: Array<ElevationCheck> = [];
+  const checks: Array<HostCheck> = [];
   const pass = (id: string, message: string) => checks.push({ id, ok: true, message });
-  const fail = (id: string, message: string) => checks.push({ id, ok: false, message });
+  const fail = (id: string, message: string, missingPath?: string) =>
+    checks.push({ id, ok: false, message, ...(missingPath === undefined ? {} : { missingPath }) });
 
   const pamFiles =
     paths.platform === "darwin"
@@ -282,7 +288,7 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
     const path = NodePath.join(paths.pamDir, file);
     const text = yield* readText(path);
     const result = text === null ? "missing" : parse(text);
-    if (result === "missing") fail(`pam:${file}`, `PAM line missing in ${path}`);
+    if (result === "missing") fail(`pam:${file}`, `PAM line missing in ${path}`, path);
     else if (result === "misplaced")
       fail(`pam:${file}`, `PAM line in ${path} isn't first or has the wrong control`);
     else {
@@ -293,7 +299,7 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
   for (const modulePath of modulePaths) {
     const binary = yield* Effect.promise(() => NodeFSP.readFile(modulePath).catch(() => null));
     const protocol = binary === null ? null : moduleProtocol(binary);
-    if (binary === null) fail("module", `PAM module missing at ${modulePath}`);
+    if (binary === null) fail("module", `PAM module missing at ${modulePath}`, modulePath);
     else if (protocol !== PROTOCOL_VERSION)
       fail("module", `PAM module at ${modulePath} isn't a compatible version`);
     else pass("module", `PAM module at ${modulePath} is compatible`);
@@ -301,7 +307,7 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
 
   const config = yield* readUserConfig(paths, input.user);
   const configFile = configPath(paths, input.user);
-  if (config === null) fail("config", `${configFile} is missing`);
+  if (config === null) fail("config", `${configFile} is missing`, configFile);
   else if (!(yield* isRootOwned(paths, configFile)))
     fail("config", `${configFile} or a parent directory isn't root-owned and closed to others`);
   else if (config.version !== 1) fail("config", `${configFile} has an unsupported version`);
@@ -312,7 +318,8 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
 
   const keysPath = keysDir(paths, input.user);
   const keysStat = yield* lstat(keysPath);
-  if (keysStat === null || !keysStat.isDirectory()) fail("keys", `${keysPath} is missing`);
+  if (keysStat === null) fail("keys", `${keysPath} is missing`, keysPath);
+  else if (!keysStat.isDirectory()) fail("keys", `${keysPath} isn't a directory`);
   else if (!(yield* isRootOwned(paths, keysPath)))
     fail("keys", `${keysPath} or a parent directory isn't root-owned and closed to others`);
   else pass("keys", `${keysPath} is root-owned`);
@@ -323,3 +330,63 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
 
   return { checks, config, keys } satisfies StaticChecks;
 });
+
+const MANAGED_PREFIXES = ["/nix/store/", "/etc/static/"];
+
+/**
+ * Another tool owns the path, so a rebuild would undo a direct edit: a
+ * symlink (nix-darwin and NixOS link `/etc` into `/etc/static`), or a file
+ * in the Nix store.
+ */
+export const isManagedPath = Effect.fn("ElevationHostState.isManagedPath")(function* (
+  path: string,
+) {
+  if (MANAGED_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
+  const stat = yield* lstat(path);
+  if (stat?.isSymbolicLink() === true) return true;
+  const real = yield* Effect.promise(() => NodeFSP.realpath(path).catch(() => path));
+  return MANAGED_PREFIXES.some((prefix) => real.startsWith(prefix));
+});
+
+const Manifest = Schema.Struct({ changes: Schema.Array(Schema.Struct({ path: Schema.String })) });
+const decodeManifest = Schema.decodeUnknownOption(Schema.fromJsonString(Manifest));
+
+/** Paths `installed-by-t3.json` records T3 writing; empty when there is none. */
+export const readPathsWrittenByT3 = Effect.fn("ElevationHostState.readPathsWrittenByT3")(function* (
+  paths: HostPaths,
+) {
+  const text = yield* readText(NodePath.join(paths.etcDir, "installed-by-t3.json"));
+  const manifest = text === null ? null : decodeManifest(text);
+  return new Set(
+    manifest === null || manifest._tag === "None"
+      ? []
+      : manifest.value.changes.map((change) => change.path),
+  );
+});
+
+export interface FixContext {
+  /** What the helper's install would change; a blocked entry stops install entirely. */
+  readonly plannedChanges: ReadonlyArray<{ readonly path: string; readonly summary: string }>;
+  readonly writtenByT3: ReadonlySet<string>;
+  readonly managed: ReadonlySet<string>;
+}
+
+/**
+ * T3 repairs a failing part only when it knows the cause, the repair is the
+ * install it already runs, and the repair lasts: the part is missing, install
+ * would put back exactly that path, nothing else owns the path, and T3 wrote
+ * it in the first place. Everything else goes to an agent with the diagnosis.
+ * The phone's key is always T3's to add back.
+ */
+export function withFixBy(check: HostCheck, context: FixContext): ElevationCheck {
+  const { missingPath: _, ...wire } = check;
+  if (check.ok) return wire;
+  if (check.id === "devices") return { ...wire, fixBy: "t3" };
+  const path = check.missingPath;
+  const installCanWrite =
+    path !== undefined &&
+    context.plannedChanges.some((change) => change.path === path) &&
+    !context.plannedChanges.some((change) => change.summary.startsWith("can't change"));
+  const t3 = installCanWrite && !context.managed.has(path) && context.writtenByT3.has(path);
+  return { ...wire, fixBy: t3 ? "t3" : "agent" };
+}
