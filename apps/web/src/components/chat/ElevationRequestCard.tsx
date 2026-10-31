@@ -8,9 +8,10 @@ import {
   type ElevationRequestItem,
 } from "@t3tools/client-runtime/elevation";
 import {
-  elevationCommandLine,
-  type ElevationCommandLine,
-} from "@t3tools/client-runtime/elevation-command-line";
+  elevationCommandDisplay,
+  elevationCommandMoreLabel,
+  type ElevationCommandDisplay,
+} from "@t3tools/client-runtime/elevation-command";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   escapeElevationDisplayText,
@@ -84,7 +85,7 @@ export function ElevationRequestCard(props: {
   const status = elevationRequestStatusView(item);
   const [expanded, setExpanded] = useState(false);
   const { view, argv, problem } = itemView(item);
-  const command = elevationCommandLine({ agentCommand: item.agentCommand, argv });
+  const command = elevationCommandDisplay({ agentCommand: item.agentCommand, commandArgv: argv });
   const reason = item.explanation ? escapeElevationDisplayText(item.explanation) : null;
   if (status.kind === "pending" && props.visibility === "local") {
     return (
@@ -109,7 +110,7 @@ export function ElevationRequestCard(props: {
       icon={<Icon className="size-3.5 text-icon-muted" aria-hidden />}
       label={
         <>
-          {status.label} · {command.firstLine}
+          {status.label} · {command.lines[0]}
         </>
       }
       aria-expanded={expanded}
@@ -130,7 +131,7 @@ function PendingElevationRequest(props: {
   readonly environmentId: EnvironmentId;
   readonly item: ElevationRequestItem;
   readonly view: ReturnType<typeof itemView>["view"];
-  readonly command: ElevationCommandLine;
+  readonly command: ElevationCommandDisplay;
   readonly reason: string | null;
   readonly problem: string | null;
 }) {
@@ -212,10 +213,14 @@ function PendingElevationRequest(props: {
 }
 
 /** First line, two rows at most; a long command expands on click. */
-function CommandLine(props: { readonly command: ElevationCommandLine; readonly lead?: boolean }) {
+function CommandLine(props: {
+  readonly command: ElevationCommandDisplay;
+  readonly lead?: boolean;
+}) {
   const { command } = props;
   const [open, setOpen] = useState(false);
-  const expandable = command.rest !== null;
+  const more = elevationCommandMoreLabel(command);
+  const expandable = more !== null;
   const text = (
     <>
       <code
@@ -225,15 +230,9 @@ function CommandLine(props: { readonly command: ElevationCommandLine; readonly l
             : "line-clamp-2 font-mono break-all"
         }
       >
-        {command.firstLine}
-        {open && command.rest !== null ? `\n${command.rest}` : null}
+        {open ? command.lines.join("\n") : command.lines[0]}
       </code>
-      {expandable && !open ? (
-        <span className="text-muted-foreground">
-          +{command.moreLines} more line{command.moreLines === 1 ? "" : "s"}
-          {command.programs.length > 0 ? ` · ${command.programs.join(", ")}` : ""}
-        </span>
-      ) : null}
+      {expandable && !open ? <span className="text-muted-foreground">{more}</span> : null}
     </>
   );
   const className = props.lead

@@ -3,7 +3,7 @@ import {
   ELEVATION_APPROVE_ON_PHONE,
   elevationDecodeFailureMessage,
 } from "@t3tools/client-runtime/elevation";
-import { elevationCommandLine } from "@t3tools/client-runtime/elevation-command-line";
+import { elevationCommandDisplay } from "@t3tools/client-runtime/elevation-command";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import { escapeElevationDisplayText } from "@t3tools/contracts";
@@ -30,10 +30,12 @@ function headline(entry: PendingElevationRequest): string {
   if (view.enroll) return `Add device ${view.enroll.label}`;
   if (entry.request.explanation)
     return `“${escapeElevationDisplayText(entry.request.explanation)}”`;
-  return elevationCommandLine({
-    agentCommand: entry.request.agentCommand,
-    argv: payload.command.argv,
-  }).firstLine;
+  return (
+    elevationCommandDisplay({
+      agentCommand: entry.request.agentCommand,
+      commandArgv: payload.command.argv,
+    }).lines[0] ?? ""
+  );
 }
 
 /**

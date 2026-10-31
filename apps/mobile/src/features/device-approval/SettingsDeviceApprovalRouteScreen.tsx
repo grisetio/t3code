@@ -33,7 +33,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
-import { confirmHaptic } from "./confirmHaptic";
+import { approvalHaptic } from "./approvalHaptics";
 import { createPhoneKey } from "./deviceApprovalEnrollment";
 import { deviceApprovalKeys, type DeviceApprovalKeyRecord } from "./deviceApprovalKeys";
 import {
@@ -244,7 +244,7 @@ function DeviceApprovalGroup(props: {
     const remaining = deviceApprovalFailingChecks(current, nextPhone);
     if (remaining.length === 0 && current.ready) {
       setPhase("idle");
-      confirmHaptic();
+      approvalHaptic("setupComplete");
       return;
     }
     const plan = planDeviceApprovalFix(current, nextPhone, { canRepair });

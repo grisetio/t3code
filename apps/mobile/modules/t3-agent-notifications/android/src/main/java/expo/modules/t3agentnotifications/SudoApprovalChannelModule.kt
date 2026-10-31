@@ -35,7 +35,7 @@ class SudoApprovalChannelModule : Module() {
         if (channelPage) {
           Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            .putExtra(Settings.EXTRA_CHANNEL_ID, SUDO_APPROVALS_CHANNEL)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, SudoApprovals.CHANNEL)
         } else {
           Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
@@ -53,15 +53,15 @@ class SudoApprovalChannelModule : Module() {
     if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return "app_off"
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return "on"
     val manager = context.getSystemService(NotificationManager::class.java)
-    val channel = manager.getNotificationChannel(SUDO_APPROVALS_CHANNEL) ?: return "missing"
+    // The channel is the setting, so make sure it exists before the user is sent to it.
+    val channel =
+      manager.getNotificationChannel(SudoApprovals.CHANNEL)
+        ?: SudoApprovals.channel()?.also(manager::createNotificationChannel)
+        ?: return "missing"
     val groupBlocked =
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
         channel.group?.let { manager.getNotificationChannelGroup(it)?.isBlocked } == true
     val blocked = channel.importance == NotificationManager.IMPORTANCE_NONE || groupBlocked
     return if (blocked) "off" else "on"
-  }
-
-  private companion object {
-    const val SUDO_APPROVALS_CHANNEL = "sudo-approvals"
   }
 }

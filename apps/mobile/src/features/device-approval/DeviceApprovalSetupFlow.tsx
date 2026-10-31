@@ -22,7 +22,7 @@ import {
   deviceApprovalSignerErrorMessage,
 } from "./deviceApprovalSigner";
 import { useComparisonCode } from "./ElevationRequestDetails";
-import { confirmHaptic } from "./confirmHaptic";
+import { approvalHaptic } from "./approvalHaptics";
 
 type Step = "intro" | "approve" | "terminal" | "done";
 
@@ -82,7 +82,7 @@ export function DeviceApprovalSetupFlow(props: {
     deviceApprovalKeys.write(environmentId, phoneKey.record).then(() => {
       setPassword("");
       setStep("done");
-      confirmHaptic();
+      approvalHaptic("setupComplete");
     });
 
   const createKey = () =>

@@ -39,15 +39,35 @@ export const elevationNotificationIntentAtom = Atom.make<ElevationNotificationIn
   null,
 ).pipe(Atom.keepAlive, Atom.withLabel("mobile:elevation-notification-intent"));
 
-export function rememberElevationNotificationTap(deepLink: string, tappedAt: number): void {
+export function parseElevationNotificationTap(
+  deepLink: string,
+  tappedAt: number,
+): ElevationNotificationIntent | null {
   const match = /^\/threads\/([^/]+)\/([^/]+)$/.exec(deepLink);
-  if (!match?.[1] || !match[2]) return;
-  appAtomRegistry.set(elevationNotificationIntentAtom, {
+  if (!match?.[1] || !match[2]) return null;
+  return {
     environmentId: decodeURIComponent(match[1]),
     threadId: decodeURIComponent(match[2]),
     tappedAt,
-  });
+  };
 }
+
+export function rememberElevationNotificationTap(deepLink: string, tappedAt: number): void {
+  const intent = parseElevationNotificationTap(deepLink, tappedAt);
+  if (intent !== null) appAtomRegistry.set(elevationNotificationIntentAtom, intent);
+}
+
+/** A sudo push opened over the lock screen; the app shows only that request until it ends. */
+export interface ElevationLockScreenSession {
+  readonly intent: ElevationNotificationIntent;
+  /** Android's lock screen hides notification content, so the card hides the request too. */
+  readonly hideContent: boolean;
+}
+
+export const elevationLockScreenAtom = Atom.make<ElevationLockScreenSession | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:elevation-lock-screen"),
+);
 
 /**
  * The request a tapped push was about: pending in that thread and created

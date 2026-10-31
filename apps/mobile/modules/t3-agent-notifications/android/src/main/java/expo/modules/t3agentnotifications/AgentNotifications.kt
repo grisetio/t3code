@@ -89,6 +89,7 @@ object AgentNotifications {
         it.tag?.startsWith("$ALERT_TAG-summary:") == true
     }
       .forEach { manager.cancel(it.tag, it.id) }
+    SudoApprovals.clear(context)
   }
 
   /** Records the thread route the app is showing, or null when none is open. */
@@ -151,7 +152,10 @@ object AgentNotifications {
       )
       val visibleThread = threadOnScreen
       val onScreen = resumed && visibleThread != null && data["alert_path"] == visibleThread
-      if (!onScreen) {
+      if (SudoApprovals.isSudoApproval(data)) {
+        // The open thread already shows the request inline.
+        if (!onScreen) SudoApprovals.post(context, data, alertId)
+      } else if (!onScreen) {
         postAlert(context, scheme, data, alertId)
       }
       prefs.edit().remove("seenAlerts").putString(
@@ -310,13 +314,14 @@ object AgentNotifications {
   private fun channels(context: Context) {
     if (Build.VERSION.SDK_INT >= 26) {
       manager(context).createNotificationChannels(
-        listOf(
+        listOfNotNull(
           NotificationChannel(ALERT_CHANNEL, "Agent alerts", NotificationManager.IMPORTANCE_HIGH),
           NotificationChannel(
             ACTIVITY_CHANNEL,
             "Ongoing agent activity",
             NotificationManager.IMPORTANCE_LOW
           ),
+          SudoApprovals.channel(),
         )
       )
     }

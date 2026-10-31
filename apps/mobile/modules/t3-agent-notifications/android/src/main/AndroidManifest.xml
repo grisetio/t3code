@@ -10,5 +10,14 @@
     </service>
     <receiver android:name=".AgentActivityDismissReceiver" android:exported="false" />
     <receiver android:name=".AgentActivityExpiryReceiver" android:exported="false" />
+    <!-- showWhenLocked lets a tapped sudo push open without unlocking; it only forwards the tap. -->
+    <activity
+      android:name=".SudoApprovalActivity"
+      android:exported="false"
+      android:showWhenLocked="true"
+      android:excludeFromRecents="true"
+      android:noHistory="true"
+      android:taskAffinity=""
+      android:theme="@android:style/Theme.Translucent.NoTitleBar" />
   </application>
 </manifest>

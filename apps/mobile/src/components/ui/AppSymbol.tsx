@@ -66,6 +66,7 @@ import IconFilter from "@tabler/icons-react-native/IconFilter";
 import IconFilterFilled from "@tabler/icons-react-native/IconFilterFilled";
 import IconFolder from "@tabler/icons-react-native/IconFolder";
 import IconFolderOpen from "@tabler/icons-react-native/IconFolderOpen";
+import IconFingerprint from "@tabler/icons-react-native/IconFingerprint";
 import IconHeadphones from "@tabler/icons-react-native/IconHeadphones";
 import IconFolderPlus from "@tabler/icons-react-native/IconFolderPlus";
 import IconGitPullRequestClosed from "@tabler/icons-react-native/IconGitPullRequestClosed";
@@ -306,6 +307,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   desktop_windows: IconDeviceDesktop,
   edit: IconEdit,
   error: IconAlertCircle,
+  fingerprint: IconFingerprint,
   folder: IconFolder,
   folder_open: IconFolderOpen,
   keyboard: IconKeyboard,
