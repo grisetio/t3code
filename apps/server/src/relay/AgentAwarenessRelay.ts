@@ -527,11 +527,12 @@ export const make = Effect.gen(function* () {
     const threadShell = yield* threads.getThreadShell(threadId);
     if (
       threadShell?.lineage.relationshipToParent === "subagent" &&
+      threadShell.pendingRuntimeRequest?.elevation !== true &&
       !(yield* Ref.get(publishedStateByThreadRef)).has(threadId)
     ) {
-      // Subagents never project activity, so the relay holds no row to clear.
-      // Their events would otherwise publish a tombstone each, and every
-      // publish re-delivers the user's aggregate.
+      // Subagents project activity only while they wait on a sudo, so
+      // otherwise the relay holds no row to clear. Their events would publish
+      // a tombstone each, and every publish re-delivers the user's aggregate.
       return;
     }
     const thread =
