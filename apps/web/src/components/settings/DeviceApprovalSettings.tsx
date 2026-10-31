@@ -4,6 +4,12 @@ import {
   elevationFailureMessage,
   elevationSudoApproval,
 } from "@t3tools/client-runtime/elevation";
+import {
+  deviceApprovalFailingChecks,
+  deviceApprovalInstalled,
+  deviceApprovalState,
+  planDeviceApprovalFix,
+} from "@t3tools/client-runtime/elevation-fix";
 import { environmentSupportsDeviceApproval } from "@t3tools/client-runtime/state/elevation";
 import {
   isAtomCommandInterrupted,
@@ -27,6 +33,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { useDeviceApprovalAgentHandoff } from "./useDeviceApprovalAgentHandoff";
 
 const SECURITY_LEVEL_LABELS: Record<ElevationDevice["securityLevel"], string> = {
   strongbox: "StrongBox",
@@ -54,7 +61,7 @@ export function DeviceApprovalSettings() {
           <EnvironmentDeviceApproval
             key={environment.environmentId}
             environmentId={environment.environmentId}
-            title={supported.length === 1 ? "Device approval" : environment.label}
+            machine={environment.label}
           />
         ))
       )}
@@ -64,13 +71,13 @@ export function DeviceApprovalSettings() {
 
 function EnvironmentDeviceApproval(props: {
   readonly environmentId: EnvironmentId;
-  readonly title: string;
+  readonly machine: string;
 }) {
   const status = useEnvironmentQuery(
     elevation.status({ environmentId: props.environmentId, input: {} }),
   );
   return (
-    <SettingsSection id="device-approval" title={props.title}>
+    <SettingsSection id="device-approval" title={props.machine}>
       {status.data === null ? (
         <SettingsRow
           title={status.error === null ? "Checking this machine…" : "Couldn't check this machine"}
@@ -86,6 +93,7 @@ function EnvironmentDeviceApproval(props: {
       ) : (
         <DeviceApprovalStatus
           environmentId={props.environmentId}
+          machine={props.machine}
           status={status.data}
           refreshing={status.isPending}
           onRefresh={status.refresh}
@@ -95,77 +103,124 @@ function EnvironmentDeviceApproval(props: {
   );
 }
 
+const STATE_BADGES = {
+  on: { label: "On", variant: "success" },
+  needs_fixing: { label: "Needs fixing", variant: "warning" },
+  off: { label: "Off", variant: "secondary" },
+} as const;
+
 function DeviceApprovalStatus(props: {
   readonly environmentId: EnvironmentId;
+  readonly machine: string;
   readonly status: ElevationStatus;
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
 }) {
   const { status } = props;
+  const handoff = useDeviceApprovalAgentHandoff();
+  const [fixNote, setFixNote] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   if (!status.supported) {
     return (
       <SettingsRow
         title="Not supported on this machine"
-        description={status.unsupportedReason ?? "Agent sudo keeps asking for the password here."}
+        description={status.unsupportedReason ?? "Agents' sudo keeps asking for the password here."}
       />
     );
   }
-  const installed = status.ownsApprovals || status.devices.length > 0;
+  // Web holds no phone key, and every repair T3 does itself sends one.
+  const state = deviceApprovalState(status, null);
+  const installed = deviceApprovalInstalled(status);
   const approval = elevationSudoApproval(status);
+  const badge = STATE_BADGES[state];
+  const fix = () => {
+    const plan = planDeviceApprovalFix(status, null, { canRepair: false });
+    if (plan.kind === "phone") {
+      setFixNote("Fix this from your phone: open T3, then Settings → Device approval.");
+    } else if (plan.kind === "agent") {
+      setFixNote(null);
+      void handoff({
+        environmentId: props.environmentId,
+        machine: props.machine,
+        status,
+        failing: deviceApprovalFailingChecks(status, null),
+      });
+    }
+  };
   return (
     <>
       <SettingsRow
-        title={status.ready ? "Ready" : installed ? "Needs attention" : "Not set up"}
+        title={props.machine}
         description={
-          status.ready
+          state === "on"
             ? "An agent's sudo waits for approval on your phone, one command per approval."
-            : "Agent sudo asks for the password as usual."
+            : state === "needs_fixing"
+              ? "Agents' sudo will ask for the password"
+              : "Approve agents' sudo on this machine with your phone. Set it up in the T3 app on Android, under Settings → Device approval."
         }
-        status={
-          <Badge variant={status.ready ? "success" : installed ? "warning" : "secondary"}>
-            {status.ready ? "Ready" : installed ? "Incomplete" : "Off"}
-          </Badge>
-        }
+        status={<Badge variant={badge.variant}>{badge.label}</Badge>}
         control={
-          <Button variant="outline" size="xs" disabled={props.refreshing} onClick={props.onRefresh}>
-            Check again
-          </Button>
+          state === "needs_fixing" ? (
+            <Button size="xs" onClick={fix}>
+              Fix
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={props.refreshing}
+              onClick={props.onRefresh}
+            >
+              Check again
+            </Button>
+          )
         }
       >
-        {status.checks.length > 0 ? (
-          <ul className="flex flex-col gap-1 text-xs">
-            {status.checks.map((check) => (
-              <li key={check.id}>
-                <CheckLine check={check} />
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        {fixNote !== null ? <p className="text-xs text-muted-foreground">{fixNote}</p> : null}
       </SettingsRow>
       {installed ? (
-        <TestRow
-          environmentId={props.environmentId}
-          unavailableReason={approval.testUnavailableReason}
-        />
-      ) : (
-        <SetUpRow status={status} />
-      )}
-      {status.devices.map((device) => (
-        <DeviceRow
-          key={device.keyId}
-          environmentId={props.environmentId}
-          device={device}
-          revocable={status.helperInstalled}
-        />
-      ))}
-      {status.setupOutsideT3 ? (
+        <SettingsRow
+          title="Details"
+          control={
+            <Button
+              variant="ghost"
+              size="xs"
+              aria-expanded={detailsOpen}
+              onClick={() => setDetailsOpen((open) => !open)}
+            >
+              {detailsOpen ? "Hide" : "Show"}
+            </Button>
+          }
+        >
+          {detailsOpen && status.checks.length > 0 ? (
+            <ul className="flex flex-col gap-1 text-xs">
+              {status.checks.map((check) => (
+                <li key={check.id}>
+                  <CheckLine check={check} />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </SettingsRow>
+      ) : null}
+      {detailsOpen
+        ? status.devices.map((device) => (
+            <DeviceRow
+              key={device.keyId}
+              environmentId={props.environmentId}
+              device={device}
+              revocable={status.helperInstalled}
+            />
+          ))
+        : null}
+      {detailsOpen && status.setupOutsideT3 ? (
         <SettingsRow
           title="Other parts were set up outside T3"
           description="Turning device approval off leaves them in place."
         />
       ) : null}
       {/* Without the root-owned helper these would fail; the helper check says why. */}
-      {installed && status.helperInstalled ? (
+      {detailsOpen && installed && status.helperInstalled ? (
         <TurnOffRow
           environmentId={props.environmentId}
           phoneFirst={status.devices.length > 0}
@@ -186,85 +241,6 @@ function CheckLine(props: { readonly check: ElevationCheck }) {
       )}
       <span className="min-w-0 break-words text-muted-foreground">{props.check.message}</span>
     </span>
-  );
-}
-
-/** The live half of verification: only a real approval proves sudo reaches the module. */
-function TestRow(props: {
-  readonly environmentId: EnvironmentId;
-  readonly unavailableReason: string | null;
-}) {
-  const test = useAtomCommand(elevation.test, "test device approval");
-  const canTest = useAtomValue(elevation.test.permissionAtom(props.environmentId));
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<ElevationCheck | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const onTest = async () => {
-    setRunning(true);
-    setResult(null);
-    setError(null);
-    const outcome = await test({ environmentId: props.environmentId, input: {} }).finally(() =>
-      setRunning(false),
-    );
-    if (outcome._tag === "Success") setResult(outcome.value);
-    else if (!isAtomCommandInterrupted(outcome)) {
-      setError(elevationFailureMessage(squashAtomCommandFailure(outcome), "The test didn't run."));
-    }
-  };
-  return (
-    <SettingsRow
-      title="Test"
-      description={
-        running
-          ? "Waiting for approval on your phone…"
-          : (props.unavailableReason ??
-            "Runs sudo -n true on this machine for your phone to approve.")
-      }
-      control={
-        <Button
-          variant="outline"
-          size="xs"
-          disabled={!canTest || running || props.unavailableReason !== null}
-          onClick={() => void onTest()}
-        >
-          Test
-        </Button>
-      }
-    >
-      {result !== null ? (
-        <div className="text-xs">
-          <CheckLine check={result} />
-        </div>
-      ) : null}
-      {error !== null ? (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-    </SettingsRow>
-  );
-}
-
-function SetUpRow(props: { readonly status: ElevationStatus }) {
-  return (
-    <SettingsRow
-      title="Set up on this machine"
-      description="Start setup in the T3 app on your Android phone, under Settings → Device approval. The phone creates its key, then you enter the sudo password once or paste a command into a terminal here. Setup trusts this account: anything running as you, including an agent, could change what it installs, the same as typing your sudo password into T3."
-    >
-      {props.status.plannedChanges.length > 0 ? (
-        <div className="flex flex-col gap-1 text-xs">
-          <p className="text-muted-foreground">Setup will change:</p>
-          <ul className="flex flex-col gap-0.5">
-            {props.status.plannedChanges.map((change) => (
-              <li key={change.path} className="min-w-0 break-words">
-                <code className="font-mono text-foreground">{change.path}</code>
-                <span className="text-muted-foreground"> · {change.summary}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </SettingsRow>
   );
 }
 
