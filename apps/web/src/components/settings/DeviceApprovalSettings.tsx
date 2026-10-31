@@ -221,7 +221,7 @@ function SetUpRow(props: { readonly status: ElevationStatus }) {
   return (
     <SettingsRow
       title="Set up on this machine"
-      description="Start setup in the T3 app on your Android phone, under Settings → Device approval. The phone creates its key, then you enter the sudo password once or paste a command into a terminal here."
+      description="Start setup in the T3 app on your Android phone, under Settings → Device approval. The phone creates its key, then you enter the sudo password once or paste a command into a terminal here. Setup trusts this account: anything running as you, including an agent, could change what it installs, the same as typing your sudo password into T3."
     >
       {props.status.plannedChanges.length > 0 ? (
         <div className="flex flex-col gap-1 text-xs">

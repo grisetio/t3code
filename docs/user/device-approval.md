@@ -12,7 +12,9 @@ On the phone, open **Settings → Device approval** and choose **Set up on this
 machine** for the environment. Setup lists the system files it will change.
 Enter the sudo password once, or leave it empty to get a command to paste into
 a terminal on that machine. The password goes to the server once and is never
-stored.
+stored. Setup trusts your account on that machine, the same as typing the sudo
+password into T3 Code: anything running as you, including an agent, could
+change what it installs.
 
 After setup, T3 Code runs a test `sudo` for you to approve on the phone. Run it
 again any time with **Test** in **Settings → Device approval** on the phone,

@@ -390,6 +390,9 @@ function DeviceApprovalStatus(props: {
             ? "Changes are approved on an enrolled phone, or with this password."
             : "Without it, setup gives you a command to paste into a terminal on this machine."}{" "}
           The password goes to the server once and is never stored.
+          {installed
+            ? ""
+            : " Setup trusts this account: anything running as you, including an agent, could change what it installs, the same as typing your sudo password into T3."}
         </Text>
       </View>
 
