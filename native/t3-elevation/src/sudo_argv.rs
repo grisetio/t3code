@@ -853,7 +853,32 @@ fn creatable(path: &Path, context: &Context) -> bool {
 /// `systemctl restart nginx` is "missing" in a writable cwd, and warning on
 /// all of them would teach people to skip warnings.
 fn argument_writable(arg: &str, context: &Context) -> bool {
-    if arg.is_empty() || arg.starts_with('-') {
+    if option_value(arg).is_some_and(|value| path_writable(value, context)) {
+        return true;
+    }
+    !arg.starts_with('-') && path_writable(arg, context)
+}
+
+/// The part of an argument a program may read as a path: after the first `=`
+/// of `--name=value` or `name=value` (dd), or from the first `/` of a short
+/// option cluster such as `-tf/x` or `-I./include`. Where a cluster's letters
+/// end isn't knowable without the program's own option table, so a relative
+/// value without a `/` is left to `user_writable_cwd`.
+fn option_value(arg: &str) -> Option<&str> {
+    if let Some(long) = arg.strip_prefix("--") {
+        return long.split_once('=').map(|(_, value)| value);
+    }
+    if let Some(cluster) = arg.strip_prefix('-') {
+        let slash = cluster.find('/')?;
+        let start = cluster[..slash].trim_end_matches('.').len();
+        return Some(&cluster[start..]);
+    }
+    let (name, value) = arg.split_once('=')?;
+    (!name.is_empty() && !name.contains('/')).then_some(value)
+}
+
+fn path_writable(arg: &str, context: &Context) -> bool {
+    if arg.is_empty() {
         return false;
     }
     let path = Path::new(context.cwd).join(arg);
@@ -1381,6 +1406,58 @@ mod tests {
         let ctx = context("/", &[], &shells);
         let sudo = argv(&["sudo", "/bin/cat", "/dev/null", "/dev/zero", "/dev/tty"]);
         assert_eq!(describe(&sudo, &parse(&sudo), &ctx).command.warnings, vec![]);
+    }
+
+    /// Review 2, G3: a path the user can swap was only checked as an argument
+    /// of its own, so `dd if=~/x`, `tar --file=~/x` and `tar -tf~/x` showed
+    /// nothing in red while `tar -t -f ~/x` did.
+    #[test]
+    fn paths_inside_option_values_are_warned() {
+        let tmp = std::env::temp_dir().join(format!("t3e-argv-values-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("tool.py"), "").unwrap();
+        let mine = tmp.to_string_lossy().into_owned();
+        let shells = vec![];
+        let ctx = context("/", &[], &shells);
+        let flagged = |args: &[String]| -> Vec<usize> {
+            let sudo = [vec!["sudo".to_string()], args.to_vec()].concat();
+            argument_warnings(describe(&sudo, &parse(&sudo), &ctx).command.warnings)
+                .into_iter()
+                .filter_map(|warning| warning.arg)
+                .collect()
+        };
+        let cases: Vec<(Vec<String>, Vec<usize>)> = vec![
+            (
+                argv(&["/bin/dd", &format!("if={mine}/tool.py"), "of=/dev/null", "status=none"]),
+                vec![1],
+            ),
+            (
+                argv(&["/usr/bin/tar", &format!("--file={mine}/tool.tar"), "-tf", "/dev/null"]),
+                vec![1],
+            ),
+            (argv(&["/usr/bin/tar", &format!("-tf{mine}/tool.tar")]), vec![1]),
+            (argv(&["/usr/bin/tar", "-t", "-f", &format!("{mine}/tool.tar")]), vec![3]),
+            (argv(&["/usr/bin/cc", &format!("-I{mine}"), "-c", "/dev/null"]), vec![1]),
+            // Values root controls, and values that aren't paths.
+            (
+                argv(&[
+                    "/usr/bin/tar",
+                    "--file=/etc/hosts",
+                    "-C/etc",
+                    "--level=3",
+                    "-j4",
+                    "conv=notrunc",
+                    "--",
+                    "-",
+                ]),
+                vec![],
+            ),
+        ];
+        let results: Vec<_> = cases.iter().map(|(args, _)| flagged(args)).collect();
+        std::fs::remove_dir_all(&tmp).unwrap();
+        let expected: Vec<_> = cases.into_iter().map(|(_, expected)| expected).collect();
+        assert_eq!(results, expected);
     }
 
     fn argument_warnings(warnings: Vec<Warning>) -> Vec<Warning> {

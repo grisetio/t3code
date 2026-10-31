@@ -81,7 +81,11 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   points to (a symlink whose target is replaceable), or when it doesn't exist,
   contains `/` or `.`, and the user can create it (its nearest existing
   ancestor is replaceable). Missing bare words are skipped, so
-  `systemctl restart nginx` from a project directory stays clean.
+  `systemctl restart nginx` from a project directory stays clean. Option values
+  are checked the same way: after the first `=` of `--name=value` and
+  `name=value`, and from the first `/` of a short-option cluster (`-tf/x`,
+  `-I./include`). Character devices such as `/dev/null` don't count as
+  writable.
 
   Clients render an unknown code as a generic red warning showing the code. A
   warning only adds caution, so this is safe without a version bump.
