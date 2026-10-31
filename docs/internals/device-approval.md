@@ -214,7 +214,11 @@ Timeouts:
 Outcomes map to PAM results as in the spec: approve → `PAM_SUCCESS`; every
 failure after `mine` → `PAM_CRED_INSUFFICIENT`; `not_mine`, "T3 down", and
 unsafe config → `PAM_IGNORE`, or `PAM_CRED_INSUFFICIENT` when sudo's argv has
-`-n`.
+`-n`. The module can't ask sudo how it parsed its argv, so it scans it with the
+option table, arity and long-option prefix rules of each sudo that may be
+running (sudo.ws, and sudo-rs on Linux). A sudo that would reject the argv
+can't be the caller; `-n` counts only when every other one sees it. Anything
+less certain stays `PAM_IGNORE`, so an interactive sudo never fails early.
 
 ## Root-owned state
 
