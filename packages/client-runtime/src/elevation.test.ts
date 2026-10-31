@@ -173,18 +173,19 @@ describe("decodeElevationRequestPayload", () => {
     ]);
   });
 
-  it("names the writable working directory warning", () => {
+  it("names the working directory and environment warnings", () => {
     const decoded = Result.getOrThrow(
       decodeElevationRequestPayload(
         encodePayload({
           argv: ["git", "clean", "-fdx"],
           resolvedPath: "/usr/bin/git",
-          warnings: [{ code: "user_writable_cwd" }],
+          warnings: [{ code: "user_writable_cwd" }, { code: "user_environment" }],
         }),
       ),
     );
     expect(decoded.view.warnings.map((warning) => warning.message)).toEqual([
       "You can write to the working directory, so anything running as you could change what the command reads from it.",
+      "sudo passes some of your environment variables to the command, so they could point it at your files.",
     ]);
   });
 

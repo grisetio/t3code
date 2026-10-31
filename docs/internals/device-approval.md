@@ -72,6 +72,7 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                                              |
   | `edit`                   | `-e` / sudoedit.                                                                                        |
   | `unresolved_program`     | The module can't tell which file sudo will run; `resolvedPath` is `null`.                               |
+  | `user_environment`       | sudoers may pass the command a variable from sudo's environment outside a harmless set. See below.      |
   | `user_writable_cwd`      | The user can replace `cwd` or an entry in it (not with `-i`, `-e`). Programs read config from there.    |
   | `dev_attestation`        | `command.argv[arg]` is `--allow-dev-attestation`: a debug build of the app may enroll.                  |
   | `test_attestation`       | `command.argv[arg]` is `--allow-test-attestation`: an emulator or unverified device may enroll.         |
@@ -86,6 +87,13 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   `name=value`, and from the first `/` of a short-option cluster (`-tf/x`,
   `-I./include`). Character devices such as `/dev/null` don't count as
   writable.
+
+  For `user_environment` the module evaluates `env_reset`, `env_keep` and
+  `env_check` for the user, target and resolved program, starting from the
+  compiled-in lists that sudo.ws and sudo-rs share. The harmless set is
+  locale, terminal, display and agent-socket variables
+  (`HARMLESS_ENV` in `native/t3-elevation/src/sudoers.rs`). A binding it can't evaluate
+  (an alias, a glob) may add variables but never removes them.
 
   Clients render an unknown code as a generic red warning showing the code. A
   warning only adds caution, so this is safe without a version bump.

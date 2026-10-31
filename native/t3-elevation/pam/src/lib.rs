@@ -95,6 +95,14 @@ unsafe fn authenticate(
             .filter(|(name, _)| name == "PATH")
             .map(|(_, value)| value.into_encoded_bytes())
             .collect(),
+        env: std::env::vars_os()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect(),
     };
     let code = match flow::authenticate(&invocation, &Environment::system()) {
         Outcome::Approved => pam::PAM_SUCCESS,

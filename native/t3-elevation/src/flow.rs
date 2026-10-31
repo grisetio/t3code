@@ -40,6 +40,8 @@ pub struct Invocation {
     /// Every `PATH=` value in sudo's environment, in order. sudo.ws and
     /// sudo-rs pick different ones when there are several.
     pub env_paths: Vec<Vec<u8>>,
+    /// sudo's whole environment, which sudoers may pass on to the command.
+    pub env: Vec<(String, String)>,
 }
 
 /// Where the module looks and how strict it is. Tests swap these out.
@@ -395,6 +397,7 @@ fn build_payload(
             .collect(),
         flavors: Flavor::platform(),
     };
+    let secure_path_set = search.secure_path.iter().all(Option::is_some);
     let target_shell = target_login_shell(&run_as_for_sudoers);
     let caller_shell = invocation
         .env_shell
@@ -417,7 +420,23 @@ fn build_payload(
         search,
         shells: &shells,
     };
-    let described = sudo_argv::describe(&argv, parsed, &context);
+    let mut described = sudo_argv::describe(&argv, parsed, &context);
+    // sudoedit's editor runs as the caller, with the caller's environment.
+    if !matches!(parsed.mode, sudo_argv::Mode::Edit(_))
+        && !crate::sudoers::kept_variables(
+            &environment.sudoers,
+            &subject,
+            described.command.resolved_path.as_deref().map(Path::new),
+            &invocation.env,
+            secure_path_set,
+        )
+        .is_empty()
+    {
+        described
+            .command
+            .warnings
+            .push(crate::payload::Warning::new("user_environment"));
+    }
     let issued_at = sys::now();
     let window = environment
         .window_override
@@ -520,6 +539,7 @@ mod tests {
                 cwd: Some(self.dir.as_os_str().as_encoded_bytes().to_vec()),
                 env_shell: None,
                 env_paths: vec![b"/usr/bin:/bin".to_vec()],
+                env: vec![("PYTHONPATH".into(), "/home/me/lib".into())],
             }
         }
 
@@ -649,7 +669,10 @@ mod tests {
         let setup = setup();
         assert_eq!(
             setup
-                .run(Mode::Approve, &setup.invocation(&["/usr/bin/sudo.ws", "true"]))
+                .run(
+                    Mode::Approve,
+                    &setup.invocation(&["/usr/bin/sudo.ws", "true"])
+                )
                 .0,
             Outcome::Approved
         );
@@ -783,6 +806,35 @@ mod tests {
                 .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
                 .0,
             Outcome::Approved
+        );
+    }
+
+    /// Review 2, G4: an admin's `env_keep += "PYTHONPATH"` let
+    /// `PYTHONPATH=~/lib sudo python3 -c pass` run the user's sitecustomize
+    /// as root with nothing in red.
+    #[test]
+    fn variables_sudoers_keeps_are_warned() {
+        let has_warning = |extra: &str| {
+            let setup = setup();
+            let user = &setup.user;
+            test_fs::write(
+                &setup.environment.sudoers,
+                format!("{extra}\n{}", crate::install::sudoers_drop_in(user)),
+            );
+            let (outcome, exchange) =
+                setup.run(Mode::Approve, &setup.invocation(&["sudo", "/usr/bin/true"]));
+            assert_eq!(outcome, Outcome::Approved);
+            exchange.payload.unwrap()["command"]["warnings"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!({ "code": "user_environment" }))
+        };
+        assert_eq!(
+            [
+                has_warning("Defaults env_keep += \"PYTHONPATH\""),
+                has_warning("Defaults env_reset"),
+            ],
+            [true, false]
         );
     }
 
