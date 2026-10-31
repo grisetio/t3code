@@ -113,9 +113,9 @@
         "uid": 501,
         "runAs": "root",
         "runAsGroup": null,
-        "argv": ["sudo", "-s", "echo", "safe\u202e\u2066txt.exe\u200b\nrm -rf /\u001b[2K"],
+        "argv": ["sudo", "-s", "echo", "safe‮⁦txt.exe​\nrm -rf /\u001b[2K"],
         "command": {
-          "argv": ["/bin/zsh", "-c", "echo safe\u202e\u2066txt.exe\u200b\nrm -rf /\u001b[2K"],
+          "argv": ["/bin/zsh", "-c", "echo safe‮⁦txt.exe​\nrm -rf /\u001b[2K"],
           "resolvedPath": "/bin/zsh",
           "warnings": [
             {
@@ -428,6 +428,44 @@
         "alg": "es256-der",
         "signature": "MEUCIAEni8L4nZXnhUOzJWs1NaQZlXadACWnE0bRm4zlofurAiEA1U964YijSKuaqOiWdhZIlBm3izAqhUsMMdRcGgkg1cM"
       }
+    },
+    {
+      "name": "session",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiUUVGQ1EwUkZSa2RJU1VwTFRFMU9UMUJSVWxOVVZWWlhXRmxhVzF4ZFhsOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsInN5c3RlbWN0bCIsInJlc3RhcnQiLCJuZ2lueCJdLCJjb21tYW5kIjp7ImFyZ3YiOlsic3lzdGVtY3RsIiwicmVzdGFydCIsIm5naW54Il0sInJlc29sdmVkUGF0aCI6Ii91c3IvYmluL3N5c3RlbWN0bCIsIndhcm5pbmdzIjpbXX0sImN3ZCI6Ii9ob21lL2tncmlzZXQvc3JjL3giLCJzZXJ2aWNlIjoic3VkbyIsImtleUlkcyI6WyJkb0JhWTZhWURCZ0hWQ1NoUHpKM0xRIl0sInNlc3Npb24iOnsiaWQiOjQ4MjEzLCJsZWFkZXJTdGFydCI6MTc5MzMxODM5OTEyMzQ1NiwibWF4VXNlcyI6MTZ9fQ",
+      "decoded": {
+        "v": 1,
+        "kind": "sudo",
+        "nonce": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+        "issuedAt": 1793318400,
+        "expiresAt": 1793318500,
+        "host": {
+          "name": "macbook",
+          "machineId": "PrG9Q5lH63YpmOVmzMLgmceREYsvQFecxPfaK1Bht_k"
+        },
+        "user": "kgriset",
+        "uid": 501,
+        "runAs": "root",
+        "runAsGroup": null,
+        "argv": ["sudo", "systemctl", "restart", "nginx"],
+        "command": {
+          "argv": ["systemctl", "restart", "nginx"],
+          "resolvedPath": "/usr/bin/systemctl",
+          "warnings": []
+        },
+        "cwd": "/home/kgriset/src/x",
+        "service": "sudo",
+        "keyIds": ["doBaY6aYDBgHVCShPzJ3LQ"],
+        "session": {
+          "id": 48213,
+          "leaderStart": 1793318399123456,
+          "maxUses": 16
+        }
+      },
+      "signature": {
+        "keyId": "doBaY6aYDBgHVCShPzJ3LQ",
+        "alg": "es256-der",
+        "signature": "MEYCIQD093CMa3QGOpQVa9AVz5_MBpQF5BHF9c9y8kJf4n5EWQIhAPaNCIsmINly-sh2NermC6HC1gH4thYdJCG-AKW2Vecu"
+      }
     }
   ],
   "enrollParse": [
@@ -561,6 +599,26 @@
     {
       "name": "warning_extra_field",
       "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsIi11Iiwicm9vdCIsIi0tIiwibml4LWNvbGxlY3QtZ2FyYmFnZSIsIi1kIl0sImNvbW1hbmQiOnsiYXJndiI6WyJ0cnVlIl0sInJlc29sdmVkUGF0aCI6bnVsbCwid2FybmluZ3MiOlt7ImNvZGUiOiJzaGVsbCIsImV4dHJhIjoxfV19LCJjd2QiOiIvVXNlcnMva2dyaXNldC9zcmMveCIsInNlcnZpY2UiOiJzdWRvIiwia2V5SWRzIjpbImRvQmFZNmFZREJnSFZDU2hQekozTFEiXX0",
+      "expected": "invalid"
+    },
+    {
+      "name": "session_extra_field",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiUUVGQ1EwUkZSa2RJU1VwTFRFMU9UMUJSVWxOVVZWWlhXRmxhVzF4ZFhsOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsInN5c3RlbWN0bCIsInJlc3RhcnQiLCJuZ2lueCJdLCJjb21tYW5kIjp7ImFyZ3YiOlsic3lzdGVtY3RsIiwicmVzdGFydCIsIm5naW54Il0sInJlc29sdmVkUGF0aCI6Ii91c3IvYmluL3N5c3RlbWN0bCIsIndhcm5pbmdzIjpbXX0sImN3ZCI6Ii9ob21lL2tncmlzZXQvc3JjL3giLCJzZXJ2aWNlIjoic3VkbyIsImtleUlkcyI6WyJkb0JhWTZhWURCZ0hWQ1NoUHpKM0xRIl0sInNlc3Npb24iOnsiaWQiOjQ4MjEzLCJsZWFkZXJTdGFydCI6MTc5MzMxODM5OTEyMzQ1NiwibWF4VXNlcyI6MTYsInR0eSI6MH19",
+      "expected": "invalid"
+    },
+    {
+      "name": "session_missing_field",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiUUVGQ1EwUkZSa2RJU1VwTFRFMU9UMUJSVWxOVVZWWlhXRmxhVzF4ZFhsOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsInN5c3RlbWN0bCIsInJlc3RhcnQiLCJuZ2lueCJdLCJjb21tYW5kIjp7ImFyZ3YiOlsic3lzdGVtY3RsIiwicmVzdGFydCIsIm5naW54Il0sInJlc29sdmVkUGF0aCI6Ii91c3IvYmluL3N5c3RlbWN0bCIsIndhcm5pbmdzIjpbXX0sImN3ZCI6Ii9ob21lL2tncmlzZXQvc3JjL3giLCJzZXJ2aWNlIjoic3VkbyIsImtleUlkcyI6WyJkb0JhWTZhWURCZ0hWQ1NoUHpKM0xRIl0sInNlc3Npb24iOnsiaWQiOjQ4MjEzLCJsZWFkZXJTdGFydCI6MTc5MzMxODM5OTEyMzQ1Nn19",
+      "expected": "invalid"
+    },
+    {
+      "name": "session_zero_id",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiUUVGQ1EwUkZSa2RJU1VwTFRFMU9UMUJSVWxOVVZWWlhXRmxhVzF4ZFhsOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsInN5c3RlbWN0bCIsInJlc3RhcnQiLCJuZ2lueCJdLCJjb21tYW5kIjp7ImFyZ3YiOlsic3lzdGVtY3RsIiwicmVzdGFydCIsIm5naW54Il0sInJlc29sdmVkUGF0aCI6Ii91c3IvYmluL3N5c3RlbWN0bCIsIndhcm5pbmdzIjpbXX0sImN3ZCI6Ii9ob21lL2tncmlzZXQvc3JjL3giLCJzZXJ2aWNlIjoic3VkbyIsImtleUlkcyI6WyJkb0JhWTZhWURCZ0hWQ1NoUHpKM0xRIl0sInNlc3Npb24iOnsiaWQiOjAsImxlYWRlclN0YXJ0IjoxNzkzMzE4Mzk5MTIzNDU2LCJtYXhVc2VzIjoxNn19",
+      "expected": "invalid"
+    },
+    {
+      "name": "session_null",
+      "payload": "eyJ2IjoxLCJraW5kIjoic3VkbyIsIm5vbmNlIjoiUUVGQ1EwUkZSa2RJU1VwTFRFMU9UMUJSVWxOVVZWWlhXRmxhVzF4ZFhsOCIsImlzc3VlZEF0IjoxNzkzMzE4NDAwLCJleHBpcmVzQXQiOjE3OTMzMTg1MDAsImhvc3QiOnsibmFtZSI6Im1hY2Jvb2siLCJtYWNoaW5lSWQiOiJQckc5UTVsSDYzWXBtT1Ztek1MZ21jZVJFWXN2UUZlY3hQZmFLMUJodF9rIn0sInVzZXIiOiJrZ3Jpc2V0IiwidWlkIjo1MDEsInJ1bkFzIjoicm9vdCIsInJ1bkFzR3JvdXAiOm51bGwsImFyZ3YiOlsic3VkbyIsInN5c3RlbWN0bCIsInJlc3RhcnQiLCJuZ2lueCJdLCJjb21tYW5kIjp7ImFyZ3YiOlsic3lzdGVtY3RsIiwicmVzdGFydCIsIm5naW54Il0sInJlc29sdmVkUGF0aCI6Ii91c3IvYmluL3N5c3RlbWN0bCIsIndhcm5pbmdzIjpbXX0sImN3ZCI6Ii9ob21lL2tncmlzZXQvc3JjL3giLCJzZXJ2aWNlIjoic3VkbyIsImtleUlkcyI6WyJkb0JhWTZhWURCZ0hWQ1NoUHpKM0xRIl0sInNlc3Npb24iOm51bGx9",
       "expected": "invalid"
     }
   ],
@@ -803,82 +861,82 @@
     },
     {
       "name": "nul_and_del",
-      "input": "a\u0000b\u007fc",
+      "input": "a\u0000bc",
       "expected": "a\\u{0}b\\u{7F}c"
     },
     {
       "name": "c1_control",
-      "input": "a\u0085b\u009bc",
+      "input": "abc",
       "expected": "a\\u{85}b\\u{9B}c"
     },
     {
       "name": "bidi_override",
-      "input": "safe\u202etxt.exe",
+      "input": "safe‮txt.exe",
       "expected": "safe\\u{202E}txt.exe"
     },
     {
       "name": "bidi_isolates",
-      "input": "\u2066a\u2067b\u2068c\u2069",
+      "input": "⁦a⁧b⁨c⁩",
       "expected": "\\u{2066}a\\u{2067}b\\u{2068}c\\u{2069}"
     },
     {
       "name": "bidi_marks",
-      "input": "\u200e\u200f\u061c",
+      "input": "‎‏؜",
       "expected": "\\u{200E}\\u{200F}\\u{61C}"
     },
     {
       "name": "bidi_embeddings",
-      "input": "\u202a\u202b\u202c\u202d",
+      "input": "‪‫‬‭",
       "expected": "\\u{202A}\\u{202B}\\u{202C}\\u{202D}"
     },
     {
       "name": "zero_width",
-      "input": "r\u200bm\u200c-\u200dr\u2060f\ufeff",
+      "input": "r​m‌-‍r⁠f﻿",
       "expected": "r\\u{200B}m\\u{200C}-\\u{200D}r\\u{2060}f\\u{FEFF}"
     },
     {
       "name": "soft_hyphen",
-      "input": "a\u00adb",
+      "input": "a­b",
       "expected": "a\\u{AD}b"
     },
     {
       "name": "line_paragraph_separators",
-      "input": "a\u2028b\u2029c",
+      "input": "a b c",
       "expected": "a\\u{2028}b\\u{2029}c"
     },
     {
       "name": "lookalike_spaces",
-      "input": "a\u00a0b\u3000c\u2009d",
+      "input": "a b　c d",
       "expected": "a\\u{A0}b\\u{3000}c\\u{2009}d"
     },
     {
       "name": "tag_characters",
-      "input": "x\udb40\udc41\udb40\udc7f",
+      "input": "x󠁁󠁿",
       "expected": "x\\u{E0041}\\u{E007F}"
     },
     {
       "name": "non_ascii_letters_kept",
-      "input": "caf\u00e9 \u00f1 \u65e5\u672c \ud83d\ude42",
-      "expected": "caf\u00e9 \u00f1 \u65e5\u672c \ud83d\ude42"
+      "input": "café ñ 日本 🙂",
+      "expected": "café ñ 日本 🙂"
     },
     {
       "name": "combining_mark_kept",
-      "input": "e\u0301",
-      "expected": "e\u0301"
+      "input": "é",
+      "expected": "é"
     },
     {
       "name": "blank_letters",
-      "input": "a\u3164b\u115fc\u1160d\uffa0e\u2800f",
+      "input": "aㅤbᅟcᅠdﾠe⠀f",
       "expected": "a\\u{3164}b\\u{115F}c\\u{1160}d\\u{FFA0}e\\u{2800}f"
     },
     {
       "name": "invisible_marks_and_selectors",
-      "input": "a\u034fb\u17b4c\u180fd\ufe0fe\udb40\udd00f",
+      "input": "a͏b឴c᠏d️e󠄀f",
       "expected": "a\\u{34F}b\\u{17B4}c\\u{180F}d\\u{FE0F}e\\u{E0100}f"
     },
     {
       "name": "unassigned_ignorables",
-      "input": "a\u2065b\ufff0c\udb40\udc00d",
+      "input": "a⁥b￰c󠀀d",
       "expected": "a\\u{2065}b\\u{FFF0}c\\u{E0000}d"
     }
   ],

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Plays the PAM module over a real Unix socket and fakes sudo with scripts.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
@@ -29,6 +30,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { ProviderProcesses, type ProviderProcess } from "@t3tools/shared/ProviderProcesses";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -230,7 +232,8 @@ const makeFixture = Effect.fn("test.makeFixture")(function* (options?: {
     );
     // sudo strips its options and runs the command; the log shows what it got.
     // With a `touch-id` file PAM approves without asking for the password, and
-    // with `no-approval` nothing approves `sudo -n`.
+    // with `no-approval` nothing approves `sudo -n`. A `hold` FIFO keeps sudo
+    // running until the test writes to it, as the PAM module would.
     await writeScript(
       NodePath.join(dir, "sudo"),
       `printf '%s\\n' "$@" > "${dir}/sudo.args"
@@ -244,6 +247,7 @@ if [ -n "$S" ] && [ ! -e "${dir}/touch-id" ]; then
   IFS= read -r password
   if [ "$password" != "hunter2" ]; then echo "Sorry, try again." >&2; exit 1; fi
 fi
+if [ -p "${dir}/hold" ]; then read -r _ < "${dir}/hold"; fi
 exec "$@"
 `,
     );
@@ -786,6 +790,38 @@ describe("ElevationService helper", () => {
         yield* fixture.service.enroll({ device, password: "hunter2" });
         assert.strictEqual(yield* read(helperStdin), `hunter2\n${framed}`);
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("tells the module which sudo is the server's own", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const hold = NodePath.join(fixture.dir, "hold");
+      NodeChildProcess.execFileSync("mkfifo", [hold]);
+      const test = yield* fixture.service.test.pipe(Effect.forkScoped);
+      // Opening the FIFO waits for sudo, so the live test is registered.
+      const release = yield* Effect.promise(() => NodeFSP.open(hold, "w"));
+      const module = yield* connectModule(fixture.socketPath);
+      yield* module.send({
+        ...hello([serverEntry]),
+        argv: [NodePath.join(fixture.dir, "sudo"), "-n", "true"],
+      });
+      assert.deepStrictEqual(yield* module.receive, {
+        type: "hello_reply",
+        v: 1,
+        decision: "mine",
+        ownSudo: true,
+      });
+      yield* module.close;
+      yield* Effect.promise(async () => {
+        await release.write("\n");
+        await release.close();
+      });
+      assert.deepStrictEqual(yield* Fiber.join(test), {
+        id: "live_test",
+        ok: false,
+        message: "The test wasn't approved on a device",
+      });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.live("says the password is needed when nothing approved sudo -n", () =>

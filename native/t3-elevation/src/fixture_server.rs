@@ -18,6 +18,8 @@ pub const VECTORS: &str =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Approve,
+    /// Approves a sudo the server says it started itself.
+    ApproveOwn,
     Deny,
     /// Never answers, so the module's window runs out.
     Expire,
@@ -37,6 +39,7 @@ impl Mode {
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text.trim() {
             "approve" => Self::Approve,
+            "approve_own" => Self::ApproveOwn,
             "deny" => Self::Deny,
             "expire" => Self::Expire,
             "bad_signature" => Self::BadSignature,
@@ -120,6 +123,10 @@ pub fn handle(stream: UnixStream, mode: Mode) -> Exchange {
             send("not json".into());
             return exchange;
         }
+        Mode::ApproveOwn => send(
+            json!({ "type": "hello_reply", "v": 1, "decision": "mine", "ownSudo": true })
+                .to_string(),
+        ),
         _ => send(json!({ "type": "hello_reply", "v": 1, "decision": "mine" }).to_string()),
     };
     let Some(request) = read_json(&mut reader) else {
@@ -147,7 +154,7 @@ pub fn handle(stream: UnixStream, mode: Mode) -> Exchange {
         .to_string()
     };
     match mode {
-        Mode::Approve => send(sign(&enrolled.signing, &bytes)),
+        Mode::Approve | Mode::ApproveOwn => send(sign(&enrolled.signing, &bytes)),
         Mode::BadSignature => send(sign(&vector_key("other").signing, &bytes)),
         Mode::WrongPayload => {
             let mut other = bytes.clone();

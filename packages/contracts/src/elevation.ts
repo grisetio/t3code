@@ -2,7 +2,13 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Base64Url from "effect/encoding/Base64Url";
 
-import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import {
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnItemId,
+} from "./baseSchemas.ts";
 
 // Formats are specified in docs/internals/device-approval.md; the shared test
 // vectors in packages/contracts/test-vectors/device-approval.json pin them.
@@ -57,6 +63,18 @@ export const ElevationPayload = Schema.Struct({
   cwd: Schema.String,
   service: Schema.String,
   keyIds: Schema.Array(ElevationKeyId),
+  /**
+   * The kernel session the approval also covers: later sudos in it pass
+   * without the phone while its leader lives, within the window, up to
+   * `maxUses`. Absent when only this sudo is approved.
+   */
+  session: Schema.optionalKey(
+    Schema.Struct({
+      id: PositiveInt,
+      leaderStart: NonNegativeInt,
+      maxUses: NonNegativeInt,
+    }),
+  ),
 }).check(
   Schema.makeFilter(
     (payload) =>
