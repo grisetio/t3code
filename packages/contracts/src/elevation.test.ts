@@ -92,11 +92,8 @@ describe("elevation enrollment", () => {
     expect(withArgv(argv.filter((_, index) => index !== 8 && index !== 9))).toBeNull();
   });
 
-  // Security review: any program named t3-elevation is treated as the root helper, so a
-  // user-writable copy (the server's T3_ELEVATION_HELPER) gets the "Add device" screen
-  // even though the module flags it and its owner can swap it after approval.
-  // Flip to `it` once the parser requires the installed, root-owned helper.
-  it.fails("treats a user-writable t3-elevation as a plain command", () => {
+  // Its owner could swap a user-writable copy after approval.
+  it("treats a user-writable t3-elevation as a plain command", () => {
     const enroll = vectors.payloads.find((candidate) => candidate.name === "enroll")!;
     const payload = Result.getOrThrow(decodeElevationPayload(bytesOf(enroll.payload)));
     const helper = "/home/alice/.cache/t3/t3-elevation";
@@ -109,5 +106,16 @@ describe("elevation enrollment", () => {
       },
     });
     expect(parsed).toBeNull();
+    // A writable folder above the installed path, as with Intel Homebrew's /usr/local/lib.
+    const writableInstall = parseElevationEnrollCommand({
+      ...payload,
+      command: { ...payload.command, warnings: [{ code: "user_writable_program" }] },
+    });
+    expect(writableInstall).toBeNull();
+    const elsewhere = parseElevationEnrollCommand({
+      ...payload,
+      command: { ...payload.command, resolvedPath: "/opt/t3/t3-elevation" },
+    });
+    expect(elsewhere).toBeNull();
   });
 });

@@ -120,8 +120,11 @@ significant bit first, as ten 5-bit groups; map each through Crockford base32
 (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`); format as `XXXXX-XXXXX`.
 
 **Enroll argv.** The helper accepts exactly this grammar, and clients show
-"Add device" with the comparison code exactly when `command.argv` matches it
-(`parseElevationEnrollCommand`):
+"Add device" with the comparison code exactly when `command.argv` matches it,
+`resolvedPath` is the installed helper `/usr/local/lib/t3-elevation/t3-elevation`,
+and there is no `user_writable_program` warning (`parseElevationEnrollCommand`).
+A helper its owner can replace after approval could enroll any key, so it shows
+as a plain command:
 
 ```
 <path>/t3-elevation enroll --user <user> --label <label> --public-key <b64url SPKI>

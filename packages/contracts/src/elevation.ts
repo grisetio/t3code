@@ -155,6 +155,9 @@ export interface ElevationEnrollCommand {
   readonly allowDevAttestation: boolean;
 }
 
+/** Where install leaves the root-owned helper; the only copy the server runs once installed. */
+export const ELEVATION_HELPER_INSTALL_PATH = "/usr/local/lib/t3-elevation/t3-elevation";
+
 const ENROLL_VALUE_OPTIONS = {
   "--user": "user",
   "--label": "label",
@@ -163,12 +166,17 @@ const ENROLL_VALUE_OPTIONS = {
 } as const;
 
 /**
- * The enroll grammar the helper accepts. A match makes clients show
- * "Add device" with the comparison code; anything else renders as a plain command.
+ * The enroll grammar the helper accepts, run from its installed root-owned
+ * copy. A match makes clients show "Add device" with the comparison code;
+ * anything else renders as a plain command. A copy its owner can replace
+ * after approval could enroll any key, so it never gets the "Add device" screen.
  */
 export function parseElevationEnrollCommand(
   payload: ElevationPayload,
 ): ElevationEnrollCommand | null {
+  const { resolvedPath, warnings } = payload.command;
+  if (resolvedPath !== ELEVATION_HELPER_INSTALL_PATH) return null;
+  if (warnings.some((warning) => warning.code === "user_writable_program")) return null;
   const [program, subcommand, ...rest] = payload.command.argv;
   if (program === undefined || program.split("/").at(-1) !== "t3-elevation") return null;
   if (subcommand !== "enroll") return null;
