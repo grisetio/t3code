@@ -344,8 +344,10 @@ the window, the session and the same cwd; relative arguments resolve against
 that cwd. A process that can ptrace or preload into the leader before the first
 sudo changes the string the phone shows rather than what it covers. zsh-only
 syntax is read with POSIX rules, which can only drop calls. On macOS with Nix,
-`/etc/shells` must list the store shell an agent runs (nix-darwin
-`environment.shells`) for its sessions to qualify.
+`/etc/shells` must list the store shell an agent runs for its sessions to
+qualify, and must be a root-owned file: nix-darwin's `environment.shells` links
+it into the group-writable store, which fails the root-safe check and empties
+the list, so install a copy at activation instead.
 
 Grants live in `/run/t3-elevation` (Linux tmpfs) or `/var/db/t3-elevation`
 (macOS, where `/var/run` isn't root-only), one `<uid>-<sid>.json` per session.
