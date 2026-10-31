@@ -391,6 +391,7 @@ describe("ElevationService", () => {
         const { module, request } = yield* openRequest(fixture);
         assert.strictEqual(request.threadId, threadId);
         assert.strictEqual(request.explanation, "Free disk space");
+        assert.strictEqual(request.agentCommand, commandText);
         assert.strictEqual(request.payload, basic.payload);
 
         const recorded = yield* Queue.take(fixture.commands);
@@ -399,6 +400,7 @@ describe("ElevationService", () => {
           assert.strictEqual(recorded.elevationStatus, "pending");
           assert.strictEqual(recorded.turnItemId, request.turnItemId);
           assert.deepStrictEqual(recorded.argv, basic.decoded.argv);
+          assert.strictEqual(recorded.agentCommand, commandText);
         }
 
         const signature = sign(vectorsJson.keys.enrolled.pkcs8Der, payloadBytes);

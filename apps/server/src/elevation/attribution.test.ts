@@ -16,7 +16,11 @@ const entry = (pid: number, argv: ReadonlyArray<string> | null, startTime = 6000
 const serverEntry = entry(server.pid, ["node", "t3"], server.startTime);
 const run = (
   name: string,
-  commands: ReadonlyArray<{ readonly text: string; readonly explanation?: string }>,
+  commands: ReadonlyArray<{
+    readonly text: string;
+    readonly explanation?: string;
+    readonly running?: boolean;
+  }>,
 ): LiveRun => ({
   threadId: ThreadId.make(`thread:${name}`),
   runId: RunId.make(`run:${name}`),
@@ -24,6 +28,7 @@ const run = (
   commands: commands.map((command) => ({
     text: command.text,
     explanation: command.explanation ?? null,
+    running: command.running ?? true,
   })),
 });
 
@@ -92,7 +97,63 @@ describe("attribute", () => {
         providerProcesses: [],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: a, explanation: "Free disk space" });
+    ).toEqual({
+      type: "mine",
+      run: a,
+      explanation: "Free disk space",
+      command: "sudo nix-collect-garbage -d",
+    });
+  });
+
+  it("keeps the reason of a background command whose tool call already returned", () => {
+    const background = run("a", [
+      { text: "sleep 1; sudo cat /dev/null", explanation: "Run a test request", running: false },
+      { text: "pnpm dev", explanation: "Start the dev server" },
+    ]);
+    const hello = {
+      argv: ["sudo", "cat", "/dev/null"],
+      chain: [
+        entry(200, claudeBash("sleep 1; sudo cat /dev/null")),
+        entry(150, ["claude"]),
+        serverEntry,
+      ],
+    };
+    expect(
+      attribute({
+        hello,
+        server,
+        liveRuns: [background],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        serverSudos: [],
+      }),
+    ).toEqual({
+      type: "mine",
+      run: background,
+      explanation: "Run a test request",
+      command: "sleep 1; sudo cat /dev/null",
+    });
+    // A running call wins over a finished one with the same sudo.
+    const script = run("a", [
+      { text: "sudo cat /dev/null", explanation: "Older call", running: false },
+      { text: "./check.sh", explanation: "Run the checks" },
+    ]);
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "cat", "/dev/null"],
+          chain: [
+            entry(210, ["/bin/sh", "./check.sh"]),
+            entry(200, claudeBash("./check.sh")),
+            entry(150, ["claude"]),
+            serverEntry,
+          ],
+        },
+        server,
+        liveRuns: [script],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "mine", run: script, explanation: "Run the checks", command: "./check.sh" });
   });
 
   it("matches a lone sudo zsh exec'd under Codex's shared app-server by its own argv", () => {
@@ -109,7 +170,12 @@ describe("attribute", () => {
         providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: b, explanation: "Refresh packages" });
+    ).toEqual({
+      type: "mine",
+      run: b,
+      explanation: "Refresh packages",
+      command: "sudo apt-get update",
+    });
   });
 
   it("matches a sudo inside a longer Codex shell command", () => {
@@ -129,7 +195,12 @@ describe("attribute", () => {
         providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: a, explanation: null });
+    ).toEqual({
+      type: "mine",
+      run: a,
+      explanation: null,
+      command: "sudo systemctl restart nginx && curl localhost",
+    });
   });
 
   it("matches the shell wrapper when sudo runs from a script the command started", () => {
@@ -150,7 +221,7 @@ describe("attribute", () => {
         providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: a, explanation: null });
+    ).toEqual({ type: "mine", run: a, explanation: null, command: "./install.sh --system" });
   });
 
   it("shows a banner without a thread when two threads of a shared process run the same text", () => {

@@ -7732,6 +7732,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           host: command.host,
           warnings: command.warnings,
           explanation: command.explanation,
+          ...(command.agentCommand === undefined ? {} : { agentCommand: command.agentCommand }),
+          ...(command.changes === undefined ? {} : { changes: command.changes }),
           payload: command.payload,
           elevationStatus: command.elevationStatus,
           ...(command.failure === undefined ? {} : { failure: command.failure }),

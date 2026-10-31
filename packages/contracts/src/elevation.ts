@@ -241,6 +241,11 @@ export const ElevationPendingRequest = Schema.Struct({
   turnItemId: Schema.NullOr(TurnItemId),
   payload: ElevationBase64Url,
   explanation: Schema.NullOr(Schema.String),
+  /** The agent's shell command line from its tool call; unverified. */
+  agentCommand: Schema.optionalKey(Schema.String),
+  changes: Schema.optionalKey(
+    Schema.Struct({ files: NonNegativeInt, additions: NonNegativeInt, deletions: NonNegativeInt }),
+  ),
   createdAt: Schema.DateTimeUtc,
 });
 export type ElevationPendingRequest = typeof ElevationPendingRequest.Type;
@@ -268,6 +273,8 @@ export const ElevationCheck = Schema.Struct({
   id: Schema.String,
   ok: Schema.Boolean,
   message: Schema.String,
+  /** Who repairs it when failing: T3 itself, or an agent given the diagnosis. Absent when ok. */
+  fixBy: Schema.optionalKey(Schema.Literals(["t3", "agent"])),
 });
 export type ElevationCheck = typeof ElevationCheck.Type;
 

@@ -36,6 +36,7 @@ import {
   type ElevationRevokeInput,
   type ElevationStatus,
   type ElevationUninstallInput,
+  type OrchestrationV2ElevationChanges,
   type OrchestrationV2ElevationRequestFailure,
   type OrchestrationV2ElevationResolvedBy,
   type OrchestrationV2ProviderRef,
@@ -50,6 +51,7 @@ import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -65,6 +67,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { attribute, type LiveRun, type ServerSudo } from "./attribution.ts";
+import { uncommittedChanges } from "./changes.ts";
 import { ElevationRunCancellation } from "./runCancellation.ts";
 import {
   checkSignature,
@@ -96,6 +99,9 @@ const MAX_CONNECTIONS = 32;
 const HELLO_TIMEOUT = "5 seconds";
 const REQUEST_TIMEOUT = "5 seconds";
 const EXPIRY_GRACE_SECONDS = 5;
+// The checkout is read from the hello on; a slow read leaves the pointer out
+// rather than holding the request back.
+const CHANGES_WAIT = "750 millis";
 // A device-approved helper call waits for the phone, up to the 300 s window.
 const DEVICE_SUDO_TIMEOUT = "6 minutes";
 const PASSWORD_SUDO_TIMEOUT = "60 seconds";
@@ -106,6 +112,7 @@ const INSTALL_KEY_FILE = /^elevation-install-[0-9a-f-]{36}\.json$/;
 const INSTALL_KEY_FILE_MAX_AGE_MS = 60 * 60 * 1000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const RUNNING_ITEM_STATUSES = new Set(["pending", "running", "waiting"]);
+const FINISHED_ITEM_STATUSES = new Set(["completed"]);
 
 export interface ElevationOptions {
   readonly user: string;
@@ -285,12 +292,15 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       readonly host: string;
       readonly warnings: ElevationPayload["command"]["warnings"];
       readonly explanation: string | null;
+      readonly agentCommand: string | undefined;
+      readonly changes: OrchestrationV2ElevationChanges | null;
       readonly payload: string | null;
       readonly elevationStatus: "pending" | "cancelled";
       readonly failure?: OrchestrationV2ElevationRequestFailure;
     },
-  ) =>
-    orchestrator.dispatch({
+  ) => {
+    const { agentCommand, changes, ...rest } = fields;
+    return orchestrator.dispatch({
       type: "elevation_request.record",
       commandId: CommandId.make(`elevation:${turnItemId}:record`),
       threadId: run.threadId,
@@ -298,8 +308,11 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       nodeId: run.rootNodeId,
       turnItemId,
       kind: "sudo",
-      ...fields,
+      ...rest,
+      ...(agentCommand === undefined ? {} : { agentCommand }),
+      ...(changes === null ? {} : { changes }),
     });
+  };
 
   const liveRuns = Effect.gen(function* () {
     const threadIds = yield* projections.listLiveRunThreadIds();
@@ -336,16 +349,23 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
             threadId: run.threadId,
             runId: run.id,
             rootNodeId: run.rootNodeId,
-            commands: items.flatMap((item) =>
-              item.type === "command_execution" && RUNNING_ITEM_STATUSES.has(item.status)
-                ? [
-                    {
-                      text: item.input,
-                      explanation: item.description ?? reasonFor(item.nativeItemRef),
-                    },
-                  ]
-                : [],
-            ),
+            commands: items
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+              )
+              .flatMap((item) =>
+                item.type === "command_execution" &&
+                (RUNNING_ITEM_STATUSES.has(item.status) || FINISHED_ITEM_STATUSES.has(item.status))
+                  ? [
+                      {
+                        text: item.input,
+                        explanation: item.description ?? reasonFor(item.nativeItemRef),
+                        running: RUNNING_ITEM_STATUSES.has(item.status),
+                      },
+                    ]
+                  : [],
+              ),
           };
         });
       }),
@@ -430,6 +450,20 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     send({ type: "hello_reply", v: 1, decision: "mine" });
     const ownSudo = attribution.serverSudo as OwnSudo | undefined;
     if (ownSudo !== undefined) ownSudo.reached = true;
+    const changesFiber =
+      ownSudo === undefined
+        ? yield* uncommittedChanges(decoded.value.cwd).pipe(
+            Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+            Effect.forkChild,
+          )
+        : null;
+    const changes =
+      changesFiber === null
+        ? Effect.succeed(null)
+        : Fiber.join(changesFiber).pipe(
+            Effect.timeoutOption(CHANGES_WAIT),
+            Effect.map(Option.getOrNull),
+          );
     const finish = (outcome: string) => {
       if (ownSudo !== undefined) ownSudo.outcome = outcome;
     };
@@ -451,6 +485,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           host: decoded.value.host.name,
           warnings: [],
           explanation: attribution.explanation,
+          agentCommand: attribution.command,
+          changes: null,
           payload: null,
           elevationStatus: "cancelled",
           failure: message.outcome,
@@ -467,6 +503,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     if (payloadBytes === null || payload === null || payload._tag === "Failure") return;
 
     const requestId = ElevationRequestId.make(NodeCrypto.randomUUID());
+    const requestChanges = yield* changes;
     let item: { readonly run: LiveRun; readonly turnItemId: TurnItemId } | null = null;
     if (attribution.run !== null) {
       const turnItemId = TurnItemId.make(`elevation:${requestId}`);
@@ -478,6 +515,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         host: payload.success.host.name,
         warnings: payload.success.command.warnings,
         explanation: attribution.explanation,
+        agentCommand: attribution.command,
+        changes: requestChanges,
         payload: message.payload,
         elevationStatus: "pending",
       }).pipe(
@@ -494,6 +533,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         turnItemId: item?.turnItemId ?? null,
         payload: message.payload,
         explanation: attribution.explanation,
+        ...(attribution.command === undefined ? {} : { agentCommand: attribution.command }),
+        ...(requestChanges === null ? {} : { changes: requestChanges }),
         createdAt: yield* DateTime.now,
       },
       runId: attribution.run?.runId ?? null,

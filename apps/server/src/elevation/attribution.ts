@@ -12,8 +12,16 @@ export interface LiveRun {
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly rootNodeId: NodeId;
-  /** Command items still running in this run. */
-  readonly commands: ReadonlyArray<{ readonly text: string; readonly explanation: string | null }>;
+  /** This run's command items, newest first. */
+  readonly commands: ReadonlyArray<{
+    readonly text: string;
+    readonly explanation: string | null;
+    /**
+     * False once the tool call returned. A background command (Claude's
+     * `run_in_background`) returns before its shell reaches sudo.
+     */
+    readonly running: boolean;
+  }>;
 }
 
 /** A sudo the server spawned itself, such as the setup test or a helper call. */
@@ -28,6 +36,8 @@ export type Attribution =
       readonly type: "mine";
       readonly run: LiveRun | null;
       readonly explanation: string | null;
+      /** The matched tool call's command line. */
+      readonly command?: string;
       /** Set when the sudo is one this server spawned. */
       readonly serverSudo?: ServerSudo;
     };
@@ -90,28 +100,34 @@ export function attribute(input: {
   // (the shell) must contain the command text.
   const belowServer = hello.chain.slice(0, serverIndex);
   const levels = [hello.argv, ...belowServer.map((entry) => entry.argv)];
-  for (const [level, argv] of levels.entries()) {
-    if (argv === null) continue;
-    const processTokens = tokens(argv.join(" "));
-    const matches = input.liveRuns.flatMap((run) =>
-      run.commands
-        .filter((command) => {
-          const commandTokens = tokens(command.text);
-          return level === 0
-            ? containsSequence(commandTokens, processTokens)
-            : containsSequence(processTokens, commandTokens);
-        })
-        .map((command) => ({ run, command })),
-    );
-    const threads = new Set(matches.map((match) => match.run.threadId));
-    const first = matches[0];
-    if (threads.size === 1 && first !== undefined) {
-      return {
-        type: "mine",
-        run: first.run,
-        explanation:
-          matches.find((match) => match.command.explanation !== null)?.command.explanation ?? null,
-      };
+  // Finished calls only after every level missed, so an old `sudo x` item
+  // can't take the place of the running script that runs it.
+  for (const running of [true, false]) {
+    for (const [level, argv] of levels.entries()) {
+      if (argv === null) continue;
+      const processTokens = tokens(argv.join(" "));
+      const matches = input.liveRuns.flatMap((run) =>
+        run.commands
+          .filter((command) => {
+            if (command.running !== running) return false;
+            const commandTokens = tokens(command.text);
+            return level === 0
+              ? containsSequence(commandTokens, processTokens)
+              : containsSequence(processTokens, commandTokens);
+          })
+          .map((command) => ({ run, command })),
+      );
+      const threads = new Set(matches.map((match) => match.run.threadId));
+      const first = matches[0];
+      if (threads.size === 1 && first !== undefined) {
+        const explained = matches.find((match) => match.command.explanation !== null) ?? first;
+        return {
+          type: "mine",
+          run: first.run,
+          explanation: explained.command.explanation,
+          command: explained.command.text,
+        };
+      }
     }
   }
 
