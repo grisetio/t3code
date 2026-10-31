@@ -10,8 +10,12 @@ import {
   type EnvironmentId,
   type OrchestrationV2ElevationRequestFailure,
   type OrchestrationV2TurnItem,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
+
+import { elevationCommandDisplay } from "./elevationCommand.ts";
+import { resolveProviderInstanceDisplayName } from "./state/providerInstanceDisplay.ts";
 
 // Formats: docs/internals/device-approval.md. Every string a client shows from a
 // request goes through `escapeElevationDisplayText`, so this module returns only
@@ -22,8 +26,12 @@ export type ElevationRequestItem = Extract<
   { readonly type: "elevation_request" }
 >;
 
-export const ELEVATION_EXPLANATION_LABEL = "Agent's explanation (unverified)";
 export const ELEVATION_APPROVE_ON_PHONE = "Approve on your phone";
+/** The approval window is configurable, so the text names no duration. */
+const ELEVATION_EXPIRED_TEXT = "Nobody approved in time";
+/** Every surface that can't sign says so in these words. */
+export const ELEVATION_CANT_APPROVE_HERE =
+  "Approving needs the T3 app on an Android phone with a fingerprint sensor.";
 /** pam_tid sits before the password in a nix-darwin or Apple sudo stack; no sudo option skips it. */
 export const ELEVATION_TOUCH_ID_HINT =
   "On a Mac that uses Touch ID for sudo, a Touch ID prompt may appear there first; Cancel continues with the password.";
@@ -68,7 +76,7 @@ const ELEVATION_DECODE_FAILURE_MESSAGES: Record<ElevationPayloadDecodeFailure, s
   invalid: "This request is malformed and can't be approved.",
 };
 
-export function elevationDecodeFailureMessage(failure: ElevationPayloadDecodeFailure): string {
+function elevationDecodeFailureMessage(failure: ElevationPayloadDecodeFailure): string {
   return ELEVATION_DECODE_FAILURE_MESSAGES[failure];
 }
 
@@ -166,6 +174,70 @@ export function decodeElevationRequestPayload(
   }));
 }
 
+/** The agent's reason, trimmed and escaped, or null when it gave none. */
+export function elevationReason(explanation: string | null | undefined): string | null {
+  const trimmed = explanation?.trim() ?? "";
+  return trimmed === "" ? null : escapeElevationDisplayText(trimmed);
+}
+
+export interface ElevationHeadline {
+  readonly text: string;
+  /** The command stands in for a missing reason, so it reads as code. */
+  readonly command: boolean;
+}
+
+/**
+ * What a pending request leads with on every surface: the agent's reason in quotes, "Add device
+ * X" for a new phone, or the command when the agent gave no reason.
+ */
+export function elevationHeadline(input: {
+  readonly explanation: string | null;
+  readonly decoded: Result.Result<DecodedElevationPayload, ElevationPayloadDecodeFailure>;
+}): ElevationHeadline {
+  const decoded = Result.isSuccess(input.decoded) ? input.decoded.success : null;
+  if (decoded?.view.enroll)
+    return { text: `Add device ${decoded.view.enroll.label}`, command: false };
+  const reason = elevationReason(input.explanation);
+  if (reason !== null) return { text: `“${reason}”`, command: false };
+  if (decoded !== null) {
+    return { text: elevationCommandDisplay(decoded.payload).collapsed, command: true };
+  }
+  return Result.isFailure(input.decoded)
+    ? { text: elevationDecodeFailureMessage(input.decoded.failure), command: false }
+    : { text: "Approval needed", command: false };
+}
+
+export interface ElevationAgent {
+  readonly driver: ServerProvider["driver"];
+  readonly instanceId: ServerProvider["instanceId"];
+  readonly iconUrl: ServerProvider["iconUrl"];
+  readonly name: string;
+}
+
+/**
+ * The agent that asked, from the provider instance its thread ran on. Null when the thread or its
+ * provider isn't known here, in which case surfaces show no mark rather than a guess.
+ */
+export function elevationAgent(
+  thread: {
+    readonly modelSelection: { readonly instanceId: ServerProvider["instanceId"] };
+    readonly runtime: { readonly providerInstanceId: ServerProvider["instanceId"] } | null;
+  } | null,
+  providers: readonly ServerProvider[],
+): ElevationAgent | null {
+  if (thread === null) return null;
+  const instanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
+  const provider = providers.find((candidate) => candidate.instanceId === instanceId);
+  return provider === undefined
+    ? null
+    : {
+        driver: provider.driver,
+        instanceId: provider.instanceId,
+        iconUrl: provider.iconUrl,
+        name: resolveProviderInstanceDisplayName(provider),
+      };
+}
+
 const ELEVATION_FAILURE_MESSAGES: Record<OrchestrationV2ElevationRequestFailure, string> = {
   too_large: "Too long to approve on a device; use the terminal.",
   invalid_encoding: "The command has text that can't be shown faithfully; use the terminal.",
@@ -175,30 +247,79 @@ const ELEVATION_FAILURE_MESSAGES: Record<OrchestrationV2ElevationRequestFailure,
 export type ElevationRequestStatusView =
   | { readonly kind: "pending"; readonly label: string }
   | {
-      readonly kind: "approved" | "denied" | "expired" | "cancelled";
+      readonly kind: "approved" | "done" | "denied" | "expired" | "cancelled";
+      /** "Approved", "Done", "Denied", "Expired" or "Cancelled". */
       readonly label: string;
+      /** When it ended, for the collapsed row: "1:18 PM". */
+      readonly time: string;
+      /** How and when it ended: "Approved on this phone · 1:18 PM · finished". */
+      readonly how: string;
+      /** Why the module refused it, when it did. */
       readonly detail: string | null;
     };
 
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+
+/** The same status words on every surface, for rows that show a request after it ended. */
 export function elevationRequestStatusView(
-  item: Pick<ElevationRequestItem, "elevationStatus" | "failure" | "resolvedBy">,
+  item: Pick<ElevationRequestItem, "elevationStatus" | "failure" | "resolvedBy"> & {
+    readonly completedAt?: ElevationRequestItem["completedAt"];
+    readonly updatedAt: ElevationRequestItem["updatedAt"];
+  },
+  options: {
+    /** The approved command's run has ended. */
+    readonly finished: boolean;
+    /** This phone's key on the machine; null on clients without one. */
+    readonly thisKeyId?: string | null;
+    /** This phone denied it. Denials carry no device, so only the phone that sent one knows. */
+    readonly deniedHere?: boolean;
+  },
 ): ElevationRequestStatusView {
-  const device =
-    item.resolvedBy === null
-      ? ""
-      : ` on ${escapeElevationDisplayText(item.resolvedBy.deviceLabel)}`;
+  if (item.elevationStatus === "pending") return { kind: "pending", label: "Waiting for approval" };
+  const time = timeFormat.format((item.completedAt ?? item.updatedAt).epochMilliseconds);
   const detail = item.failure === undefined ? null : ELEVATION_FAILURE_MESSAGES[item.failure];
+  const { resolvedBy } = item;
+  const approvedOn =
+    resolvedBy === null
+      ? ""
+      : resolvedBy.keyId !== undefined && resolvedBy.keyId === options.thisKeyId
+        ? " on this phone"
+        : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
   switch (item.elevationStatus) {
-    case "pending":
-      return { kind: "pending", label: "Waiting for approval" };
     case "approved":
-      return { kind: "approved", label: `Approved${device}`, detail };
+      return options.finished
+        ? {
+            kind: "done",
+            label: "Done",
+            time,
+            how: `Approved${approvedOn} · ${time} · finished`,
+            detail,
+          }
+        : {
+            kind: "approved",
+            label: "Approved",
+            time,
+            how: `Approved${approvedOn} · ${time}`,
+            detail,
+          };
     case "denied":
-      return { kind: "denied", label: `Denied${device}`, detail };
+      return {
+        kind: "denied",
+        label: "Denied",
+        time,
+        how: `Denied${options.deniedHere ? " on this phone" : ""} · ${time}`,
+        detail,
+      };
     case "expired":
-      return { kind: "expired", label: "Expired", detail };
+      return {
+        kind: "expired",
+        label: "Expired",
+        time,
+        how: `${ELEVATION_EXPIRED_TEXT} · ${time}`,
+        detail,
+      };
     case "cancelled":
-      return { kind: "cancelled", label: "Cancelled", detail };
+      return { kind: "cancelled", label: "Cancelled", time, how: `Cancelled · ${time}`, detail };
   }
 }
 
