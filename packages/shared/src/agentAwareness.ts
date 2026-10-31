@@ -25,6 +25,8 @@ export interface AgentAwarenessState {
   readonly phase: AgentAwarenessPhase;
   readonly headline: string;
   readonly detail?: string;
+  /** Set while the approval is a device-approval sudo, so phones can route it on its own. */
+  readonly pendingRequestKind?: "sudo";
   readonly modelTitle: string;
   readonly updatedAt: string;
   readonly deepLink: string;
@@ -88,6 +90,9 @@ export function projectThreadAwarenessV2(
     phase,
     headline: headlineForPhase(phase),
     ...(detail === undefined ? {} : { detail }),
+    ...(phase === "waiting_for_approval" && thread.pendingRuntimeRequest?.elevation === true
+      ? { pendingRequestKind: "sudo" as const }
+      : {}),
     modelTitle: thread.modelSelection.model,
     updatedAt: DateTime.formatIso(thread.updatedAt),
     deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: thread.id }),

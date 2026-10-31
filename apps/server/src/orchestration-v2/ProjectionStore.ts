@@ -1520,6 +1520,7 @@ function waitingTurnItemAsPendingRequest(
     kind: item.type === "secret_request" ? "user_input" : "command",
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
+    ...(item.type === "elevation_request" ? { elevation: true } : {}),
   };
 }
 

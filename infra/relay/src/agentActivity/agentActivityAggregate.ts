@@ -40,6 +40,9 @@ function aggregateRowForState(state: RelayAgentActivityState) {
     threadTitle: state.threadTitle,
     modelTitle: state.modelTitle,
     phase: state.phase,
+    ...(state.pendingRequestKind === undefined
+      ? {}
+      : { pendingRequestKind: state.pendingRequestKind }),
     status: statusForPhase(state.phase),
     updatedAt: state.updatedAt,
     deepLink: state.deepLink,

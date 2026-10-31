@@ -251,6 +251,40 @@ describe("Android delivery routing", () => {
     },
   );
 
+  it.effect.each([true, false])(
+    "marks a sudo approval alert for its own channel (live card %s), without request content",
+    (liveActivitiesEnabled) => {
+      const h = harness();
+      h.current.target.preferences_json = encodeJson({ ...preferences, liveActivitiesEnabled });
+      return Effect.gen(function* () {
+        const delivery = yield* FcmDeliveries.FcmDeliveries;
+        yield* delivery.process(h.job);
+        h.current.state = { ...state, phase: "waiting_for_approval", pendingRequestKind: "sudo" };
+        yield* delivery.process({ ...h.job, state: h.current.state });
+        const alerts = h.sent.filter((message) => message.alert);
+        expect(alerts).toHaveLength(1);
+        expect(alerts[0]?.data).toMatchObject({
+          alert_request_kind: "sudo",
+          alert_title: "Fix notifications",
+          alert_body: "Approval: Project",
+        });
+      }).pipe(Effect.provide(h.layer));
+    },
+  );
+
+  it.effect("leaves other approvals unmarked", () => {
+    const h = harness();
+    return Effect.gen(function* () {
+      const delivery = yield* FcmDeliveries.FcmDeliveries;
+      yield* delivery.process(h.job);
+      h.current.state = { ...state, phase: "waiting_for_approval" };
+      yield* delivery.process({ ...h.job, state: h.current.state });
+      const alert = h.sent.find((message) => message.alert);
+      expect(alert?.data.alert_title).toBe("Fix notifications");
+      expect(alert?.data).not.toHaveProperty("alert_request_kind");
+    }).pipe(Effect.provide(h.layer));
+  });
+
   it.effect("filters disabled event types before counting a group", () => {
     const h = harness();
     h.current.target.last_aggregate_json = encodeJson(aggregateFor([state, secondState]));
