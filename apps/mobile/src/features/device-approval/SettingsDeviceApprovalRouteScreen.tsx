@@ -27,6 +27,7 @@ import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { ListActionRow } from "../../components/ui/ListActionRow";
 import { ListRowLayout } from "../../components/ui/ListRowLayout";
+import { cn } from "../../lib/cn";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { elevation } from "../../state/elevation";
 import { useEnvironments } from "../../state/environments";
@@ -461,6 +462,13 @@ function DeviceApprovalStatus(props: {
             label="Update T3 on this machine"
             description="This server doesn't say which user it approves for yet."
           />
+        ) : installed && !status.helperInstalled ? (
+          // Adding and removing devices runs the root-owned helper; the helper check says why it can't.
+          <StaticRow
+            icon="iphone"
+            label="Devices can't be changed from T3"
+            description="The helper that adds and removes them isn't installed safely. See the checks above."
+          />
         ) : thisDevice !== undefined && record ? (
           <>
             <ListActionRow
@@ -506,44 +514,59 @@ function DeviceApprovalStatus(props: {
       </View>
 
       {status.devices.length > 0 ? (
-        <View className="overflow-hidden rounded-2xl">
-          {status.devices.map((device) => (
-            <ListActionRow
-              key={device.keyId}
-              icon="iphone"
-              label={
-                device.keyId === thisDevice?.keyId ? `${device.label} (this phone)` : device.label
-              }
-              description={`${SECURITY_LEVEL_LABELS[device.securityLevel]} · Added ${formatDate(device.enrolledAt)}${
-                device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`
-              }`}
-              detail="Revoke"
-              disabled={!canRevoke || busy !== null}
-              loading={busy === `revoke:${device.keyId}`}
-              onPress={() =>
-                Dialog.confirm({
-                  title: `Revoke ${device.label}?`,
-                  message: "It will no longer approve sudo on this machine.",
-                  confirmText: "Revoke",
-                  destructive: true,
-                  onConfirm: () =>
-                    void sudo(`revoke:${device.keyId}`, (password) =>
-                      revoke({
-                        environmentId,
-                        input: {
-                          keyId: device.keyId,
-                          ...(password === undefined ? {} : { password }),
-                        },
-                      }),
-                    ),
-                })
-              }
-            />
-          ))}
+        <View
+          className={cn(
+            "overflow-hidden rounded-2xl",
+            !status.helperInstalled && "bg-grouped-card",
+          )}
+        >
+          {status.devices.map((device) => {
+            const label =
+              device.keyId === thisDevice?.keyId ? `${device.label} (this phone)` : device.label;
+            const description = `${SECURITY_LEVEL_LABELS[device.securityLevel]} · Added ${formatDate(device.enrolledAt)}${
+              device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`
+            }`;
+            return status.helperInstalled ? (
+              <ListActionRow
+                key={device.keyId}
+                icon="iphone"
+                label={label}
+                description={description}
+                detail="Revoke"
+                disabled={!canRevoke || busy !== null}
+                loading={busy === `revoke:${device.keyId}`}
+                onPress={() =>
+                  Dialog.confirm({
+                    title: `Revoke ${device.label}?`,
+                    message: "It will no longer approve sudo on this machine.",
+                    confirmText: "Revoke",
+                    destructive: true,
+                    onConfirm: () =>
+                      void sudo(`revoke:${device.keyId}`, (password) =>
+                        revoke({
+                          environmentId,
+                          input: {
+                            keyId: device.keyId,
+                            ...(password === undefined ? {} : { password }),
+                          },
+                        }),
+                      ),
+                  })
+                }
+              />
+            ) : (
+              <ListRowLayout
+                key={device.keyId}
+                icon="iphone"
+                label={label}
+                description={description}
+              />
+            );
+          })}
         </View>
       ) : null}
 
-      {installed ? (
+      {installed && status.helperInstalled ? (
         <View className="overflow-hidden rounded-2xl">
           <ListActionRow
             icon="xmark"

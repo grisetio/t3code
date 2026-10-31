@@ -758,6 +758,24 @@ describe("ElevationService helper", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.live("reports an installed helper someone other than root could replace", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const trusted = yield* fixture.service.status;
+      assert.isTrue(trusted.helperInstalled);
+      assert.isFalse(trusted.checks.some((check) => check.id === "helper"));
+
+      yield* Effect.promise(() => NodeFSP.chmod(NodePath.join(fixture.dir, "lib"), 0o777));
+      const untrusted = yield* fixture.service.status;
+      assert.isFalse(untrusted.helperInstalled);
+      const check = untrusted.checks.find((candidate) => candidate.id === "helper");
+      assert.isFalse(check?.ok);
+      assert.include(check?.message, installedHelper(fixture.dir));
+      // Agent sudo still goes to the phone; only managing devices needs the helper.
+      assert.strictEqual(untrusted.ready, trusted.ready);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.live("runs only the installed helper as root once installed, never the override", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();

@@ -139,7 +139,12 @@ function DeviceApprovalStatus(props: {
       </SettingsRow>
       {installed ? <TestRow environmentId={props.environmentId} /> : <SetUpRow status={status} />}
       {status.devices.map((device) => (
-        <DeviceRow key={device.keyId} environmentId={props.environmentId} device={device} />
+        <DeviceRow
+          key={device.keyId}
+          environmentId={props.environmentId}
+          device={device}
+          revocable={status.helperInstalled}
+        />
       ))}
       {status.setupOutsideT3 ? (
         <SettingsRow
@@ -147,7 +152,8 @@ function DeviceApprovalStatus(props: {
           description="Turning device approval off leaves them in place."
         />
       ) : null}
-      {installed ? (
+      {/* Without the root-owned helper these would fail; the helper check says why. */}
+      {installed && status.helperInstalled ? (
         <TurnOffRow environmentId={props.environmentId} phoneFirst={status.devices.length > 0} />
       ) : null}
     </>
@@ -245,6 +251,7 @@ function SetUpRow(props: { readonly status: ElevationStatus }) {
 function DeviceRow(props: {
   readonly environmentId: EnvironmentId;
   readonly device: ElevationDevice;
+  readonly revocable: boolean;
 }) {
   const { device } = props;
   const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
@@ -257,7 +264,7 @@ function DeviceRow(props: {
         device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`
       }`}
       control={
-        confirming ? null : (
+        confirming || !props.revocable ? null : (
           <Button
             variant="outline"
             size="xs"

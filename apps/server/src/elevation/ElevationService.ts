@@ -686,6 +686,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     return Option.getOrNull(decodeHelperStatus(lastLine(output.value.stdout)));
   });
 
+  const untrustedHelperMessage = `${options.hostPaths.helperPath} is missing, or it or a folder above it isn't root-owned and closed to other users.`;
+
   const status: Effect.Effect<ElevationStatus, ElevationError> = Effect.gen(function* () {
     yield* removeStaleInstallKeys;
     const unsupported = yield* unsupportedReason;
@@ -694,6 +696,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       socketPath: options.socketPath,
     });
     const helper = yield* helperStatus;
+    const helperInstalled = (yield* installedHelper) !== null;
     const configured =
       host.config !== null &&
       host.config.version === 1 &&
@@ -707,6 +710,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       enrolledAt: Option.getOrElse(DateTime.make(key.enrolledAt), () => DateTime.makeUnsafe(0)),
       lastUsedAt: Option.getOrNull(DateTime.make(lastUsed.get(key.keyId) ?? "")),
     }));
+    // Agent sudo doesn't need the helper, so it doesn't count against `ready`;
+    // adding and removing devices does.
+    const helperCheck =
+      !helperInstalled && (listening || devices.length > 0)
+        ? [{ id: "helper", ok: false, message: untrustedHelperMessage }]
+        : [];
     return {
       supported: unsupported === null,
       ...(unsupported === null ? {} : { unsupportedReason: unsupported }),
@@ -714,7 +723,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       ownsApprovals: listening,
       user: options.user,
       setupOutsideT3: helper?.setupOutsideT3 ?? false,
-      checks: host.checks,
+      helperInstalled,
+      checks: [...host.checks, ...helperCheck],
       plannedChanges: helper?.plannedChanges ?? [],
       devices,
     };
@@ -731,12 +741,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   // A helper this account can write could be swapped between approval and sudo's exec.
   const requireInstalledHelper = Effect.gen(function* () {
     const helper = yield* installedHelper;
-    if (helper === null) {
-      return yield* fail(
-        "not_available",
-        `${options.hostPaths.helperPath} is missing, or it or a folder above it isn't root-owned and closed to other users.`,
-      );
-    }
+    if (helper === null) return yield* fail("not_available", untrustedHelperMessage);
     return helper;
   });
 

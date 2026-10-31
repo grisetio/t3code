@@ -283,6 +283,8 @@ export const ElevationStatus = Schema.Struct({
   ownsApprovals: Schema.Boolean,
   /** Parts exist that `installed-by-t3.json` doesn't record; uninstall leaves them. */
   setupOutsideT3: Schema.Boolean,
+  /** The root-owned helper that adds and removes devices is in place, so T3 can manage them. */
+  helperInstalled: Schema.Boolean,
   checks: Schema.Array(ElevationCheck),
   /** What install would change, shown before it runs. */
   plannedChanges: Schema.Array(Schema.Struct({ path: Schema.String, summary: Schema.String })),
