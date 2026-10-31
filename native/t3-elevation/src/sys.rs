@@ -366,6 +366,28 @@ mod tests {
         );
     }
 
+    /// Review finding (empty argv[0]): KERN_PROCARGS2 pads the exec path with
+    /// NULs, so an empty argv[0] is indistinguishable from padding and the
+    /// parse shifts by one. sudo then runs argv[1] while the payload shows
+    /// argv[2..] plus the first environment string.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "review: empty argv[0] shifts the macOS argv parse; remove when fixed"]
+    fn procargs_keeps_an_empty_argv0() {
+        use std::os::unix::process::CommandExt as _;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg0("")
+            .arg("30")
+            .env_clear()
+            .env("X", "1")
+            .spawn()
+            .unwrap();
+        let argv = proc_argv(child.id() as i32);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(argv, Some(vec![Vec::new(), b"30".to_vec()]));
+    }
+
     #[test]
     fn split_keeps_empty_arguments() {
         assert_eq!(
