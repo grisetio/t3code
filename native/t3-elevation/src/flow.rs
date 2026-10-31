@@ -356,7 +356,9 @@ fn build_payload(
     getrandom::getrandom(&mut nonce).ok()?;
     let (gids, group_names) = sys::groups_of(user);
     let run_as_for_sudoers = match (&parsed.user, &parsed.group) {
-        (Some(target), _) => target.clone(),
+        (Some(target), _) => sudo_argv::numeric_id(target)
+            .and_then(sys::user_by_uid)
+            .map_or_else(|| target.clone(), |target| target.name),
         (None, Some(_)) => user.name.clone(),
         (None, None) => "root".to_string(),
     };

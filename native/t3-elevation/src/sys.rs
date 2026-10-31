@@ -326,18 +326,28 @@ pub fn groups_of(user: &Passwd) -> (Vec<u32>, Vec<String>) {
         .iter()
         .map(|id| *id as u32)
         .collect();
-    let names = gids
-        .iter()
-        .filter_map(|gid| unsafe {
-            let group = libc::getgrgid(*gid as libc::gid_t);
-            (!group.is_null()).then(|| {
-                CStr::from_ptr((*group).gr_name)
-                    .to_string_lossy()
-                    .into_owned()
-            })
-        })
-        .collect();
+    let names = gids.iter().filter_map(|gid| group_name(*gid)).collect();
     (gids, names)
+}
+
+pub fn group_name(gid: u32) -> Option<String> {
+    unsafe {
+        let mut entry: libc::group = std::mem::zeroed();
+        let mut buffer = vec![0 as c_char; 64 * 1024];
+        let mut result = std::ptr::null_mut();
+        libc::getgrgid_r(
+            gid as libc::gid_t,
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        );
+        (!result.is_null()).then(|| {
+            CStr::from_ptr((*result).gr_name)
+                .to_string_lossy()
+                .into_owned()
+        })
+    }
 }
 
 pub fn now() -> i64 {

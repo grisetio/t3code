@@ -361,6 +361,7 @@ const UNDERSTOOD_VALUES: &[char] = &['u', 'g', 'p'];
 fn mode(scan: &Scan) -> Mode {
     let understood = scan.options.iter().all(|opt| match opt {
         Opt::Flag(option) => UNDERSTOOD_FLAGS.contains(option),
+        Opt::Value('u' | 'g', value) if value.starts_with('#') => numeric_id(value).is_some(),
         Opt::Value(option, _) => UNDERSTOOD_VALUES.contains(option),
     });
     // `VAR=value` sets the command's environment, which can change what it
@@ -393,6 +394,25 @@ fn mode(scan: &Scan) -> Mode {
         Mode::Unparsed
     } else {
         Mode::Run(command)
+    }
+}
+
+/// `#123`, a user or group named by id. sudo.ws also takes a sign and falls
+/// back to a name lookup when the id doesn't parse, and sudo-rs takes `+`, so
+/// only plain digits mean the same id to both. `#4294967295` is "no change".
+pub fn numeric_id(value: &str) -> Option<u32> {
+    let digits = value.strip_prefix('#')?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|id| *id != u32::MAX)
+}
+
+/// A `#id` value with the name it resolves to, so the phone shows `#0 (root)`.
+fn with_name(value: &str, lookup: impl Fn(u32) -> Option<String>) -> String {
+    match numeric_id(value).and_then(lookup) {
+        Some(name) => format!("{value} ({name})"),
+        None => value.to_string(),
     }
 }
 
@@ -528,12 +548,17 @@ pub struct Described {
 
 pub fn describe(sudo_argv: &[String], parsed: &Parsed, context: &Context) -> Described {
     let run_as = match (&parsed.user, &parsed.group) {
-        (Some(user), _) => user.clone(),
+        (Some(user), _) => with_name(user, |uid| {
+            crate::sys::user_by_uid(uid).map(|user| user.name)
+        }),
         // `-g` alone runs the command as the invoking user.
         (None, Some(_)) => context.user.to_string(),
         (None, None) => "root".to_string(),
     };
-    let run_as_group = parsed.group.clone();
+    let run_as_group = parsed
+        .group
+        .as_deref()
+        .map(|group| with_name(group, crate::sys::group_name));
     let mut warnings = Vec::new();
     let (argv, resolved_path, shell, arg_checks) = match &parsed.mode {
         Mode::Unparsed => {
@@ -1178,6 +1203,26 @@ mod tests {
         let scanned = scan_rs(&argv(&["sudo", "--preserve-env=A,B", "a-b=1", "-n"])).unwrap();
         assert_eq!(scanned.options, vec![Opt::Value('E', "A,B".into())]);
         assert_eq!(scanned.command, argv(&["a-b=1", "-n"]));
+    }
+
+    #[test]
+    fn numeric_ids_show_their_names() {
+        let tmp = std::env::temp_dir();
+        let shells = vec![];
+        let ctx = context(tmp.to_str().unwrap(), &[], &shells);
+        let sudo = argv(&["sudo", "-u", "#0", "-g", "#0", "/usr/bin/true"]);
+        let described = describe(&sudo, &parse(&sudo), &ctx);
+        assert_eq!(described.run_as, "#0 (root)");
+        let group = crate::sys::group_name(0).unwrap();
+        assert_eq!(described.run_as_group, Some(format!("#0 ({group})")));
+        // No such user: sudo.ws runs as the bare id, so that's what shows.
+        let sudo = argv(&["sudo", "-u", "#4000000000", "/usr/bin/true"]);
+        assert_eq!(describe(&sudo, &parse(&sudo), &ctx).run_as, "#4000000000");
+        // Spellings the two sudos read differently aren't shown as parsed.
+        for user in ["#+0", "#-1", "# 0", "#", "#4294967295", "#0x0"] {
+            let sudo = argv(&["sudo", "-u", user, "/usr/bin/true"]);
+            assert_eq!(parse(&sudo).mode, Mode::Unparsed, "{user}");
+        }
     }
 
     #[test]
