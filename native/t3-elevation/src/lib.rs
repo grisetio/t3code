@@ -19,6 +19,7 @@ pub mod json;
 pub mod keys;
 pub mod payload;
 pub mod rootsafe;
+pub mod shell_words;
 pub mod socket;
 pub mod sudo_argv;
 pub mod sudoers;

@@ -209,7 +209,6 @@ export function ElevationApprovalHost() {
             threadId: request.threadId,
             decoded,
             explanation: request.explanation,
-            agentCommand: request.agentCommand,
             changes: request.changes,
           }}
           openChanges={(open) => {

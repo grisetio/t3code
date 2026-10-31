@@ -30,12 +30,7 @@ function headline(entry: PendingElevationRequest): string {
   if (view.enroll) return `Add device ${view.enroll.label}`;
   if (entry.request.explanation)
     return `“${escapeElevationDisplayText(entry.request.explanation)}”`;
-  return (
-    elevationCommandDisplay({
-      agentCommand: entry.request.agentCommand,
-      commandArgv: payload.command.argv,
-    }).lines[0] ?? ""
-  );
+  return elevationCommandDisplay(payload).collapsed;
 }
 
 /**

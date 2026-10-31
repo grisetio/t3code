@@ -546,6 +546,7 @@ pub struct Context<'a> {
     pub shells: &'a [String],
 }
 
+#[derive(Clone)]
 pub struct Described {
     pub run_as: String,
     pub run_as_group: Option<String>,
@@ -857,6 +858,21 @@ fn replaceable(path: &Path, context: &Context) -> bool {
             creatable(&parent.join(target), context)
         }),
     }
+}
+
+/// Whether a user with `uid` and `gids` could change what runs at `path`.
+pub fn replaceable_by(path: &Path, uid: u32, gids: &[u32]) -> bool {
+    let context = Context {
+        user: "",
+        uid,
+        gids,
+        cwd: "/",
+        caller_shell: None,
+        target_shell: None,
+        search: Search::caller(""),
+        shells: &[],
+    };
+    replaceable(path, &context)
 }
 
 /// Programs read config, build files, hooks and modules from the cwd (git

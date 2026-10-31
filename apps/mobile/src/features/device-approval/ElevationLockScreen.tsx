@@ -103,7 +103,6 @@ function LockScreenRequest() {
                 threadId: match.request.threadId,
                 decoded: match.decoded,
                 explanation: match.request.explanation,
-                agentCommand: match.request.agentCommand,
                 changes: match.request.changes,
               }}
               {...(session.hideContent ? { hidden: { onUnlock: () => void unlock() } } : {})}
