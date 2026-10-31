@@ -84,6 +84,8 @@ function warningMessage(warning: ElevationWarning, argv: readonly string[]): str
       return "sudo's options weren't understood; the full command is shown as given.";
     case "edit":
       return "Edits files as the target user.";
+    case "unresolved_program":
+      return "Couldn't determine which program sudo will run.";
     case "dev_attestation":
       return "Accepts debug builds of the T3 app.";
     case "test_attestation":
@@ -201,9 +203,10 @@ export function elevationRequestFallbackView(
     runAs: escapeElevationDisplayText(item.runAs ?? "root"),
     commandArgv: item.argv.map(escapeElevationDisplayText),
     cwd: escapeElevationDisplayText(item.cwd),
+    // `arg` indexes the payload's `command.argv`, but the item mirrors sudo's own argv.
     warnings: item.warnings.map((warning) => ({
       code: warning.code,
-      message: warningMessage(warning, item.argv),
+      message: warningMessage(warning, []),
     })),
   };
 }

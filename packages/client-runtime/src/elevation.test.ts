@@ -5,6 +5,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import {
   decodeElevationRequestPayload,
   elevationFailureMessage,
+  elevationRequestFallbackView,
   elevationRequestStatusView,
 } from "./elevation.ts";
 import { ElevationError } from "@t3tools/contracts";
@@ -144,6 +145,34 @@ describe("decodeElevationRequestPayload", () => {
     ]);
   });
 
+  it("names the unresolved program and attestation warnings that carry an argument index", () => {
+    const decoded = Result.getOrThrow(
+      decodeElevationRequestPayload(
+        encodePayload({
+          argv: [
+            "/usr/local/lib/t3-elevation/t3-elevation",
+            "enroll",
+            "--user",
+            "kgriset",
+            "--label",
+            "Pixel",
+            "--public-key",
+            NEW_DEVICE_SPKI,
+            "--challenge",
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+            "--allow-dev-attestation",
+          ],
+          resolvedPath: null,
+          warnings: [{ code: "unresolved_program" }, { code: "dev_attestation", arg: 10 }],
+        }),
+      ),
+    );
+    expect(decoded.view.warnings.map((warning) => warning.message)).toEqual([
+      "Couldn't determine which program sudo will run.",
+      "Accepts debug builds of the T3 app.",
+    ]);
+  });
+
   it("refuses bytes that are not a strict payload", () => {
     expect(decodeElevationRequestPayload("not base64url!")).toEqual(Result.fail("invalid_json"));
     expect(
@@ -151,6 +180,22 @@ describe("decodeElevationRequestPayload", () => {
         Base64Url.encode(new TextEncoder().encode(JSON.stringify({ v: 1, kind: "ssh" }))),
       ),
     ).toEqual(Result.fail("unknown_kind"));
+  });
+});
+
+describe("elevationRequestFallbackView", () => {
+  // The item mirrors sudo's argv, so `arg` would name the wrong entry.
+  it("doesn't resolve warning arguments against sudo's own argv", () => {
+    const view = elevationRequestFallbackView({
+      argv: ["sudo", "-g", "wheel", "python3", "x.py"],
+      runAs: "#0 (root)",
+      cwd: "/tmp",
+      host: "mac",
+      warnings: [{ code: "user_writable_argument", arg: 1 }],
+    });
+    expect(view.warnings.map((warning) => warning.message)).toEqual([
+      "An argument is a file you can write, so anything running as you could change it.",
+    ]);
   });
 });
 
