@@ -192,6 +192,8 @@ interface Fixture {
   readonly commands: Queue.Queue<OrchestrationV2ServerCommand>;
 }
 
+const installedHelper = (dir: string) => NodePath.join(dir, "lib", "t3-elevation", "t3-elevation");
+
 const writeScript = (path: string, text: string) =>
   NodeFSP.writeFile(path, `#!/bin/sh\n${text}`, { mode: 0o755 });
 
@@ -240,9 +242,7 @@ fi
 exec "$@"
 `,
     );
-    await writeScript(
-      NodePath.join(dir, "helper"),
-      `printf '%s\\n' "$@" > "${dir}/helper.args"
+    const helper = `printf '%s\\n' "$@" > "${dir}/helper.args"
 case "$1" in
   status) echo '{"ok":true,"protocol":1,"platform":"test","checks":[],"config":null,"keys":[],"plannedChanges":[{"path":"/etc/pam.d/sudo","summary":"Add the device approval line"}],"setupOutsideT3":true}';;
   install)
@@ -251,8 +251,13 @@ case "$1" in
   enroll) cat > "${dir}/helper.stdin"; echo '{"ok":true}';;
   revoke) echo '{"ok":false,"error":{"code":"not_found","message":"No such key"}}'; exit 1;;
 esac
-`,
-    );
+`;
+    // The dev override, and the copy install leaves, closed to others like a root-owned one.
+    await writeScript(NodePath.join(dir, "helper"), helper);
+    await NodeFSP.mkdir(NodePath.dirname(installedHelper(dir)), { recursive: true });
+    await NodeFSP.chmod(NodePath.join(dir, "lib"), 0o755);
+    await NodeFSP.chmod(NodePath.dirname(installedHelper(dir)), 0o755);
+    await writeScript(installedHelper(dir), helper);
   });
 
   const commands = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
@@ -274,8 +279,16 @@ esac
   const service = yield* ElevationService.make({
     user: "me",
     socketPath,
-    hostPaths: { etcDir, pamDir: NodePath.join(dir, "pam.d"), rootUid: 0, platform: "darwin" },
-    helperPath: NodePath.join(dir, "helper"),
+    hostPaths: {
+      etcDir,
+      pamDir: NodePath.join(dir, "pam.d"),
+      helperPath: installedHelper(dir),
+      helperRoot: dir,
+      rootUid: NodeOS.userInfo().uid,
+      platform: "darwin",
+    },
+    helperOverride: NodePath.join(dir, "helper"),
+    bundledHelperPath: null,
     sudoPath: NodePath.join(dir, "sudo"),
     allowDevAttestation: false,
     devicesStatePath: NodePath.join(dir, "elevation-devices.json"),
@@ -727,7 +740,7 @@ describe("ElevationService helper", () => {
       yield* fixture.service.enroll({ device });
       assert.deepStrictEqual(lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))), [
         "-n",
-        NodePath.join(fixture.dir, "helper"),
+        installedHelper(fixture.dir),
         "enroll",
         "--user",
         "me",
@@ -742,6 +755,36 @@ describe("ElevationService helper", () => {
         JSON.parse(yield* read(NodePath.join(fixture.dir, "helper.stdin"))),
         device,
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("runs only the installed helper as root once installed, never the override", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const sudoArgs = NodePath.join(fixture.dir, "sudo.args");
+      const device = {
+        label: "Pixel 2",
+        publicKey: vectorsJson.keys.newDevice.spkiDer,
+        challenge: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+        attestationChain: ["AAAA"] as [string],
+      };
+      yield* fixture.service.enroll({ device, password: "hunter2" });
+      assert.include(lines(yield* read(sudoArgs)), installedHelper(fixture.dir));
+      assert.notInclude(lines(yield* read(sudoArgs)), NodePath.join(fixture.dir, "helper"));
+
+      // Anyone who can write a folder above it could swap it between approval and exec.
+      yield* Effect.promise(() => NodeFSP.rm(sudoArgs));
+      yield* Effect.promise(() => NodeFSP.chmod(NodePath.join(fixture.dir, "lib"), 0o777));
+      const refused = yield* fixture.service.enroll({ device }).pipe(Effect.flip);
+      assert.strictEqual(refused.reason, "not_available");
+      assert.include(refused.detail, installedHelper(fixture.dir));
+      const sudoRan = yield* Effect.promise(() =>
+        NodeFSP.access(sudoArgs).then(
+          () => true,
+          () => false,
+        ),
+      );
+      assert.isFalse(sudoRan);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 });

@@ -28,6 +28,10 @@ export interface HostPaths {
   readonly etcDir: string;
   /** `/etc/pam.d`. */
   readonly pamDir: string;
+  /** Where install leaves the root helper, `ELEVATION_HELPER_INSTALL_PATH`. */
+  readonly helperPath: string;
+  /** Where the helper's ownership walk stops: `/` on a host, a temp dir in tests. */
+  readonly helperRoot: string;
   /** The owner every root-owned path must have; tests run as themselves. */
   readonly rootUid: number;
   readonly platform: NodeJS.Platform;
@@ -66,17 +70,30 @@ const readText = (path: string) =>
 const isRootOwned = Effect.fn("ElevationHostState.isRootOwned")(function* (
   paths: HostPaths,
   path: string,
+  top: string = paths.etcDir,
 ) {
   let current = path;
   while (true) {
     const stat = yield* lstat(current);
     if (stat === null || stat.isSymbolicLink()) return false;
     if (stat.uid !== paths.rootUid || (stat.mode & 0o022) !== 0) return false;
-    if (current === paths.etcDir) return true;
+    if (current === top) return true;
     const parent = NodePath.dirname(current);
     if (parent === current) return true;
     current = parent;
   }
+});
+
+/**
+ * Whether the installed helper is safe to run as root: a regular file that
+ * only root could have written or replaced, all the way up.
+ */
+export const isTrustedHelper = Effect.fn("ElevationHostState.isTrustedHelper")(function* (
+  paths: HostPaths,
+) {
+  const stat = yield* lstat(paths.helperPath);
+  if (stat === null || !stat.isFile()) return false;
+  return yield* isRootOwned(paths, paths.helperPath, paths.helperRoot);
 });
 
 /** The subset of TOML the config uses: top-level `key = value` before any table. */

@@ -52,6 +52,16 @@ describe("elevation display", () => {
   it.each(vectors.displayEscaping)("escapes $name", ({ input, expected }) => {
     expect(escapeElevationDisplayText(input)).toBe(expected);
   });
+
+  it("escapes every default-ignorable code point", () => {
+    const shownRaw: Array<string> = [];
+    for (let code = 0; code <= 0x10ffff; code++) {
+      const char = String.fromCodePoint(code);
+      if (!/\p{Default_Ignorable_Code_Point}/u.test(char)) continue;
+      if (escapeElevationDisplayText(char) === char) shownRaw.push(code.toString(16));
+    }
+    expect(shownRaw).toEqual([]);
+  });
 });
 
 describe("elevation enrollment", () => {
@@ -90,5 +100,32 @@ describe("elevation enrollment", () => {
     expect(withArgv([...argv, "--user"])).toBeNull();
     expect(withArgv(["/tmp/not-the-helper", ...argv.slice(1)])).toBeNull();
     expect(withArgv(argv.filter((_, index) => index !== 8 && index !== 9))).toBeNull();
+  });
+
+  // Its owner could swap a user-writable copy after approval.
+  it("treats a user-writable t3-elevation as a plain command", () => {
+    const enroll = vectors.payloads.find((candidate) => candidate.name === "enroll")!;
+    const payload = Result.getOrThrow(decodeElevationPayload(bytesOf(enroll.payload)));
+    const helper = "/home/alice/.cache/t3/t3-elevation";
+    const parsed = parseElevationEnrollCommand({
+      ...payload,
+      command: {
+        argv: [helper, ...payload.command.argv.slice(1)],
+        resolvedPath: helper,
+        warnings: [{ code: "user_writable_program" }],
+      },
+    });
+    expect(parsed).toBeNull();
+    // A writable folder above the installed path, as with Intel Homebrew's /usr/local/lib.
+    const writableInstall = parseElevationEnrollCommand({
+      ...payload,
+      command: { ...payload.command, warnings: [{ code: "user_writable_program" }] },
+    });
+    expect(writableInstall).toBeNull();
+    const elsewhere = parseElevationEnrollCommand({
+      ...payload,
+      command: { ...payload.command, resolvedPath: "/opt/t3/t3-elevation" },
+    });
+    expect(elsewhere).toBeNull();
   });
 });

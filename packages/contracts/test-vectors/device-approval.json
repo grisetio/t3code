@@ -675,6 +675,21 @@
       "name": "combining_mark_kept",
       "input": "e\u0301",
       "expected": "e\u0301"
+    },
+    {
+      "name": "blank_letters",
+      "input": "a\u3164b\u115fc\u1160d\uffa0e\u2800f",
+      "expected": "a\\u{3164}b\\u{115F}c\\u{1160}d\\u{FFA0}e\\u{2800}f"
+    },
+    {
+      "name": "invisible_marks_and_selectors",
+      "input": "a\u034fb\u17b4c\u180fd\ufe0fe\udb40\udd00f",
+      "expected": "a\\u{34F}b\\u{17B4}c\\u{180F}d\\u{FE0F}e\\u{E0100}f"
+    },
+    {
+      "name": "unassigned_ignorables",
+      "input": "a\u2065b\ufff0c\udb40\udc00d",
+      "expected": "a\\u{2065}b\\u{FFF0}c\\u{E0000}d"
     }
   ],
   "comparisonCodes": [

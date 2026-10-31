@@ -26,11 +26,8 @@ export function ElevationRequestDetails(props: {
           </span>
         </p>
       ) : null}
-      {view.warnings.length > 0 || view.enroll?.allowDevAttestation ? (
+      {view.warnings.length > 0 ? (
         <ul className="flex flex-col gap-1 text-destructive">
-          {view.enroll?.allowDevAttestation ? (
-            <ElevationWarningLine message="Accepts development builds and emulators as devices." />
-          ) : null}
           {view.warnings.map((warning, index) => (
             <ElevationWarningLine key={`${warning.code}:${index}`} message={warning.message} />
           ))}

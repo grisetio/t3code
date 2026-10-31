@@ -107,10 +107,12 @@ code point and leaves everything else unchanged:
 
 - `\` → `\\`; LF → `\n`; CR → `\r`; TAB → `\t`;
 - every other code point in general category Cc, Cf, Cs, Zl, Zp, or Zs except
-  U+0020 → `\u{HEX}`, uppercase hex without leading zeros (`\u{1B}`, `\u{202E}`).
+  U+0020, every `Default_Ignorable_Code_Point`, and U+2800 (braille blank) →
+  `\u{HEX}`, uppercase hex without leading zeros (`\u{1B}`, `\u{202E}`).
 
-That covers ANSI escapes, bidi controls, zero-width characters, line separators
-and look-alike spaces. Clients show the whole argv, one element per entry, and
+That covers ANSI escapes, bidi controls, zero-width characters, line separators,
+look-alike spaces, and blank letters such as U+3164 that make an argument look
+empty or two arguments look the same. Clients show the whole argv, one element per entry, and
 never truncate it silently.
 
 ## Enrollment and the comparison code
@@ -120,8 +122,11 @@ significant bit first, as ten 5-bit groups; map each through Crockford base32
 (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`); format as `XXXXX-XXXXX`.
 
 **Enroll argv.** The helper accepts exactly this grammar, and clients show
-"Add device" with the comparison code exactly when `command.argv` matches it
-(`parseElevationEnrollCommand`):
+"Add device" with the comparison code exactly when `command.argv` matches it,
+`resolvedPath` is the installed helper `/usr/local/lib/t3-elevation/t3-elevation`,
+and there is no `user_writable_program` warning (`parseElevationEnrollCommand`).
+A helper its owner can replace after approval could enroll any key, so it shows
+as a plain command:
 
 ```
 <path>/t3-elevation enroll --user <user> --label <label> --public-key <b64url SPKI>
@@ -289,6 +294,14 @@ rest is proven by a live `sudo -n true` approved on a device.
 Every subcommand prints one JSON object on stdout and exits 0 on success:
 `{ "ok": true, ... }`, or `{ "ok": false, "error": { "code": string, "message": string } }`
 with a non-zero exit. `status` runs unprivileged; the rest need root.
+
+Install copies the helper to `/usr/local/lib/t3-elevation/t3-elevation`. From
+then on the server runs only that copy as root (`enroll`, `revoke`,
+`uninstall`), and only while it and every folder above it are root-owned and
+not group- or world-writable; anything the user can write could be swapped
+between approval and sudo's exec. The first install has no such copy, so it
+runs a helper this OS account could have changed, the same trust as typing the
+sudo password into T3.
 
 | Command                                                                                           | Result                                                                                                                                                                                      |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -14,7 +14,13 @@ import vectorsJson from "../../../../packages/contracts/test-vectors/device-appr
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 
-import { checkSignature, moduleProtocol, staticChecks, type HostPaths } from "./hostState.ts";
+import {
+  checkSignature,
+  isTrustedHelper,
+  moduleProtocol,
+  staticChecks,
+  type HostPaths,
+} from "./hostState.ts";
 
 const bytesOf = (text: string) => {
   const bytes = decodeElevationBase64Url(text);
@@ -66,6 +72,8 @@ const layout = Effect.fn("test.layout")(function* (input: {
   const paths: HostPaths = {
     etcDir: NodePath.join(root, "t3-elevation"),
     pamDir: NodePath.join(root, "pam.d"),
+    helperPath: NodePath.join(root, "lib", "t3-elevation"),
+    helperRoot: root,
     rootUid: process.getuid?.() ?? 0,
     platform: input.platform,
   };
@@ -179,6 +187,34 @@ describe("staticChecks", () => {
       );
       const missingInclude = yield* staticChecks(paths, { user: "me", socketPath });
       expect(okIds(missingInclude.checks)[0]).toBe("pam_include:fail");
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("isTrustedHelper", () => {
+  it.effect("trusts only a regular file nobody but its owner could replace", () =>
+    Effect.gen(function* () {
+      const { paths } = yield* layout({ platform: "linux", pam: {}, protocol: 1 });
+      const lib = NodePath.dirname(paths.helperPath);
+      yield* Effect.promise(async () => {
+        await NodeFSP.chmod(lib, 0o755);
+        await NodeFSP.writeFile(paths.helperPath, "#!/bin/sh\n", { mode: 0o755 });
+      });
+      expect(yield* isTrustedHelper(paths)).toBe(true);
+
+      yield* Effect.promise(() => NodeFSP.chmod(lib, 0o775));
+      expect(yield* isTrustedHelper(paths)).toBe(false);
+      yield* Effect.promise(() => NodeFSP.chmod(lib, 0o755));
+
+      const elsewhere = NodePath.join(lib, "real-helper");
+      yield* Effect.promise(async () => {
+        await NodeFSP.rename(paths.helperPath, elsewhere);
+        await NodeFSP.symlink(elsewhere, paths.helperPath);
+      });
+      expect(yield* isTrustedHelper(paths)).toBe(false);
+
+      yield* Effect.promise(() => NodeFSP.rm(paths.helperPath));
+      expect(yield* isTrustedHelper(paths)).toBe(false);
     }).pipe(Effect.scoped),
   );
 });

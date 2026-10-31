@@ -17,6 +17,7 @@ import {
   type RunId,
   decodeElevationBase64Url,
   decodeElevationPayload,
+  ELEVATION_HELPER_INSTALL_PATH,
   ElevationError,
   ElevationRequestId,
   TurnItemId,
@@ -66,6 +67,7 @@ import { attribute, type LiveRun, type ServerSudo } from "./attribution.ts";
 import { ElevationRunCancellation } from "./runCancellation.ts";
 import {
   checkSignature,
+  isTrustedHelper,
   readEnrolledKeys,
   readUserConfig,
   staticChecks,
@@ -106,8 +108,10 @@ export interface ElevationOptions {
   readonly user: string;
   readonly socketPath: string;
   readonly hostPaths: HostPaths;
-  /** The root helper; null when this build doesn't ship one. */
-  readonly helperPath: string | null;
+  /** `T3_ELEVATION_HELPER`, a dev build of the helper; used ahead of the installed copy for setup. */
+  readonly helperOverride: string | null;
+  /** The helper shipped with T3, for the first install only; null while none is packaged. */
+  readonly bundledHelperPath: string | null;
   readonly sudoPath: string;
   readonly allowDevAttestation: boolean;
   /** Where last-used times live; the root-owned key files never record them. */
@@ -656,11 +660,23 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     return null;
   });
 
+  /** The only helper run as root once installed; null when missing or replaceable without root. */
+  const installedHelper = Effect.gen(function* () {
+    return (yield* isTrustedHelper(options.hostPaths)) ? options.hostPaths.helperPath : null;
+  });
+
+  /** Before install there is no root-owned copy, so setup trusts this account's helper. */
+  const setupHelper = Effect.gen(function* () {
+    if (options.helperOverride !== null) return options.helperOverride;
+    return (yield* installedHelper) ?? options.bundledHelperPath;
+  });
+
   const helperStatus = Effect.gen(function* () {
-    if (options.helperPath === null) return null;
+    const helper = yield* setupHelper;
+    if (helper === null) return null;
     const output = yield* processRunner
       .run({
-        command: options.helperPath,
+        command: helper,
         args: ["status", "--user", options.user],
         timeout: "10 seconds",
       })
@@ -703,11 +719,25 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     };
   }).pipe(Effect.withSpan("ElevationService.status"));
 
-  const requireHelper = Effect.suspend(() =>
-    options.helperPath === null
-      ? fail("not_available", "This build doesn't include the device approval helper.")
-      : Effect.succeed(options.helperPath),
-  );
+  const requireSetupHelper = Effect.gen(function* () {
+    const helper = yield* setupHelper;
+    if (helper === null) {
+      return yield* fail("not_available", "This build doesn't include the device approval helper.");
+    }
+    return helper;
+  });
+
+  // A helper this account can write could be swapped between approval and sudo's exec.
+  const requireInstalledHelper = Effect.gen(function* () {
+    const helper = yield* installedHelper;
+    if (helper === null) {
+      return yield* fail(
+        "not_available",
+        `${options.hostPaths.helperPath} is missing, or it or a folder above it isn't root-owned and closed to other users.`,
+      );
+    }
+    return helper;
+  });
 
   /**
    * With a password, sudo reads it from stdin (`-S`, with `-k` so a cached
@@ -715,12 +745,13 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
    * one, `sudo -n` goes to an enrolled device like any other request.
    */
   const runHelper = Effect.fn("ElevationService.runHelper")(function* (input: {
+    readonly helper: string;
     readonly args: ReadonlyArray<string>;
     readonly password?: string | undefined;
     readonly stdin?: string;
     readonly explanation: string;
   }) {
-    const helper = yield* requireHelper;
+    const { helper } = input;
     const withPassword = input.password !== undefined;
     const run = (args: ReadonlyArray<string>, stdin: string | undefined, timeout: Duration.Input) =>
       processRunner
@@ -798,7 +829,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const install = Effect.fn("ElevationService.install")(function* (input: ElevationInstallInput) {
     yield* requireSupported;
-    const helper = yield* requireHelper;
+    const helper = yield* requireSetupHelper;
     const installArgs = (keyPath: string) => [
       "install",
       "--user",
@@ -827,7 +858,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     }
     const password = input.password;
     yield* withKeyFile(input.device, (keyPath) =>
-      runHelper({ args: installArgs(keyPath), password, explanation: "Set up device approval" }),
+      runHelper({
+        helper,
+        args: installArgs(keyPath),
+        password,
+        explanation: "Set up device approval",
+      }),
     );
     return { type: "installed", status: yield* status } as const;
   });
@@ -835,6 +871,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   const enroll = Effect.fn("ElevationService.enroll")(function* (input: ElevationEnrollInput) {
     yield* requireSupported;
     yield* runHelper({
+      helper: yield* requireInstalledHelper,
       args: [
         "enroll",
         "--user",
@@ -856,6 +893,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const revoke = Effect.fn("ElevationService.revoke")(function* (input: ElevationRevokeInput) {
     yield* runHelper({
+      helper: yield* requireInstalledHelper,
       args: ["revoke", "--user", options.user, "--key-id", input.keyId],
       password: input.password,
       explanation: "Remove a device from device approval",
@@ -867,6 +905,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     input: ElevationUninstallInput,
   ) {
     yield* runHelper({
+      helper: yield* requireInstalledHelper,
       args: ["uninstall", "--user", options.user],
       password: input.password,
       explanation: "Turn off device approval",
@@ -993,8 +1032,8 @@ export const instructionsLayer = Layer.sync(DeviceApprovalInstructions, () => {
   };
 });
 
-// No package ships the helper yet, so setup needs T3_ELEVATION_HELPER until one does.
-const PACKAGED_HELPER_PATH: string | null = null;
+// No package ships the helper yet, so first setup needs T3_ELEVATION_HELPER until one does.
+const BUNDLED_HELPER_PATH: string | null = null;
 
 export const layer = Layer.effect(
   ElevationService,
@@ -1005,8 +1044,16 @@ export const layer = Layer.effect(
     return yield* make({
       user: NodeOS.userInfo().username,
       socketPath: NodePath.join(config.stateDir, "elevation.sock"),
-      hostPaths: { etcDir: "/etc/t3-elevation", pamDir: "/etc/pam.d", rootUid: 0, platform },
-      helperPath: process.env.T3_ELEVATION_HELPER ?? PACKAGED_HELPER_PATH,
+      hostPaths: {
+        etcDir: "/etc/t3-elevation",
+        pamDir: "/etc/pam.d",
+        helperPath: ELEVATION_HELPER_INSTALL_PATH,
+        helperRoot: "/",
+        rootUid: 0,
+        platform,
+      },
+      helperOverride: process.env.T3_ELEVATION_HELPER ?? null,
+      bundledHelperPath: BUNDLED_HELPER_PATH,
       sudoPath: "sudo",
       allowDevAttestation: process.env.T3_ELEVATION_ALLOW_DEV_ATTESTATION === "1",
       devicesStatePath: NodePath.join(config.stateDir, "elevation-devices.json"),
