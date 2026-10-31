@@ -4,7 +4,7 @@
 //! `unparsed_options`, so the phone never displays a guess as fact.
 
 use crate::payload::{Command, Warning};
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -803,8 +803,11 @@ fn path_replaceable(path: &Path, context: &Context) -> bool {
                 return true;
             }
         }
+        // Writing a character device (`/dev/null`, a tty) doesn't change
+        // what root reads from it later.
         if index + 1 == components.len()
             && !meta.file_type().is_symlink()
+            && !meta.file_type().is_char_device()
             && writable_by(&meta, context)
         {
             return true;
@@ -1366,6 +1369,18 @@ mod tests {
         std::fs::remove_dir_all(&tmp).unwrap();
         let expected = vec![Warning::at("user_writable_argument", 1)];
         assert_eq!((symlinked, missing), (expected.clone(), expected));
+    }
+
+    /// Review 2: `/dev/null` is 0666, so it was flagged on every
+    /// `of=/dev/null` or `2>/dev/null`-style argument. Writing to a character
+    /// device doesn't change what root later reads from it, and a false
+    /// positive teaches people to skip warnings.
+    #[test]
+    fn character_devices_are_not_warned() {
+        let shells = vec![];
+        let ctx = context("/", &[], &shells);
+        let sudo = argv(&["sudo", "/bin/cat", "/dev/null", "/dev/zero", "/dev/tty"]);
+        assert_eq!(describe(&sudo, &parse(&sudo), &ctx).command.warnings, vec![]);
     }
 
     fn argument_warnings(warnings: Vec<Warning>) -> Vec<Warning> {
