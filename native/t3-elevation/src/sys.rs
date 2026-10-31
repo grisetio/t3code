@@ -146,23 +146,32 @@ fn procargs(pid: i32) -> Option<Vec<Vec<u8>>> {
             return None;
         }
         buffer.truncate(size);
-        // int argc, exec path, NUL padding, then argc NUL-terminated strings.
-        let argc = usize::try_from(i32::from_ne_bytes(buffer.get(..4)?.try_into().ok()?)).ok()?;
-        let mut position = 4;
-        while position < buffer.len() && buffer[position] != 0 {
-            position += 1;
-        }
-        while position < buffer.len() && buffer[position] == 0 {
-            position += 1;
-        }
-        let mut argv = Vec::with_capacity(argc);
-        for _ in 0..argc {
-            let end = position + buffer.get(position..)?.iter().position(|b| *b == 0)?;
-            argv.push(buffer[position..end].to_vec());
-            position = end + 1;
-        }
-        Some(argv)
+        parse_procargs2(&buffer)
     }
+}
+
+/// `KERN_PROCARGS2`: int argc, the exec path, NUL padding, then argc
+/// NUL-terminated strings. The kernel pads the path (with its NUL) to a
+/// multiple of the pointer size, so argv[0] starts at a fixed offset. Skipping
+/// every NUL instead would swallow an empty argv[0] and shift the whole argv.
+#[cfg(any(target_os = "macos", test))]
+fn parse_procargs2(buffer: &[u8]) -> Option<Vec<Vec<u8>>> {
+    const AREA: usize = 4;
+    const ALIGN: usize = std::mem::size_of::<usize>();
+    let argc = usize::try_from(i32::from_ne_bytes(buffer.get(..AREA)?.try_into().ok()?)).ok()?;
+    let path_end = AREA + buffer.get(AREA..)?.iter().position(|b| *b == 0)?;
+    let mut position = AREA + (path_end + 1 - AREA).next_multiple_of(ALIGN);
+    // Padding is all NUL; anything else means the layout isn't what we expect.
+    if buffer.get(path_end..position)?.iter().any(|b| *b != 0) {
+        return None;
+    }
+    let mut argv = Vec::with_capacity(argc);
+    for _ in 0..argc {
+        let end = position + buffer.get(position..)?.iter().position(|b| *b == 0)?;
+        argv.push(buffer[position..end].to_vec());
+        position = end + 1;
+    }
+    Some(argv)
 }
 
 #[cfg(target_os = "macos")]
@@ -367,12 +376,11 @@ mod tests {
     }
 
     /// Review finding (empty argv[0]): KERN_PROCARGS2 pads the exec path with
-    /// NULs, so an empty argv[0] is indistinguishable from padding and the
-    /// parse shifts by one. sudo then runs argv[1] while the payload shows
+    /// NULs, so skipping every NUL swallows an empty argv[0] and the parse
+    /// shifts by one. sudo then runs argv[1] while the payload shows
     /// argv[2..] plus the first environment string.
     #[cfg(target_os = "macos")]
     #[test]
-    #[ignore = "review: empty argv[0] shifts the macOS argv parse; remove when fixed"]
     fn procargs_keeps_an_empty_argv0() {
         use std::os::unix::process::CommandExt as _;
         let mut child = std::process::Command::new("/bin/sleep")
@@ -386,6 +394,45 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(argv, Some(vec![Vec::new(), b"30".to_vec()]));
+    }
+
+    #[test]
+    fn procargs2_layout_keeps_empty_arguments() {
+        fn area(path: &str, argv: &[&str], env: &[&str]) -> Vec<u8> {
+            let mut out = (argv.len() as i32).to_ne_bytes().to_vec();
+            out.extend_from_slice(path.as_bytes());
+            out.push(0);
+            while !(out.len() - 4).is_multiple_of(std::mem::size_of::<usize>()) {
+                out.push(0);
+            }
+            for arg in argv.iter().chain(env) {
+                out.extend_from_slice(arg.as_bytes());
+                out.push(0);
+            }
+            out
+        }
+        let strings = |argv: &[&str]| argv.iter().map(|arg| arg.as_bytes().to_vec()).collect();
+        for path in [
+            "/usr/bin/sudo",
+            "/usr/bin/sudo1",
+            "/bin/s",
+            "/usr/local/bin/sudo",
+        ] {
+            for argv in [
+                &["", "/tmp/evil", "/usr/bin/true"][..],
+                &["sudo", "", "x"],
+                &["sudo", "true", ""],
+            ] {
+                assert_eq!(
+                    parse_procargs2(&area(path, argv, &["X=1"])),
+                    Some(strings(argv)),
+                    "{path} {argv:?}"
+                );
+            }
+        }
+        let mut garbled = area("/usr/bin/sudo", &["sudo"], &[]);
+        garbled[4 + "/usr/bin/sudo".len() + 1] = b'x';
+        assert_eq!(parse_procargs2(&garbled), None);
     }
 
     #[test]

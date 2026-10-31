@@ -63,7 +63,20 @@ impl Environment {
     }
 }
 
+/// sudo decides what to run from its own argv. If argv[0] isn't sudo's name,
+/// the argv read back may not be the one sudo parsed (an empty argv[0] once
+/// shifted the macOS parse), so the payload could describe another command.
+fn invoked_as_sudo(argv: &[Vec<u8>]) -> bool {
+    argv.first().is_some_and(|arg0| {
+        let name = arg0.rsplit(|b| *b == b'/').next().unwrap_or(arg0);
+        name == b"sudo" || name == b"sudoedit"
+    })
+}
+
 pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outcome {
+    if !invoked_as_sudo(&invocation.argv) {
+        return Outcome::Ignore;
+    }
     let argv_lossy: Vec<String> = invocation
         .argv
         .iter()
@@ -579,6 +592,33 @@ mod tests {
                 &setup.environment
             ),
             Outcome::Fail
+        );
+    }
+
+    #[test]
+    fn argv_not_from_sudo_is_ignored() {
+        for argv in [
+            &["", "/tmp/evil", "-n", "/usr/bin/true"][..],
+            &["/tmp/evil", "-n", "true"],
+            &["sudo-rs", "-n", "true"],
+            &[],
+        ] {
+            let setup = setup("argv0");
+            assert_eq!(
+                setup.run(Mode::Approve, &setup.invocation(argv)).0,
+                Outcome::Ignore,
+                "{argv:?}"
+            );
+        }
+        let setup = setup("argv0ok");
+        assert_eq!(
+            setup
+                .run(
+                    Mode::Approve,
+                    &setup.invocation(&["/usr/bin/sudoedit", "/etc/hosts"])
+                )
+                .0,
+            Outcome::Approved
         );
     }
 
