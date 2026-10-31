@@ -344,6 +344,7 @@ const ELEVATION_FAILURE_MESSAGES = {
   already_resolved: "This approval request was already answered.",
   invalid_signature: "The device's signature didn't verify.",
   wrong_password: "The sudo password was not accepted.",
+  password_required: "No device approved this, so sudo needs the password.",
   helper_failed: "The device approval helper failed.",
 } as const;
 

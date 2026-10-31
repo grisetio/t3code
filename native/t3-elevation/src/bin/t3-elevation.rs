@@ -102,6 +102,10 @@ fn known_user(user: &str) -> Result<String, Failure> {
 }
 
 fn read_enrollment(source: &str) -> Result<Enrollment, Failure> {
+    parse_enrollment(&read_input(source)?)
+}
+
+fn read_input(source: &str) -> Result<Vec<u8>, Failure> {
     let mut bytes = Vec::new();
     let read = if source == "-" {
         std::io::stdin()
@@ -120,7 +124,11 @@ fn read_enrollment(source: &str) -> Result<Enrollment, Failure> {
     if bytes.len() as u64 > MAX_ENROLLMENT_BYTES {
         return Err(fail("invalid_enrollment", "the enrollment is too large"));
     }
-    serde_json::from_slice(&bytes).map_err(|error| {
+    Ok(bytes)
+}
+
+fn parse_enrollment(bytes: &[u8]) -> Result<Enrollment, Failure> {
+    serde_json::from_slice(bytes).map_err(|error| {
         fail(
             "invalid_enrollment",
             format!("the enrollment isn't valid: {error}"),
@@ -307,7 +315,15 @@ fn enroll(args: &[String]) -> Outcome {
     })?;
     require_root()?;
     let user = known_user(&command.user)?;
-    let enrollment = read_enrollment("-")?;
+    let mut input = read_input("-")?;
+    let enrollment = parse_enrollment(
+        t3_elevation::enroll::unframe_input(&mut input).ok_or_else(|| {
+            fail(
+                "invalid_enrollment",
+                "stdin doesn't start with the t3-elevation-input-v1 line",
+            )
+        })?,
+    )?;
     // The approval showed these argv values; the device must be that one.
     if enrollment.label != command.label
         || enrollment.public_key != command.public_key

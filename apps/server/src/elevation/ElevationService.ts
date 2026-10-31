@@ -100,6 +100,8 @@ const EXPIRY_GRACE_SECONDS = 5;
 const DEVICE_SUDO_TIMEOUT = "6 minutes";
 const PASSWORD_SUDO_TIMEOUT = "60 seconds";
 // A pasted install command reads its key file once; one never run is left behind.
+/** `INPUT_MARKER` in native/t3-elevation/src/enroll.rs. */
+const HELPER_INPUT_MARKER = "t3-elevation-input-v1";
 const INSTALL_KEY_FILE = /^elevation-install-[0-9a-f-]{36}\.json$/;
 const INSTALL_KEY_FILE_MAX_AGE_MS = 60 * 60 * 1000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
@@ -747,8 +749,11 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   /**
    * With a password, sudo reads it from stdin (`-S`, with `-k` so a cached
-   * login can't leave the password line for the helper to read). Without
-   * one, `sudo -n` goes to an enrolled device like any other request.
+   * login can't skip the prompt). PAM can still approve without asking for
+   * it (Touch ID, an enrolled phone), leaving the password line unread, so
+   * the helper's input follows a marker line and the helper skips at most
+   * one line before it. Without a password, `sudo -n` goes to an enrolled
+   * device like any other request.
    */
   const runHelper = Effect.fn("ElevationService.runHelper")(function* (input: {
     readonly helper: string;
@@ -759,6 +764,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   }) {
     const { helper } = input;
     const withPassword = input.password !== undefined;
+    const helperInput =
+      input.stdin === undefined ? undefined : `${HELPER_INPUT_MARKER}\n${input.stdin}`;
     const run = (args: ReadonlyArray<string>, stdin: string | undefined, timeout: Duration.Input) =>
       processRunner
         .run({
@@ -775,7 +782,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     const output = withPassword
       ? yield* run(
           ["-S", "-k", "-p", "", helper, ...input.args],
-          `${input.password}\n${input.stdin ?? ""}`,
+          `${input.password}\n${helperInput ?? ""}`,
           PASSWORD_SUDO_TIMEOUT,
         )
       : yield* Effect.acquireUseRelease(
@@ -789,7 +796,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
             serverSudos.add(own);
             return own;
           }),
-          (own) => run(own.argv.slice(1), input.stdin, DEVICE_SUDO_TIMEOUT),
+          (own) => run(own.argv.slice(1), helperInput, DEVICE_SUDO_TIMEOUT),
           (own) => Effect.sync(() => serverSudos.delete(own)),
         );
     const reply = decodeHelperReply(lastLine(output.stdout));
@@ -798,11 +805,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       return yield* fail("helper_failed", reply.value.error.message);
     }
     const stderr = output.stderr.trim();
-    if (
-      withPassword &&
-      /incorrect password|try again|password is required|no password/i.test(stderr)
-    ) {
-      return yield* fail("wrong_password");
+    if (/incorrect password|try again|password is required|no password/i.test(stderr)) {
+      return yield* fail(withPassword ? "wrong_password" : "password_required");
     }
     return yield* fail("helper_failed", stderr === "" ? `sudo exited with ${output.code}` : stderr);
   });

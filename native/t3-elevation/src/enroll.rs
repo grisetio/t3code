@@ -66,3 +66,50 @@ pub fn trust_flag(option: &str) -> Option<Trust> {
         _ => None,
     }
 }
+
+/// The first line of `enroll`'s stdin. With `sudo -S`, sudo reads the
+/// password line only when PAM asks for it (Touch ID or an enrolled phone
+/// may approve instead), so the password may still come before the marker.
+pub const INPUT_MARKER: &[u8] = b"t3-elevation-input-v1\n";
+
+/// The bytes after the marker line, skipping at most one line before it.
+/// That line may be the sudo password: it is zeroed, and so is the whole
+/// input when there is no marker.
+pub fn unframe_input(input: &mut [u8]) -> Option<&[u8]> {
+    let start = if input.starts_with(INPUT_MARKER) {
+        Some(0)
+    } else {
+        input
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map(|newline| newline + 1)
+            .filter(|&start| input[start..].starts_with(INPUT_MARKER))
+    };
+    let Some(start) = start else {
+        wipe(input);
+        return None;
+    };
+    wipe(&mut input[..start]);
+    Some(&input[start + INPUT_MARKER.len()..])
+}
+
+fn wipe(bytes: &mut [u8]) {
+    bytes.fill(0);
+    std::hint::black_box(bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zeroes_a_password_line_left_by_sudo() {
+        let mut input = b"hunter2\nt3-elevation-input-v1\n{}".to_vec();
+        assert_eq!(unframe_input(&mut input), Some(&b"{}"[..]));
+        assert_eq!(&input[..8], &[0; 8]);
+
+        let mut unframed = b"hunter2\n{}".to_vec();
+        assert_eq!(unframe_input(&mut unframed), None);
+        assert!(unframed.iter().all(|&byte| byte == 0));
+    }
+}

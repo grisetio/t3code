@@ -199,6 +199,13 @@ requesting a challenge and enrolling.
 
 For `enroll`, `label`, `publicKey` and `challenge` must equal the argv values.
 
+**Enroll stdin.** `enroll` reads the line `t3-elevation-input-v1`, then the
+enrollment object. With a password, the server puts the password line first for
+`sudo -S`, but sudo reads it only when PAM asks; Touch ID or an enrolled phone
+can approve without it. The helper skips at most one line before the marker,
+zeroes it, and rejects input without the marker (`helperInput` in the test
+vectors). `install --key -` reads the object without the marker.
+
 ## Socket protocol
 
 - Unix stream socket at `<T3 stateDir>/elevation.sock`, mode 0600, path at most
@@ -368,7 +375,7 @@ sudo password into T3.
 | `t3-elevation version`                                                                                                        | `{ ok, protocol: 1, version }`                                                                                                                                                              |
 | `t3-elevation status --user U`                                                                                                | `{ ok, protocol, platform, checks: [{ id, ok, message }], config \| null, keys: [{ keyId, label, securityLevel, enrolledAt }], plannedChanges: [{ path, summary }], setupOutsideT3: bool }` |
 | `t3-elevation install --user U --socket P --key <-\|file> [--window S] [--allow-dev-attestation \| --allow-test-attestation]` | Writes missing files, enrolls the first key. On a TTY it prints the label and comparison code and asks to confirm.                                                                          |
-| `t3-elevation enroll ...`                                                                                                     | See the grammar above; enrollment object on stdin.                                                                                                                                          |
+| `t3-elevation enroll ...`                                                                                                     | See the grammar above; marker line and enrollment object on stdin.                                                                                                                          |
 | `t3-elevation revoke --user U (--key-id ID \| --all)`                                                                         | Removes key files.                                                                                                                                                                          |
 | `t3-elevation uninstall --user U`                                                                                             | Reverts `installed-by-t3.json`.                                                                                                                                                             |
 
