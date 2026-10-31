@@ -487,6 +487,15 @@ sudo password into T3.
 - A request attributed to no thread has no turn item. Clients get every
   pending request, with its payload, from the `elevationSubscribe` stream,
   which also drives the cross-environment banner.
+- One entry per request. While the Android app is in front, the request already
+  shows in the app, so the native push handler posts nothing for it. Our relay
+  marks sudo pushes with `alert_request_kind`, but upstream relays strip it, so
+  JS also reports the threads with a waiting request (`setSudoPendingThreads`):
+  unmarked alerts for them are dropped, and ones posted before the request
+  reached the app are removed.
+- Removing a phone revokes through the helper's sudo, which that phone approves
+  with the key it is removing. The phone claims the request so it never shows
+  as a banner or sheet.
 - RPC schemas and helpers: `packages/contracts/src/elevation.ts`. Clients
   check the `deviceApproval` environment capability before showing anything.
 - Test vectors shared by the Rust, TypeScript and Kotlin tests:

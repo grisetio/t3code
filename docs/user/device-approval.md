@@ -8,11 +8,11 @@ the command itself. Deny refuses it, and the agent is told not to retry.
 
 ## Set up
 
-On the phone, open **Settings → Device approval** and choose **Set up on this
-machine** for the environment. Setup lists the system files it will change.
-Enter the sudo password once, or leave it empty to get a command to paste into
-a terminal on that machine. The password goes to the server once and is never
-stored. Setup trusts your account on that machine, the same as typing the sudo
+On the phone, open **Settings → Device approval** and choose **Set up** for the
+machine. Setup asks for your fingerprint first, then the sudo password once.
+Enter it, or choose **Use a terminal command instead** to get a command to paste
+into a terminal on that machine. The password goes to the server once and is
+never stored. Setup trusts your account on that machine, the same as typing the sudo
 password into T3 Code: anything running as you, including an agent, could
 change what it installs. On a Mac that uses Touch ID for `sudo`, a Touch ID
 prompt may appear on the Mac first; Cancel continues with the password.
@@ -47,8 +47,9 @@ Web and desktop show requests and can deny them; approving needs the phone.
 
 ## Remove a device or turn it off
 
-In **Settings → Device approval**, **Revoke** removes a phone. On the phone
-itself, **Remove this device** also deletes its key. If you lose a phone, revoke
+In **Settings → Device approval**, open **Details**. **Revoke** removes another
+phone. On a phone, **Remove this phone** removes that phone after a fingerprint
+and deletes its key; other phones keep approving. If you lose a phone, revoke
 it from another device or with the password; the password keeps working for
 `sudo` in a terminal.
 
@@ -56,12 +57,14 @@ Once a phone is set up, adding a phone, revoking, and turning off are approved
 on a phone by default. You can still use the sudo password instead; it passes
 through the T3 Code server on its way to `sudo`.
 
-**Turn off** restores the files T3 Code changed, and agent `sudo` asks for the
-password again. Parts set up outside T3 Code stay in place, and Settings says
-so.
+**Turn off**, also under **Details**, restores the files T3 Code changed, and
+agent `sudo` asks for the password again. When the setup comes from config
+outside T3 Code, such as a Nix configuration, a rebuild would bring it back, so
+**Turn off** opens a thread where an agent removes it from that config instead.
 
-Enrolling a new fingerprint on the phone invalidates its key. Choose **Set up
-this phone again** to replace it.
+Enrolling a new fingerprint on the phone invalidates its key, and Settings shows
+**Needs fixing**. **Fix** replaces the key with your fingerprint and the
+password.
 
 ## Requirements
 
