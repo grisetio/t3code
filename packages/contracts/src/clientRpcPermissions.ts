@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
   AuthAccessWriteScope,
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -66,6 +67,15 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   // A link lets every agent here reach the other environment: Settings' bar.
   [WS_METHODS.peerLinksAnswerRequest]: AuthAccessWriteScope,
+  [WS_METHODS.elevationRespond]: AuthOrchestrationOperateScope,
+  // These change root-owned system files (PAM, sudoers) and who may approve
+  // root commands, like the host-level changes server updates make.
+  [WS_METHODS.elevationInstall]: AuthEnvironmentMaintainScope,
+  // Asks every enrolled device to approve a test command.
+  [WS_METHODS.elevationTest]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.elevationEnroll]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.elevationRevoke]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.elevationUninstall]: AuthEnvironmentMaintainScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

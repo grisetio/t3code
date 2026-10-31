@@ -34,7 +34,7 @@ function identifierFromNotificationResponse(response: unknown): string | null {
   return typeof identifier === "string" ? identifier : null;
 }
 
-function encodeThreadDeepLink(input: {
+export function encodeThreadDeepLink(input: {
   readonly environmentId: string;
   readonly threadId: string;
 }): string | null {

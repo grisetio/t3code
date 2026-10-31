@@ -154,7 +154,15 @@ const cancelledItem = (
 ): OrchestrationV2ThreadProjection["turnItems"][number] =>
   item.type === "secret_request" && item.secretStatus === "pending"
     ? { ...item, status: "cancelled", secretStatus: "cancelled", completedAt: now, updatedAt: now }
-    : { ...item, status: "cancelled", completedAt: now, updatedAt: now };
+    : item.type === "elevation_request" && item.elevationStatus === "pending"
+      ? {
+          ...item,
+          status: "cancelled",
+          elevationStatus: "cancelled",
+          completedAt: now,
+          updatedAt: now,
+        }
+      : { ...item, status: "cancelled", completedAt: now, updatedAt: now };
 
 function latestStartedRun(
   projection: ProjectionStore.ProjectionRuntimeRecoveryState,

@@ -274,6 +274,9 @@ export const make = Effect.gen(function* () {
       peerLinks: true,
       mcpModeLimitHeader: true,
       linkFence: true,
+      // Whether this machine can verify the PAM module is decided lazily by
+      // `elevation.status`, which reports `supported: false` with a reason.
+      ...(hostPlatform === "darwin" || hostPlatform === "linux" ? { deviceApproval: true } : {}),
     },
   };
 

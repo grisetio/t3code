@@ -123,6 +123,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
+import * as ElevationService from "./elevation/ElevationService.ts";
 import {
   buildActiveShellSnapshot,
   bufferShellLiveStream,
@@ -1270,6 +1271,7 @@ export const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
+      const elevation = yield* ElevationService.ElevationService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2161,6 +2163,14 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),
           ),
+        [WS_METHODS.elevationRespond]: (input) => elevation.respond(input),
+        [WS_METHODS.elevationSubscribe]: (_input) => elevation.pendingRequests,
+        [WS_METHODS.elevationStatus]: (_input) => elevation.status,
+        [WS_METHODS.elevationTest]: (_input) => elevation.test,
+        [WS_METHODS.elevationInstall]: (input) => elevation.install(input),
+        [WS_METHODS.elevationEnroll]: (input) => elevation.enroll(input),
+        [WS_METHODS.elevationRevoke]: (input) => elevation.revoke(input),
+        [WS_METHODS.elevationUninstall]: (input) => elevation.uninstall(input),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),

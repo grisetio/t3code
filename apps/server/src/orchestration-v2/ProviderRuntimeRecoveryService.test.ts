@@ -713,6 +713,7 @@ it.effect(
         "provider-turn.steer",
         "provider-turn.restart",
         "runtime-request.respond",
+        "elevation-requests.cancel",
       ]);
       const events = committedInput?.events ?? [];
       assert.deepEqual(

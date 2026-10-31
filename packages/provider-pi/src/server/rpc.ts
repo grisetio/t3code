@@ -11,7 +11,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { AgentScopeThreadId } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   MAX_TOOL_OUTPUT_IMAGES,
@@ -188,6 +190,14 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
       }),
     )
     .pipe(Effect.mapError((cause) => new PiRpcError({ operation: "spawn", cause })));
+  const ownerThreadId = yield* AgentScopeThreadId;
+  if (ownerThreadId !== undefined) {
+    const forget = (yield* ProviderProcesses).register({
+      pid: child.pid,
+      threadId: ownerThreadId,
+    });
+    yield* Scope.addFinalizer(scope, Effect.sync(forget));
+  }
 
   let childExited = false;
   let diagnosingStdoutClose = false;

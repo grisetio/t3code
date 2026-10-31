@@ -67,6 +67,9 @@ import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
+import { ElevationApprovalHost } from "./features/device-approval/ElevationApprovalHost";
+import { ElevationPendingBanner } from "./features/device-approval/ElevationPendingBanner";
+import { SettingsDeviceApprovalRouteScreen } from "./features/device-approval/SettingsDeviceApprovalRouteScreen";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import {
   FullscreenThreadRouteScreen,
@@ -291,6 +294,11 @@ const SETTINGS_SCREENS = {
     screen: SettingsEnvironmentMaintenanceRouteScreen,
     linking: "settings/maintenance",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Maintenance" },
+  }),
+  SettingsDeviceApproval: createNativeStackScreen({
+    screen: SettingsDeviceApprovalRouteScreen,
+    linking: "settings/device-approval",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Device approval" },
   }),
   SettingsNotifications: createNativeStackScreen({
     screen: SettingsNotificationsRouteScreen,
@@ -541,6 +549,8 @@ function RootStackLayout(props: {
               >
                 {props.children}
                 <HardwareKeyboardCommandOverlay />
+                <ElevationPendingBanner pathname={workspaceLocation.pathname} />
+                <ElevationApprovalHost />
               </AdaptiveWorkspaceLayout>
             </AndroidWorkspaceTabsProvider>
           </WorkspaceConnectionStatusProvider>

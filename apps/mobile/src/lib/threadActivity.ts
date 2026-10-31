@@ -52,7 +52,13 @@ import type {
   ScheduledTaskId,
   TurnItemId,
 } from "@t3tools/contracts";
-import { idleCompactionOf, isCompactionCommandMessage, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  escapeElevationDisplayText,
+  idleCompactionOf,
+  isCompactionCommandMessage,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   classifyToolActivity,
   collectToolFilePaths,
@@ -394,6 +400,13 @@ export function isLinkRequestActivityGroup(entry: ThreadFeedActivityGroup): bool
   );
 }
 
+export function isElevationRequestActivityGroup(entry: ThreadFeedActivityGroup): boolean {
+  return (
+    entry.activities.length === 1 &&
+    entry.activities[0]?.projectedItem.item.type === "elevation_request"
+  );
+}
+
 function isUserInputActivityGroup(entry: ThreadFeedActivityGroup): boolean {
   return entry.activities.some((activity) => activity.workEntry.questionAnswer !== undefined);
 }
@@ -436,7 +449,8 @@ function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
     item.type === "system_notice" ||
     item.type === "proposed_plan" ||
     item.type === "secret_request" ||
-    item.type === "link_request"
+    item.type === "link_request" ||
+    item.type === "elevation_request"
   );
 }
 
@@ -557,6 +571,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "thread_created":
       return "zap";
     case "secret_request":
+    case "elevation_request":
       return "lock";
     case "link_request":
       return "globe";
@@ -621,6 +636,8 @@ function itemSummary(
       return item.label;
     case "link_request":
       return `Link ${item.label ?? item.url ?? "an environment"}`;
+    case "elevation_request":
+      return "sudo request";
     case "dynamic_tool": {
       const classified = classifyToolActivity({
         itemType: "dynamic_tool_call",
@@ -681,6 +698,8 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "secret_request":
     case "link_request":
       return item.reason || null;
+    case "elevation_request":
+      return item.argv.map(escapeElevationDisplayText).join(" ");
     case "subagent":
       return item.result ?? item.progress ?? item.prompt;
     case "dynamic_tool":

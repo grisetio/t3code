@@ -52,6 +52,8 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   // Network access and authorized clients belong to the environment serving this app.
   "/settings/access",
   "/settings/about",
+  // Lists every machine that offers it, so there is no scope to pick.
+  "/settings/device-approval",
 ]);
 
 interface SettingsScopeMenuProps {

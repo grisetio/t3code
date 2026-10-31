@@ -28,7 +28,7 @@ const EXTRA_OWNERS = [
   [/^native\/kde-snap-shot\//, ["@t3tools/desktop"]],
   [/^native\/libghostty-vt\//, ["@t3tools/web"]],
 ];
-const RUST = /^native\/(resource-monitor|kde-snap-shot|hyprland-snap-shot)\//;
+const RUST = /^native\/(resource-monitor|kde-snap-shot|hyprland-snap-shot|t3-elevation)\//;
 
 // These tests read other packages without declaring dependencies.
 const TEST_ONLY_DEPS = {

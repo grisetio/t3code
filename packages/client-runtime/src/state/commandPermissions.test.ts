@@ -9,6 +9,7 @@ import { vi } from "vite-plus/test";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -118,6 +119,44 @@ describe("command permissions", () => {
         yield* cleanup.authorize(registry, env);
         registry.set(sessions(other), AsyncResult.success(grant(false)));
         expect(registry.get(cleanup.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("answers device approvals with operate, but changes device setup with maintain", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const respond = createCommandPermissions(runtime, WS_METHODS.elevationRespond);
+        const setupMethods = [
+          WS_METHODS.elevationInstall,
+          WS_METHODS.elevationTest,
+          WS_METHODS.elevationEnroll,
+          WS_METHODS.elevationRevoke,
+          WS_METHODS.elevationUninstall,
+        ].map((method) => createCommandPermissions(runtime, method));
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(respond.permissionAtom(env))).toBe(true);
+        yield* respond.authorize(registry, env);
+        for (const command of setupMethods) {
+          expect(registry.get(command.permissionAtom(env))).toBe(false);
+          expect((yield* command.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+        }
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthEnvironmentMaintainScope],
+            permissions: [AuthEnvironmentMaintainScope],
+          }),
+        );
+        expect(registry.get(respond.permissionAtom(env))).toBe(false);
+        for (const command of setupMethods) {
+          expect(registry.get(command.permissionAtom(env))).toBe(true);
+          yield* command.authorize(registry, env);
+        }
       }),
     ),
   );

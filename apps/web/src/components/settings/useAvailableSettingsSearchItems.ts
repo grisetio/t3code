@@ -1,3 +1,4 @@
+import { environmentSupportsDeviceApproval } from "@t3tools/client-runtime/state/elevation";
 import { AuthEnvironmentMaintainScope } from "@t3tools/contracts";
 
 import { usePrimaryCloudLinkState } from "~/cloud/primaryCloudLinkState";
@@ -16,6 +17,16 @@ import {
   filterAvailableSettingsSearchItems,
   getThreadAutoSettlementSearchAvailability,
 } from "./settingsSearch";
+
+/** Device approval is hidden until a connected server advertises it. */
+export function useHasDeviceApprovalEnvironment(): boolean {
+  const { environments } = useEnvironments();
+  return (
+    environments.some((environment) =>
+      environmentSupportsDeviceApproval(environment.serverConfig),
+    ) === true
+  );
+}
 
 export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch = {}) {
   const { environments } = useEnvironments();
@@ -39,6 +50,7 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
           hasServerConfig: true,
         }),
     ) === true;
+  const hasDeviceApprovalEnvironment = useHasDeviceApprovalEnvironment();
   const hasThreadAutoSettlement =
     getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -69,5 +81,6 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     hasThreadAutoSettlement,
     managedTunnelActive,
     hasPeerLinkHost,
+    hasDeviceApprovalEnvironment,
   });
 }

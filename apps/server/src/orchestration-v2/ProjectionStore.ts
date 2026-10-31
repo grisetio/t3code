@@ -451,6 +451,11 @@ export interface ProjectionStoreV2Shape {
     ProjectionStoreV2Error
   >;
   /** Older settled thread ids below a cursor, newest settle first, and per-project counts. */
+  /** Threads with a run that hasn't finished; device approval matches a sudo to one. */
+  readonly listLiveRunThreadIds: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
   readonly listOlderSettledThreads: (
     query: OlderSettledThreadsQuery,
   ) => Effect.Effect<OlderSettledThreadsListing, ProjectionStoreV2Error>;
@@ -940,7 +945,7 @@ type ShellThreadRow = {
   readonly blocking_run_stop_requested: number;
   readonly blocking_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
-  readonly pending_secret_request_payload_json: string | null;
+  readonly pending_turn_item_request_payload_json: string | null;
   readonly pending_link_request_payload_json: string | null;
   readonly latest_user_message_at: string | null;
   readonly latest_user_authored_message_at: string | null;
@@ -1362,26 +1367,39 @@ function pendingRuntimeRequestSummary(
   };
 }
 
-function secretRequestAsPendingInput(
+/**
+ * Secret, link and elevation requests are turn items, not runtime requests, so
+ * they are folded in here to reach thread lists and relay push. An elevation
+ * request reads as a command approval, a kind every client already decodes.
+ */
+function waitingTurnItemAsPendingRequest(
   item: OrchestrationV2TurnItem | null,
 ): OrchestrationV2PendingRuntimeRequestSummary | null {
-  if ((item?.type !== "secret_request" && item?.type !== "link_request") || item.nodeId === null)
+  if (item === null || item.nodeId === null) return null;
+  if (
+    item.type !== "secret_request" &&
+    item.type !== "link_request" &&
+    item.type !== "elevation_request"
+  )
     return null;
   return {
     id: RuntimeRequestId.make(item.id),
-    kind: "user_input",
+    kind: item.type === "elevation_request" ? "command" : "user_input",
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
   };
 }
 
 /**
- * A secret card is answered while its agent waits in the run. A link card's
- * agent asked without waiting, so the card waits on the user after its run.
+ * Secret and elevation cards are answered while their agent waits in the run.
+ * A link card's agent asked without waiting, so the card waits on the user
+ * after its run.
  */
 const waitsOnUser = (item: OrchestrationV2TurnItem, liveRunIds: ReadonlySet<RunId>) =>
   item.type === "link_request" ||
-  (item.type === "secret_request" && item.runId !== null && liveRunIds.has(item.runId));
+  ((item.type === "secret_request" || item.type === "elevation_request") &&
+    item.runId !== null &&
+    liveRunIds.has(item.runId));
 
 export function threadShellFromProjection(
   projection: OrchestrationV2ThreadProjection,
@@ -1420,7 +1438,7 @@ export function threadShellFromProjection(
   );
   if (pendingRuntimeRequest === null || pendingRuntimeRequest.blocking === false) {
     pendingRuntimeRequest =
-      secretRequestAsPendingInput(
+      waitingTurnItemAsPendingRequest(
         projection.turnItems
           .filter((item) => item.status === "waiting" && waitsOnUser(item, liveRunIds))
           .toSorted(
@@ -5841,10 +5859,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE r.thread_id = t.thread_id
                   AND r.status IN ('preparing', 'starting', 'running', 'waiting')
                   AND secret.thread_id = t.thread_id AND secret.run_id = r.run_id
-                  AND secret.type = 'secret_request' AND secret.status = 'waiting'
+                  AND secret.type IN ('secret_request', 'elevation_request')
+                  AND secret.status = 'waiting'
                 ORDER BY secret.updated_at DESC, secret.turn_item_id DESC
                 LIMIT 1
-              ) AS pending_secret_request_payload_json,
+              ) AS pending_turn_item_request_payload_json,
               (
                 SELECT link.payload_json
                 FROM orchestration_v2_projection_turn_items link
@@ -6319,9 +6338,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         } = input;
         const thread = yield* decodeThreadPayload(row.payload_json);
         const waitingCards = [
-          row.pending_secret_request_payload_json === null
+          row.pending_turn_item_request_payload_json === null
             ? null
-            : yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
+            : yield* decodeTurnItemPayload(row.pending_turn_item_request_payload_json),
           row.pending_link_request_payload_json === null
             ? null
             : yield* decodeTurnItemPayload(row.pending_link_request_payload_json),
@@ -6337,7 +6356,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           waitingCards.length > 0
         ) {
           pendingRuntimeRequest =
-            secretRequestAsPendingInput(
+            waitingTurnItemAsPendingRequest(
               waitingCards.toSorted(
                 (left, right) =>
                   DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
@@ -6626,6 +6645,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id);
     }, Effect.mapError(shellSnapshotReadError));
 
+    const listLiveRunThreadIds = Effect.fn("ProjectionStore.listLiveRunThreadIds")(function* () {
+      const rows = yield* sql<{ readonly thread_id: string }>`
+        SELECT DISTINCT thread_id
+        FROM orchestration_v2_projection_runs
+        WHERE status IN ('preparing', 'starting', 'running', 'waiting')
+      `;
+      return rows.map((row) => ThreadId.make(row.thread_id));
+    }, Effect.mapError(shellSnapshotReadError));
+
     const listOlderSettledThreads: ProjectionStoreV2Shape["listOlderSettledThreads"] = Effect.fn(
       "ProjectionStore.listOlderSettledThreads",
     )(function* ({ before, projectIds, limit }) {
@@ -6768,6 +6796,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       apply,
       getShellSnapshot: readOnReader(getShellSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
+      listLiveRunThreadIds: readOnReader(listLiveRunThreadIds),
       readShellSnapshot: readOnReader(readShellSnapshot),
       listOlderSettledThreads: readOnReader(listOlderSettledThreads),
       getThreadShell: readOnReader(getThreadShell),

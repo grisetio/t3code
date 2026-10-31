@@ -484,18 +484,32 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Check Rust formatting
         run: |
-          for crate in resource-monitor kde-snap-shot hyprland-snap-shot; do
-            cargo fmt --manifest-path "native/$crate/Cargo.toml" -- --check
+          for crate in resource-monitor kde-snap-shot hyprland-snap-shot t3-elevation; do
+            cargo fmt --all --manifest-path "native/$crate/Cargo.toml" -- --check
           done
+
+      # The PAM module links libpam. The crate's link stub stands in for the
+      # dev package; tests resolve the runner's real libpam.so.0 at run time.
+      - name: Build libpam link stub
+        run: |
+          mkdir -p "$RUNNER_TEMP/pam-stub"
+          cc -shared -Wl,-soname,libpam.so.0 -o "$RUNNER_TEMP/pam-stub/libpam.so" \
+            native/t3-elevation/pam/stub/pam_stub.c
+          echo "RUSTFLAGS=-L native=$RUNNER_TEMP/pam-stub" >> "$GITHUB_ENV"
+
+      - name: Lint t3-elevation
+        run: >-
+          cargo clippy --locked --workspace --all-targets --all-features
+          --manifest-path native/t3-elevation/Cargo.toml -- -D warnings
 
       - name: Test Rust crates
         run: |
-          for crate in resource-monitor kde-snap-shot hyprland-snap-shot; do
-            cargo test --locked --manifest-path "native/$crate/Cargo.toml"
+          for crate in resource-monitor kde-snap-shot hyprland-snap-shot t3-elevation; do
+            cargo test --locked --workspace --manifest-path "native/$crate/Cargo.toml"
           done
 
   mobile_native_static_analysis:

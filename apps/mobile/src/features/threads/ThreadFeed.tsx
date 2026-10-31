@@ -20,6 +20,7 @@ import { GuestBubbleTint, GuestMessageName } from "./guestMessageStyle";
 import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestShareBar";
 import { LinkRequestCard } from "./LinkRequestCard";
 import { SecretRequestCard } from "./SecretRequestCard";
+import { ElevationRequestCard } from "../device-approval/ElevationRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
   WorktreeWorkingHeader,
@@ -195,6 +196,7 @@ import {
   isContextHandoffActivityGroup,
   isLinkRequestActivityGroup,
   isSecretRequestActivityGroup,
+  isElevationRequestActivityGroup,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
   messageFoldRunId,
@@ -1469,6 +1471,16 @@ function renderFeedEntry(
   if (entry.type === "activity-group" && isLinkRequestActivityGroup(entry)) {
     return (
       <LinkRequestCard
+        environmentId={props.environmentId}
+        projectedItem={entry.activities[0]!.projectedItem}
+        iconColor={iconSubtleColor}
+      />
+    );
+  }
+
+  if (entry.type === "activity-group" && isElevationRequestActivityGroup(entry)) {
+    return (
+      <ElevationRequestCard
         environmentId={props.environmentId}
         projectedItem={entry.activities[0]!.projectedItem}
         iconColor={iconSubtleColor}
