@@ -1405,7 +1405,10 @@ mod tests {
         let shells = vec![];
         let ctx = context("/", &[], &shells);
         let sudo = argv(&["sudo", "/bin/cat", "/dev/null", "/dev/zero", "/dev/tty"]);
-        assert_eq!(describe(&sudo, &parse(&sudo), &ctx).command.warnings, vec![]);
+        assert_eq!(
+            describe(&sudo, &parse(&sudo), &ctx).command.warnings,
+            vec![]
+        );
     }
 
     /// Review 2, G3: a path the user can swap was only checked as an argument
@@ -1429,16 +1432,35 @@ mod tests {
         };
         let cases: Vec<(Vec<String>, Vec<usize>)> = vec![
             (
-                argv(&["/bin/dd", &format!("if={mine}/tool.py"), "of=/dev/null", "status=none"]),
+                argv(&[
+                    "/bin/dd",
+                    &format!("if={mine}/tool.py"),
+                    "of=/dev/null",
+                    "status=none",
+                ]),
                 vec![1],
             ),
             (
-                argv(&["/usr/bin/tar", &format!("--file={mine}/tool.tar"), "-tf", "/dev/null"]),
+                argv(&[
+                    "/usr/bin/tar",
+                    &format!("--file={mine}/tool.tar"),
+                    "-tf",
+                    "/dev/null",
+                ]),
                 vec![1],
             ),
-            (argv(&["/usr/bin/tar", &format!("-tf{mine}/tool.tar")]), vec![1]),
-            (argv(&["/usr/bin/tar", "-t", "-f", &format!("{mine}/tool.tar")]), vec![3]),
-            (argv(&["/usr/bin/cc", &format!("-I{mine}"), "-c", "/dev/null"]), vec![1]),
+            (
+                argv(&["/usr/bin/tar", &format!("-tf{mine}/tool.tar")]),
+                vec![1],
+            ),
+            (
+                argv(&["/usr/bin/tar", "-t", "-f", &format!("{mine}/tool.tar")]),
+                vec![3],
+            ),
+            (
+                argv(&["/usr/bin/cc", &format!("-I{mine}"), "-c", "/dev/null"]),
+                vec![1],
+            ),
             // Values root controls, and values that aren't paths.
             (
                 argv(&[
