@@ -1,4 +1,9 @@
 {
   "platforms": ["android"],
-  "android": { "modules": ["expo.modules.t3agentnotifications.T3AgentNotificationsModule"] }
+  "android": {
+    "modules": [
+      "expo.modules.t3agentnotifications.T3AgentNotificationsModule",
+      "expo.modules.t3agentnotifications.SudoApprovalChannelModule"
+    ]
+  }
 }

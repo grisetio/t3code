@@ -3,11 +3,15 @@ import {
   ELEVATION_APPROVE_ON_PHONE,
   elevationDecodeFailureMessage,
 } from "@t3tools/client-runtime/elevation";
+import { elevationCommandLine } from "@t3tools/client-runtime/elevation-command-line";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
+import { escapeElevationDisplayText } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Result from "effect/Result";
 import { useEffect, useRef } from "react";
 
+import { readThreadShell } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { elevation } from "../../state/elevation";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -19,11 +23,17 @@ function requestKey(entry: PendingElevationRequest) {
   return `${entry.environmentId}\u0000${entry.request.requestId}`;
 }
 
-function describe(entry: PendingElevationRequest): string {
+/** The reason leads, as on the card; without one, the command does. */
+function headline(entry: PendingElevationRequest): string {
   if (Result.isFailure(entry.decoded)) return elevationDecodeFailureMessage(entry.decoded.failure);
-  const { view } = entry.decoded.success;
-  const what = view.enroll ? `Add device ${view.enroll.label}` : view.commandArgv.join(" ");
-  return `${what} · ${ELEVATION_APPROVE_ON_PHONE}`;
+  const { view, payload } = entry.decoded.success;
+  if (view.enroll) return `Add device ${view.enroll.label}`;
+  if (entry.request.explanation)
+    return `“${escapeElevationDisplayText(entry.request.explanation)}”`;
+  return elevationCommandLine({
+    agentCommand: entry.request.agentCommand,
+    argv: payload.command.argv,
+  }).firstLine;
 }
 
 /**
@@ -49,15 +59,21 @@ export function ElevationPendingNotices() {
     for (const entry of pending) {
       const key = requestKey(entry);
       if (shown.current.has(key)) continue;
-      const host = Result.isSuccess(entry.decoded)
-        ? entry.decoded.success.view.host
-        : (environments.find((environment) => environment.environmentId === entry.environmentId)
-            ?.label ?? "");
       const { threadId } = entry.request;
+      // The machine is this client's name for the environment, like the phone's.
+      const machine =
+        environments.find((environment) => environment.environmentId === entry.environmentId)
+          ?.label ?? (Result.isSuccess(entry.decoded) ? entry.decoded.success.view.host : "");
+      const threadTitle =
+        threadId === null
+          ? null
+          : (readThreadShell(scopeThreadRef(entry.environmentId, threadId))?.title ?? null);
       const id: ToastId = toastManager.add({
-        type: "warning",
-        title: host ? `sudo on ${host} is waiting for approval` : "sudo is waiting for approval",
-        description: describe(entry),
+        type: "info",
+        title: headline(entry),
+        description: [threadTitle, machine, ELEVATION_APPROVE_ON_PHONE]
+          .filter((part) => part !== null && part !== "")
+          .join(" · "),
         timeout: 0,
         onClose: () => {
           if (shown.current.get(key) === id) shown.current.set(key, null);
