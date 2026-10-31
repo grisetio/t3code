@@ -328,7 +328,11 @@ Any tool may produce this state; T3 verifies it whoever installed it.
   never manage its contents; the helper writes keys.
 
 Static checks cover the PAM line, the marker, the config, and the keys dir. The
-rest is proven by a live `sudo -n true` approved on a device.
+rest is proven by a live `sudo -n true` approved on a device. Only root can read
+sudoers, so the module checks the six lines itself on every request (any binding
+order or file, as long as each appears as `Defaults:<user>` or a global
+`Defaults`); without one of them it returns `PAM_IGNORE`, and the live test
+fails.
 
 ## Helper CLI
 

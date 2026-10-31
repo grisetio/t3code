@@ -151,6 +151,12 @@ fn prepare(
     if !matches!(invocation.service.as_deref(), Some("sudo" | "sudo-i")) {
         return None;
     }
+    // The payload can't show the environment; it is faithful only while
+    // sudoers keeps the caller's HOME, editors and PATH away from root. An
+    // install that lacks those lines would otherwise pass every static check.
+    if !crate::install::sudoers_has_settings(&environment.sudoers, &user.name) {
+        return None;
+    }
     let keys = keys::load_dir(
         &environment.state_dir.join("keys").join(&user.name),
         &environment.policy,
@@ -486,10 +492,12 @@ mod tests {
                 .join(format!("{}.json", key.key_id)),
             file.to_string(),
         );
+        let sudoers = dir.join("sudoers");
+        test_fs::write(&sudoers, crate::install::sudoers_drop_in(&user));
         let environment = Environment {
             state_dir: state,
             policy: test_fs::policy(),
-            sudoers: dir.join("no-sudoers"),
+            sudoers,
             shells: PathBuf::from("/etc/shells"),
             chain_start: unsafe { libc::getppid() },
             window_override: None,
@@ -689,6 +697,71 @@ mod tests {
                 .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
                 .0,
             Outcome::Ignore
+        );
+    }
+
+    /// Review 2, G5: an install written to the original three-line drop-in
+    /// verified as "Ready", and on macOS root inherited the caller's HOME,
+    /// editors and PATH. Without every setting the payload relies on, the
+    /// module stays out of the way, so the live `sudo -n true` test fails.
+    #[test]
+    fn sudoers_without_the_environment_settings_never_reach_the_device() {
+        let mut setup = setup();
+        let sudoers = setup.dir.join("old-sudoers");
+        let user = &setup.user;
+        test_fs::write(
+            &sudoers,
+            format!(
+                "Defaults:{user} noninteractive_auth\nDefaults:{user} !requiretty\nDefaults:{user} timestamp_timeout=0\n"
+            ),
+        );
+        setup.environment.sudoers = sudoers;
+        assert_eq!(
+            setup
+                .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
+                .0,
+            Outcome::Ignore
+        );
+        assert_eq!(
+            setup
+                .run(Mode::Approve, &setup.invocation(&["sudo", "-n", "true"]))
+                .0,
+            Outcome::Fail
+        );
+    }
+
+    /// The layout an external installer such as nix-darwin writes: the six
+    /// contract lines in a file of their own under an included directory.
+    #[test]
+    fn contract_lines_in_an_included_file_are_enough() {
+        let mut setup = setup();
+        let root = setup.dir.join("etc");
+        test_fs::create_dirs(&root.join("sudoers.d"));
+        test_fs::write(
+            &root.join("sudoers"),
+            format!(
+                "Defaults env_reset\nroot ALL=(ALL) ALL\n#includedir {}\n",
+                root.join("sudoers.d").display()
+            ),
+        );
+        let user = &setup.user;
+        test_fs::write(
+            &root.join("sudoers.d").join("10-nix-darwin-extra-config"),
+            format!(
+                "Defaults:{user} noninteractive_auth\n\
+                 Defaults:{user} !requiretty\n\
+                 Defaults:{user} timestamp_timeout=0\n\
+                 Defaults:{user} always_set_home\n\
+                 Defaults:{user} !env_editor\n\
+                 Defaults:{user} env_keep -= \"HOME EDITOR VISUAL SUDO_EDITOR PATH KDEDIR QTDIR\"\n"
+            ),
+        );
+        setup.environment.sudoers = root.join("sudoers");
+        assert_eq!(
+            setup
+                .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
+                .0,
+            Outcome::Approved
         );
     }
 
