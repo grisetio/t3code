@@ -161,7 +161,10 @@ verified-boot checks and only widens the app pins to the dev packages and the
 digests in `T3_ELEVATION_ANDROID_DEV_SIGNING_DIGESTS`.
 `--allow-test-attestation` drops the device checks for emulators and the VM
 fixture chains, so a key enrolled with it proves nothing about the device. The
-module warns on both in the approval itself.
+module warns on both in the approval itself. The server passes the dev option
+for `T3_ELEVATION_ALLOW_DEV_ATTESTATION=1` and the test option for
+`T3_ELEVATION_ALLOW_TEST_ATTESTATION=1`, which only a server running from
+source honors (`elevationAttestation` in `ElevationService.ts`).
 
 **Attestation challenge.** The phone draws 32 random bytes, uses them as the
 key's attestation challenge, and they travel in the enrollment object and the

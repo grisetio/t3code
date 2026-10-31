@@ -113,7 +113,7 @@ export interface ElevationOptions {
   /** The helper shipped with T3, for the first install only; null while none is packaged. */
   readonly bundledHelperPath: string | null;
   readonly sudoPath: string;
-  readonly allowDevAttestation: boolean;
+  readonly attestation: ElevationAttestation;
   /** Where last-used times live; the root-owned key files never record them. */
   readonly devicesStatePath: string;
   /** Read when a sudo asks, so servers that never use device approval never load FFI. */
@@ -801,7 +801,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     return yield* fail("helper_failed", stderr === "" ? `sudo exited with ${output.code}` : stderr);
   });
 
-  const devFlag = options.allowDevAttestation ? ["--allow-dev-attestation"] : [];
+  const attestationFlag = ATTESTATION_FLAGS[options.attestation];
 
   const withKeyFile = <A, E, R>(
     device: ElevationEnrollmentDevice,
@@ -838,7 +838,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       options.socketPath,
       "--key",
       keyPath,
-      ...devFlag,
+      ...attestationFlag,
     ];
     if (input.password === null) {
       // The key file outlives this call, so it sits in the private state dir.
@@ -882,7 +882,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         input.device.publicKey,
         "--challenge",
         input.device.challenge,
-        ...devFlag,
+        ...attestationFlag,
       ],
       password: input.password,
       stdin: enrollmentObject(input.device),
@@ -1035,6 +1035,31 @@ export const instructionsLayer = Layer.sync(DeviceApprovalInstructions, () => {
 // No package ships the helper yet, so first setup needs T3_ELEVATION_HELPER until one does.
 const BUNDLED_HELPER_PATH: string | null = null;
 
+/** Which helper attestation option setup and enroll pass; docs/internals/device-approval.md. */
+export type ElevationAttestation = "release" | "dev" | "test";
+
+const ATTESTATION_FLAGS: Record<ElevationAttestation, ReadonlyArray<string>> = {
+  release: [],
+  dev: ["--allow-dev-attestation"],
+  test: ["--allow-test-attestation"],
+};
+
+declare const __T3CODE_BUILD_CHANNEL__: "nightly" | "latest" | undefined;
+
+/**
+ * Dev attestation still requires real hardware and a Google root, so its
+ * variable works in any build. Test attestation accepts emulators, so a
+ * packaged server ignores its variable: only `vp pack` defines the build
+ * channel, and no environment variable can undefine it.
+ */
+export function elevationAttestation(input: {
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly packaged: boolean;
+}): ElevationAttestation {
+  if (!input.packaged && input.env.T3_ELEVATION_ALLOW_TEST_ATTESTATION === "1") return "test";
+  return input.env.T3_ELEVATION_ALLOW_DEV_ATTESTATION === "1" ? "dev" : "release";
+}
+
 export const layer = Layer.effect(
   ElevationService,
   Effect.gen(function* () {
@@ -1055,7 +1080,10 @@ export const layer = Layer.effect(
       helperOverride: process.env.T3_ELEVATION_HELPER ?? null,
       bundledHelperPath: BUNDLED_HELPER_PATH,
       sudoPath: "sudo",
-      allowDevAttestation: process.env.T3_ELEVATION_ALLOW_DEV_ATTESTATION === "1",
+      attestation: elevationAttestation({
+        env: process.env,
+        packaged: typeof __T3CODE_BUILD_CHANNEL__ !== "undefined",
+      }),
       devicesStatePath: NodePath.join(config.stateDir, "elevation-devices.json"),
       server: () => ({ pid: process.pid, startTime: processStartTime(host, process.pid) }),
       trustedPeerUid: 0,

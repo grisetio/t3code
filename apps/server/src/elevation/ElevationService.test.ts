@@ -290,7 +290,7 @@ esac
     helperOverride: NodePath.join(dir, "helper"),
     bundledHelperPath: null,
     sudoPath: NodePath.join(dir, "sudo"),
-    allowDevAttestation: false,
+    attestation: "release",
     devicesStatePath: NodePath.join(dir, "elevation-devices.json"),
     server: () => server,
     trustedPeerUid: 0,
@@ -787,4 +787,27 @@ describe("ElevationService helper", () => {
       assert.isFalse(sudoRan);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+});
+
+describe("elevationAttestation", () => {
+  it("takes test attestation from the environment only when running from source", () => {
+    const test = { T3_ELEVATION_ALLOW_TEST_ATTESTATION: "1" };
+    const both = { ...test, T3_ELEVATION_ALLOW_DEV_ATTESTATION: "1" };
+    assert.strictEqual(
+      ElevationService.elevationAttestation({ env: test, packaged: false }),
+      "test",
+    );
+    assert.strictEqual(
+      ElevationService.elevationAttestation({ env: test, packaged: true }),
+      "release",
+    );
+    assert.strictEqual(ElevationService.elevationAttestation({ env: both, packaged: true }), "dev");
+    assert.strictEqual(
+      ElevationService.elevationAttestation({
+        env: { T3_ELEVATION_ALLOW_DEV_ATTESTATION: "1" },
+        packaged: true,
+      }),
+      "dev",
+    );
+  });
 });
