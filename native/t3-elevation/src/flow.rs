@@ -68,10 +68,11 @@ impl Environment {
 /// sudo decides what to run from its own argv. If argv[0] isn't sudo's name,
 /// the argv read back may not be the one sudo parsed (an empty argv[0] once
 /// shifted the macOS parse), so the payload could describe another command.
+/// `sudo.ws` is sudo.ws's own name where sudo-rs is `sudo` (Ubuntu 25.10+).
 fn invoked_as_sudo(argv: &[Vec<u8>]) -> bool {
     argv.first().is_some_and(|arg0| {
         let name = arg0.rsplit(|b| *b == b'/').next().unwrap_or(arg0);
-        name == b"sudo" || name == b"sudoedit"
+        matches!(name, b"sudo" | b"sudoedit" | b"sudo.ws")
     })
 }
 
@@ -637,6 +638,26 @@ mod tests {
                 )
                 .0,
             Outcome::Approved
+        );
+    }
+
+    /// Review 2, G6: where sudo is sudo-rs (Ubuntu 25.10+), sudo.ws is
+    /// installed as `sudo.ws`. Ignoring that name sent `sudo.ws -n` on to the
+    /// password modules, which a faillock config counts.
+    #[test]
+    fn sudo_ws_by_its_own_name_is_sudo() {
+        let setup = setup();
+        assert_eq!(
+            setup
+                .run(Mode::Approve, &setup.invocation(&["/usr/bin/sudo.ws", "true"]))
+                .0,
+            Outcome::Approved
+        );
+        assert_eq!(
+            setup
+                .run(Mode::NotMine, &setup.invocation(&["sudo.ws", "-n", "true"]))
+                .0,
+            Outcome::Fail
         );
     }
 
