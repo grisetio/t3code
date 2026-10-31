@@ -263,3 +263,20 @@ fn vector_keys_derive_their_ids() {
         assert!(keys::parse_p256_spki(&spki).is_some(), "{name}");
     }
 }
+
+#[test]
+fn helper_input() {
+    let vectors = vectors();
+    let section = &vectors["helperInput"];
+    assert_eq!(
+        enroll::INPUT_MARKER,
+        format!("{}\n", str_of(section, "marker")).as_bytes()
+    );
+    for vector in section["cases"].as_array().unwrap() {
+        let name = str_of(vector, "name");
+        let mut input = str_of(vector, "input").as_bytes().to_vec();
+        let body = enroll::unframe_input(&mut input).map(String::from_utf8_lossy);
+        let expected = vector["body"].as_str().map(std::borrow::Cow::Borrowed);
+        assert_eq!(body, expected, "{name}");
+    }
+}

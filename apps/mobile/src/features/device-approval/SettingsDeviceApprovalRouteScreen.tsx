@@ -1,5 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
-import { elevationFailureMessage, elevationKeyAlias } from "@t3tools/client-runtime/elevation";
+import {
+  ELEVATION_TOUCH_ID_HINT,
+  elevationFailureMessage,
+  elevationKeyAlias,
+  elevationSudoApproval,
+} from "@t3tools/client-runtime/elevation";
 import { environmentSupportsDeviceApproval } from "@t3tools/client-runtime/state/elevation";
 import {
   isAtomCommandInterrupted,
@@ -184,6 +189,8 @@ function DeviceApprovalStatus(props: {
   // With a phone enrolled, it approves setup changes; the password stays a fallback.
   const showPassword = status.devices.length === 0 || usePassword;
   const sudoPassword = !showPassword || password === "" ? undefined : password;
+  const approval = elevationSudoApproval(status);
+  const missingPassword = approval.passwordRequired && sudoPassword === undefined;
 
   /** Runs one setup change; the sudo password, if any, is used once and cleared. */
   const run = async (label: string, action: () => Promise<boolean>) => {
@@ -344,9 +351,12 @@ function DeviceApprovalStatus(props: {
               description={
                 testing
                   ? "Waiting for approval on a phone…"
-                  : "Runs sudo -n true on this machine for a phone to approve."
+                  : (approval.testUnavailableReason ??
+                    "Runs sudo -n true on this machine for a phone to approve.")
               }
-              disabled={!canTest || testing || busy !== null}
+              disabled={
+                !canTest || testing || busy !== null || approval.testUnavailableReason !== null
+              }
               onPress={() => void runTest()}
             />
           </View>
@@ -376,7 +386,7 @@ function DeviceApprovalStatus(props: {
         <View className="gap-2">
           <TextInput
             accessibilityLabel="sudo password"
-            placeholder="sudo password (optional)"
+            placeholder={approval.passwordRequired ? "sudo password" : "sudo password (optional)"}
             value={password}
             onChangeText={setPassword}
             editable={busy === null}
@@ -388,10 +398,13 @@ function DeviceApprovalStatus(props: {
             importantForAutofill="no"
           />
           <Text className="text-xs text-foreground-muted">
-            {installed
-              ? "Without it, changes are approved on an enrolled phone."
-              : "Without it, setup gives you a command to paste into a terminal on this machine."}{" "}
-            The password goes through the T3 server to sudo once and is never stored.
+            {approval.passwordRequired
+              ? "No phone is enrolled yet, so changes need the sudo password."
+              : installed
+                ? "Without it, changes are approved on an enrolled phone."
+                : "Without it, setup gives you a command to paste into a terminal on this machine."}{" "}
+            The password goes through the T3 server to sudo once and is never stored.{" "}
+            {ELEVATION_TOUCH_ID_HINT}
             {installed
               ? ""
               : " Setup trusts this account: anything running as you, including an agent, could change what it installs, the same as typing your sudo password into T3."}
@@ -499,11 +512,13 @@ function DeviceApprovalStatus(props: {
             icon="iphone"
             label={installed ? "Add this phone" : "Set up on this machine"}
             description={
-              installed
-                ? "Creates a key on this phone. An enrolled phone or the password approves it."
-                : "Creates a key on this phone and installs approval on this machine."
+              !installed
+                ? "Creates a key on this phone and installs approval on this machine."
+                : approval.passwordRequired
+                  ? "Creates a key on this phone. The sudo password above approves it."
+                  : "Creates a key on this phone. An enrolled phone or the password approves it."
             }
-            disabled={(installed ? !canEnroll : !canInstall) || busy !== null}
+            disabled={(installed ? !canEnroll || missingPassword : !canInstall) || busy !== null}
             loading={busy === "install" || busy === "enroll"}
             onPress={() => void setUpThisPhone(record ?? null)}
           />
@@ -570,7 +585,7 @@ function DeviceApprovalStatus(props: {
             tone="danger"
             label="Turn off"
             description="Restores the files T3 changed; agent sudo asks for the password again."
-            disabled={!canUninstall || busy !== null}
+            disabled={!canUninstall || missingPassword || busy !== null}
             loading={busy === "uninstall"}
             onPress={() =>
               Dialog.confirm({

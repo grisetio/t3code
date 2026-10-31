@@ -5,6 +5,7 @@ import {
   parseElevationEnrollCommand,
   type ElevationPayload,
   type ElevationPayloadDecodeFailure,
+  type ElevationStatus,
   type ElevationWarning,
   type EnvironmentId,
   type OrchestrationV2ElevationRequestFailure,
@@ -23,6 +24,9 @@ export type ElevationRequestItem = Extract<
 
 export const ELEVATION_EXPLANATION_LABEL = "Agent's explanation (unverified)";
 export const ELEVATION_APPROVE_ON_PHONE = "Approve on your phone";
+/** pam_tid sits before the password in a nix-darwin or Apple sudo stack; no sudo option skips it. */
+export const ELEVATION_TOUCH_ID_HINT =
+  "On a Mac that uses Touch ID for sudo, a Touch ID prompt may appear there first; Cancel continues with the password.";
 
 export interface ElevationWarningView {
   readonly code: string;
@@ -241,4 +245,19 @@ export function elevationFailureMessage(failure: unknown, fallback: string): str
     return `${failure.message}${detail}`;
   }
   return fallback;
+}
+
+/**
+ * Who can approve a change made through sudo. Without an enrolled device only
+ * the password can; setup alone can fall back to a terminal command instead.
+ */
+export function elevationSudoApproval(status: Pick<ElevationStatus, "ownsApprovals" | "devices">): {
+  readonly passwordRequired: boolean;
+  readonly testUnavailableReason: string | null;
+} {
+  const enrolled = status.devices.length > 0;
+  return {
+    passwordRequired: status.ownsApprovals && !enrolled,
+    testUnavailableReason: enrolled ? null : "Add a phone first; the test is approved on a phone.",
+  };
 }

@@ -919,5 +919,46 @@
       "keyId": "dETtKMbP197AfWV1Yx3KlA",
       "code": "EH2ET-A66SZ"
     }
-  ]
+  ],
+  "helperInput": {
+    "note": "The enroll helper's stdin. With a password, sudo -S reads its line only when PAM asks, so the helper skips at most one line before the marker line. body null means the helper rejects the input.",
+    "marker": "t3-elevation-input-v1",
+    "cases": [
+      {
+        "name": "framed",
+        "input": "t3-elevation-input-v1\n{\"label\":\"Pixel\"}",
+        "body": "{\"label\":\"Pixel\"}"
+      },
+      {
+        "name": "password_left_by_sudo",
+        "input": "hunter2\nt3-elevation-input-v1\n{\"label\":\"Pixel\"}",
+        "body": "{\"label\":\"Pixel\"}"
+      },
+      {
+        "name": "unframed",
+        "input": "{\"label\":\"Pixel\"}",
+        "body": null
+      },
+      {
+        "name": "password_then_unframed",
+        "input": "hunter2\n{\"label\":\"Pixel\"}",
+        "body": null
+      },
+      {
+        "name": "two_lines_before_marker",
+        "input": "hunter2\nextra\nt3-elevation-input-v1\n{\"label\":\"Pixel\"}",
+        "body": null
+      },
+      {
+        "name": "longer_marker",
+        "input": "t3-elevation-input-v10\n{\"label\":\"Pixel\"}",
+        "body": null
+      },
+      {
+        "name": "marker_without_newline",
+        "input": "hunter2\nt3-elevation-input-v1",
+        "body": null
+      }
+    ]
+  }
 }

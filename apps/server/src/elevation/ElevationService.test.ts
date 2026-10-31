@@ -229,13 +229,18 @@ const makeFixture = Effect.fn("test.makeFixture")(function* (options?: {
       }),
     );
     // sudo strips its options and runs the command; the log shows what it got.
+    // With a `touch-id` file PAM approves without asking for the password, and
+    // with `no-approval` nothing approves `sudo -n`.
     await writeScript(
       NodePath.join(dir, "sudo"),
       `printf '%s\\n' "$@" > "${dir}/sudo.args"
 while [ $# -gt 0 ]; do
-  case "$1" in -S) S=1; shift;; -k|-n) shift;; -p) shift 2;; *) break;; esac
+  case "$1" in -S) S=1; shift;; -n) N=1; shift;; -k) shift;; -p) shift 2;; *) break;; esac
 done
-if [ -n "$S" ]; then
+if [ -n "$N" ] && [ -e "${dir}/no-approval" ]; then
+  echo "sudo: a password is required" >&2; exit 1
+fi
+if [ -n "$S" ] && [ ! -e "${dir}/touch-id" ]; then
   IFS= read -r password
   if [ "$password" != "hunter2" ]; then echo "Sorry, try again." >&2; exit 1; fi
 fi
@@ -751,10 +756,43 @@ describe("ElevationService helper", () => {
         "--challenge",
         device.challenge,
       ]);
-      assert.deepStrictEqual(
-        JSON.parse(yield* read(NodePath.join(fixture.dir, "helper.stdin"))),
-        device,
+      assert.strictEqual(
+        yield* read(NodePath.join(fixture.dir, "helper.stdin")),
+        `${vectorsJson.helperInput.marker}\n${JSON.stringify(device)}`,
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live(
+    "frames the enrollment so the helper finds it whether or not sudo read the password",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const device = {
+          label: "Pixel 2",
+          publicKey: vectorsJson.keys.newDevice.spkiDer,
+          challenge: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+          attestationChain: ["AAAA"] as [string],
+        };
+        const framed = `${vectorsJson.helperInput.marker}\n${JSON.stringify(device)}`;
+        const helperStdin = NodePath.join(fixture.dir, "helper.stdin");
+        yield* fixture.service.enroll({ device, password: "hunter2" });
+        assert.strictEqual(yield* read(helperStdin), framed);
+
+        // Touch ID, or an enrolled phone, approves without sudo reading the password.
+        yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(fixture.dir, "touch-id"), ""));
+        yield* fixture.service.enroll({ device, password: "hunter2" });
+        assert.strictEqual(yield* read(helperStdin), `hunter2\n${framed}`);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("says the password is needed when nothing approved sudo -n", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(fixture.dir, "no-approval"), ""));
+      const failed = yield* fixture.service.uninstall({}).pipe(Effect.flip);
+      assert.strictEqual(failed.reason, "password_required");
+      assert.isUndefined(failed.detail);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
