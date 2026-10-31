@@ -313,6 +313,8 @@ pub fn groups_of(user: &Passwd) -> (Vec<u32>, Vec<String>) {
         #[cfg(not(target_os = "macos"))]
         libc::getgrouplist(name.as_ptr(), user.gid, ids.as_mut_ptr(), &mut count);
     }
+    // getgrouplist fills c_int on macOS and gid_t (already u32) elsewhere.
+    #[allow(clippy::unnecessary_cast)]
     let gids: Vec<u32> = ids[..(count.max(0) as usize).min(ids.len())]
         .iter()
         .map(|id| *id as u32)

@@ -41,7 +41,7 @@ const EXTRA_OWNERS = [
   [/^native\/kde-snap-shot\//, ["@t3tools/desktop"]],
   [/^native\/libghostty-vt\//, ["@t3tools/web"]],
 ];
-const RUST = /^native\/(resource-monitor|kde-snap-shot|hyprland-snap-shot)\//;
+const RUST = /^native\/(resource-monitor|kde-snap-shot|hyprland-snap-shot|t3-elevation)\//;
 
 // Tests that read another package's files without declaring it. The scripts
 // tests read app manifests, assets, and sources (cursor-sdk-packaging,
