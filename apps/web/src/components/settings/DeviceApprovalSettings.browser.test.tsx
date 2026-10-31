@@ -23,11 +23,21 @@ describe("SudoConfirmForm", () => {
     expect(run).toHaveBeenLastCalledWith("hunter2");
   });
 
-  it("shows the password field first when no phone can approve", async () => {
+  it("requires the password when no phone can approve", async () => {
     const run = vi.fn(async (_password: string | undefined) => AsyncResult.success(undefined));
     await using screen = await render(
-      <SudoConfirmForm actionLabel="Turn off" phoneFirst={false} onCancel={() => {}} run={run} />,
+      <SudoConfirmForm
+        actionLabel="Turn off"
+        phoneFirst={false}
+        passwordRequired
+        onCancel={() => {}}
+        run={run}
+      />,
     );
-    await expect.element(screen.getByPlaceholder("sudo password (optional)")).toBeVisible();
+    const submit = screen.getByRole("button", { name: "Turn off" });
+    await expect.element(submit).toBeDisabled();
+    await userEvent.type(screen.getByPlaceholder("sudo password"), "hunter2");
+    await userEvent.click(submit);
+    expect(run).toHaveBeenLastCalledWith("hunter2");
   });
 });

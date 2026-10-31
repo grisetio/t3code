@@ -14,7 +14,8 @@ Enter the sudo password once, or leave it empty to get a command to paste into
 a terminal on that machine. The password goes to the server once and is never
 stored. Setup trusts your account on that machine, the same as typing the sudo
 password into T3 Code: anything running as you, including an agent, could
-change what it installs.
+change what it installs. On a Mac that uses Touch ID for `sudo`, a Touch ID
+prompt may appear on the Mac first; Cancel continues with the password.
 
 After setup, T3 Code runs a test `sudo` for you to approve on the phone. Run it
 again any time with **Test** in **Settings → Device approval** on the phone,
@@ -22,7 +23,7 @@ web, or desktop.
 
 To add another phone, choose **Add this phone** on it. Approve on a phone that
 is already set up after checking that both show the same code, or enter the
-password.
+password. Until a phone is set up, only the password can approve it.
 
 ## What changes
 

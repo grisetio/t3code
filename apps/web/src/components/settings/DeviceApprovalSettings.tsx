@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { elevationFailureMessage } from "@t3tools/client-runtime/elevation";
+import {
+  ELEVATION_TOUCH_ID_HINT,
+  elevationFailureMessage,
+  elevationSudoApproval,
+} from "@t3tools/client-runtime/elevation";
 import { environmentSupportsDeviceApproval } from "@t3tools/client-runtime/state/elevation";
 import {
   isAtomCommandInterrupted,
@@ -107,6 +111,7 @@ function DeviceApprovalStatus(props: {
     );
   }
   const installed = status.ownsApprovals || status.devices.length > 0;
+  const approval = elevationSudoApproval(status);
   return (
     <>
       <SettingsRow
@@ -137,7 +142,14 @@ function DeviceApprovalStatus(props: {
           </ul>
         ) : null}
       </SettingsRow>
-      {installed ? <TestRow environmentId={props.environmentId} /> : <SetUpRow status={status} />}
+      {installed ? (
+        <TestRow
+          environmentId={props.environmentId}
+          unavailableReason={approval.testUnavailableReason}
+        />
+      ) : (
+        <SetUpRow status={status} />
+      )}
       {status.devices.map((device) => (
         <DeviceRow
           key={device.keyId}
@@ -154,7 +166,11 @@ function DeviceApprovalStatus(props: {
       ) : null}
       {/* Without the root-owned helper these would fail; the helper check says why. */}
       {installed && status.helperInstalled ? (
-        <TurnOffRow environmentId={props.environmentId} phoneFirst={status.devices.length > 0} />
+        <TurnOffRow
+          environmentId={props.environmentId}
+          phoneFirst={status.devices.length > 0}
+          passwordRequired={approval.passwordRequired}
+        />
       ) : null}
     </>
   );
@@ -174,7 +190,10 @@ function CheckLine(props: { readonly check: ElevationCheck }) {
 }
 
 /** The live half of verification: only a real approval proves sudo reaches the module. */
-function TestRow(props: { readonly environmentId: EnvironmentId }) {
+function TestRow(props: {
+  readonly environmentId: EnvironmentId;
+  readonly unavailableReason: string | null;
+}) {
   const test = useAtomCommand(elevation.test, "test device approval");
   const canTest = useAtomValue(elevation.test.permissionAtom(props.environmentId));
   const [running, setRunning] = useState(false);
@@ -198,13 +217,14 @@ function TestRow(props: { readonly environmentId: EnvironmentId }) {
       description={
         running
           ? "Waiting for approval on your phone…"
-          : "Runs sudo -n true on this machine for your phone to approve."
+          : (props.unavailableReason ??
+            "Runs sudo -n true on this machine for your phone to approve.")
       }
       control={
         <Button
           variant="outline"
           size="xs"
-          disabled={!canTest || running}
+          disabled={!canTest || running || props.unavailableReason !== null}
           onClick={() => void onTest()}
         >
           Test
@@ -296,6 +316,7 @@ function DeviceRow(props: {
 function TurnOffRow(props: {
   readonly environmentId: EnvironmentId;
   readonly phoneFirst: boolean;
+  readonly passwordRequired: boolean;
 }) {
   const uninstall = useAtomCommand(elevation.uninstall, "turn off device approval");
   const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(props.environmentId));
@@ -321,6 +342,7 @@ function TurnOffRow(props: {
         <SudoConfirmForm
           actionLabel="Turn off"
           phoneFirst={props.phoneFirst}
+          passwordRequired={props.passwordRequired}
           onCancel={() => setConfirming(false)}
           run={(password) =>
             uninstall({
@@ -338,10 +360,12 @@ function TurnOffRow(props: {
  * These changes run through sudo, so either a phone approves them or the
  * user gives the password here. With a phone enrolled, the phone comes first:
  * a password typed here passes through the server, which agents share.
+ * With none enrolled, only the password can approve.
  */
 export function SudoConfirmForm(props: {
   readonly actionLabel: string;
   readonly phoneFirst: boolean;
+  readonly passwordRequired?: boolean;
   readonly onCancel: () => void;
   readonly run: (password: string | undefined) => Promise<AtomCommandResult<unknown, unknown>>;
 }) {
@@ -368,8 +392,11 @@ export function SudoConfirmForm(props: {
     <form className="flex flex-col gap-2" autoComplete="off" onSubmit={(e) => void onSubmit(e)}>
       {usePassword ? (
         <label htmlFor={inputId} className="text-xs text-muted-foreground">
-          Approve on your phone, or enter the sudo password. The password goes through the T3 server
-          to sudo once and is never stored.
+          {props.passwordRequired
+            ? "No phone is enrolled to approve this, so enter the sudo password."
+            : "Approve on your phone, or enter the sudo password."}{" "}
+          The password goes through the T3 server to sudo once and is never stored.{" "}
+          {ELEVATION_TOUCH_ID_HINT}
         </label>
       ) : (
         <p className="text-xs text-muted-foreground">Approve on your phone.</p>
@@ -380,13 +407,18 @@ export function SudoConfirmForm(props: {
             id={inputId}
             type="password"
             autoComplete="off"
-            placeholder="sudo password (optional)"
+            placeholder={props.passwordRequired ? "sudo password" : "sudo password (optional)"}
             value={password}
             disabled={submitting}
             onChange={(event) => setPassword(event.currentTarget.value)}
           />
         ) : null}
-        <Button type="submit" size="sm" variant="destructive" disabled={submitting}>
+        <Button
+          type="submit"
+          size="sm"
+          variant="destructive"
+          disabled={submitting || (props.passwordRequired === true && password === "")}
+        >
           {submitting && password === "" ? "Waiting for your phone…" : props.actionLabel}
         </Button>
         <Button

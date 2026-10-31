@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 import * as Base64Url from "effect/encoding/Base64Url";
 
@@ -7,6 +8,7 @@ import {
   elevationFailureMessage,
   elevationRequestFallbackView,
   elevationRequestStatusView,
+  elevationSudoApproval,
 } from "./elevation.ts";
 import { ElevationError } from "@t3tools/contracts";
 
@@ -246,5 +248,32 @@ describe("elevationFailureMessage", () => {
       ),
     ).toBe("The device approval helper failed. visudo failed");
     expect(elevationFailureMessage(new Error("password=hunter2"), "fallback")).toBe("fallback");
+  });
+});
+
+describe("elevationSudoApproval", () => {
+  const device = {
+    keyId: "doBaY6aYDBgHVCShPzJ3LQ",
+    label: "Pixel",
+    securityLevel: "strongbox" as const,
+    enrolledAt: DateTime.makeUnsafe(0),
+    lastUsedAt: null,
+  };
+
+  it("needs the password and holds back the test until a device is enrolled", () => {
+    const noDevice = elevationSudoApproval({ ownsApprovals: true, devices: [] });
+    expect(noDevice.passwordRequired).toBe(true);
+    expect(noDevice.testUnavailableReason).toEqual(expect.any(String));
+
+    expect(elevationSudoApproval({ ownsApprovals: true, devices: [device] })).toEqual({
+      passwordRequired: false,
+      testUnavailableReason: null,
+    });
+  });
+
+  it("leaves the password optional for setup, which can give a terminal command instead", () => {
+    expect(elevationSudoApproval({ ownsApprovals: false, devices: [] }).passwordRequired).toBe(
+      false,
+    );
   });
 });
