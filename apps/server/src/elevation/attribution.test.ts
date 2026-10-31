@@ -1,10 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import { NodeId, RunId, ThreadId } from "@t3tools/contracts";
 
-import { attribute, type LiveRun } from "./attribution.ts";
+import { attribute, sudoProgram, type LiveRun } from "./attribution.ts";
 import type { ChainEntry } from "./protocol.ts";
 
 const server = { pid: 100, startTime: 5000 };
+const now = 1_000_000;
 const entry = (pid: number, argv: ReadonlyArray<string> | null, startTime = 6000): ChainEntry => ({
   pid,
   ppid: 0,
@@ -16,7 +17,11 @@ const entry = (pid: number, argv: ReadonlyArray<string> | null, startTime = 6000
 const serverEntry = entry(server.pid, ["node", "t3"], server.startTime);
 const run = (
   name: string,
-  commands: ReadonlyArray<{ readonly text: string; readonly explanation?: string }>,
+  commands: ReadonlyArray<{
+    readonly text: string;
+    readonly explanation?: string;
+    readonly finishedAt?: number;
+  }>,
 ): LiveRun => ({
   threadId: ThreadId.make(`thread:${name}`),
   runId: RunId.make(`run:${name}`),
@@ -24,6 +29,7 @@ const run = (
   commands: commands.map((command) => ({
     text: command.text,
     explanation: command.explanation ?? null,
+    finishedAt: command.finishedAt ?? null,
   })),
 });
 
@@ -40,6 +46,7 @@ describe("attribute", () => {
       attribute({
         hello: { argv: ["sudo", "ls"], chain: [entry(7, ["zsh"]), entry(1, ["launchd"])] },
         server,
+        now,
         liveRuns: [run("a", [{ text: "sudo ls" }])],
         providerProcesses: [],
         serverSudos: [],
@@ -52,6 +59,7 @@ describe("attribute", () => {
       attribute({
         hello: { argv: ["sudo", "ls"], chain: [entry(server.pid, ["node"], 1)] },
         server,
+        now,
         liveRuns: [run("a", [{ text: "sudo ls" }])],
         providerProcesses: [],
         serverSudos: [],
@@ -67,6 +75,7 @@ describe("attribute", () => {
           chain: [entry(200, claudeBash("sudo ls")), entry(150, ["claude"]), serverEntry],
         },
         server,
+        now,
         liveRuns: [],
         providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
         serverSudos: [],
@@ -88,11 +97,111 @@ describe("attribute", () => {
           ],
         },
         server,
+        now,
         liveRuns: [b, a],
         providerProcesses: [],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: a, explanation: "Free disk space" });
+    ).toEqual({
+      type: "mine",
+      run: a,
+      explanation: "Free disk space",
+      command: "sudo nix-collect-garbage -d",
+    });
+  });
+
+  it("keeps the reason of a background command whose tool call already returned", () => {
+    const background = run("a", [
+      {
+        text: "sleep 1; sudo cat /dev/null",
+        explanation: "Run a test request",
+        finishedAt: now - 1000,
+      },
+      { text: "pnpm dev", explanation: "Start the dev server" },
+    ]);
+    const hello = {
+      argv: ["sudo", "cat", "/dev/null"],
+      chain: [
+        entry(200, claudeBash("sleep 1; sudo cat /dev/null")),
+        entry(150, ["claude"]),
+        serverEntry,
+      ],
+    };
+    expect(
+      attribute({
+        hello,
+        server,
+        now,
+        liveRuns: [background],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        serverSudos: [],
+      }),
+    ).toEqual({
+      type: "mine",
+      run: background,
+      explanation: "Run a test request",
+      command: "sleep 1; sudo cat /dev/null",
+    });
+    // A running call wins over a finished one with the same sudo.
+    const script = run("a", [
+      { text: "sudo cat /dev/null", explanation: "Older call", finishedAt: now - 500 },
+      { text: "./check.sh", explanation: "Run the checks" },
+    ]);
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "cat", "/dev/null"],
+          chain: [
+            entry(210, ["/bin/sh", "./check.sh"]),
+            entry(200, claudeBash("./check.sh")),
+            entry(150, ["claude"]),
+            serverEntry,
+          ],
+        },
+        server,
+        now,
+        liveRuns: [script],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "mine", run: script, explanation: "Run the checks", command: "./check.sh" });
+  });
+
+  it("lends a finished call only to a sudo of its program that follows it closely", () => {
+    const hello = {
+      argv: ["sudo", "-u", "root", "cat", "/dev/null"],
+      chain: [
+        entry(200, claudeBash("sleep 1; sudo -u root cat /dev/null")),
+        entry(150, ["claude"]),
+        serverEntry,
+      ],
+    };
+    const attributeTo = (finishedAt: number, text = "sleep 1; sudo -u root cat /dev/null") => {
+      const background = run("a", [{ text, explanation: "Run a test request", finishedAt }]);
+      return attribute({
+        hello,
+        server,
+        now,
+        liveRuns: [background],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        serverSudos: [],
+      });
+    };
+    expect(attributeTo(now - 2000)).toMatchObject({ explanation: "Run a test request" });
+    // Too old: the thread still owns it, without the call's text or reason.
+    expect(attributeTo(now - 2001)).toMatchObject({ type: "mine", explanation: null });
+    expect(attributeTo(now - 2001)).not.toHaveProperty("command");
+    // The call's text has to name the program sudo runs; this one is in the shell's argv.
+    expect(attributeTo(now - 100, "sleep 1")).toMatchObject({
+      explanation: null,
+    });
+  });
+
+  it("finds the program sudo runs past its options", () => {
+    expect(sudoProgram(["sudo", "-u", "root", "-E", "/usr/bin/cat", "x"])).toBe("cat");
+    expect(sudoProgram(["sudo", "LANG=C", "apt-get", "update"])).toBe("apt-get");
+    expect(sudoProgram(["sudo", "--", "-weird"])).toBe("-weird");
+    expect(sudoProgram(["sudo", "-s"])).toBeNull();
   });
 
   it("matches a lone sudo zsh exec'd under Codex's shared app-server by its own argv", () => {
@@ -105,11 +214,17 @@ describe("attribute", () => {
           chain: [entry(300, ["codex", "app-server"]), serverEntry],
         },
         server,
+        now,
         liveRuns: [a, b],
         providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: b, explanation: "Refresh packages" });
+    ).toEqual({
+      type: "mine",
+      run: b,
+      explanation: "Refresh packages",
+      command: "sudo apt-get update",
+    });
   });
 
   it("matches a sudo inside a longer Codex shell command", () => {
@@ -125,11 +240,17 @@ describe("attribute", () => {
           ],
         },
         server,
+        now,
         liveRuns: [a, run("b", [{ text: "ls" }])],
         providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: a, explanation: null });
+    ).toEqual({
+      type: "mine",
+      run: a,
+      explanation: null,
+      command: "sudo systemctl restart nginx && curl localhost",
+    });
   });
 
   it("matches the shell wrapper when sudo runs from a script the command started", () => {
@@ -146,11 +267,12 @@ describe("attribute", () => {
           ],
         },
         server,
+        now,
         liveRuns: [a, run("b", [{ text: "ls" }])],
         providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
         serverSudos: [],
       }),
-    ).toEqual({ type: "mine", run: a, explanation: null });
+    ).toEqual({ type: "mine", run: a, explanation: null, command: "./install.sh --system" });
   });
 
   it("shows a banner without a thread when two threads of a shared process run the same text", () => {
@@ -161,6 +283,7 @@ describe("attribute", () => {
           chain: [entry(300, ["codex", "app-server"]), serverEntry],
         },
         server,
+        now,
         liveRuns: [
           run("a", [{ text: "sudo apt-get update" }]),
           run("b", [{ text: "sudo apt-get update" }]),
@@ -180,6 +303,7 @@ describe("attribute", () => {
           chain: [entry(200, ["make"]), entry(150, ["claude"]), serverEntry],
         },
         server,
+        now,
         liveRuns: [run("b", [{ text: "ls" }]), a],
         providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
         serverSudos: [],
@@ -195,6 +319,7 @@ describe("attribute", () => {
           chain: [entry(200, ["make"]), entry(150, ["vim"], 9999), serverEntry],
         },
         server,
+        now,
         liveRuns: [run("a", [])],
         providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
         serverSudos: [],
@@ -210,6 +335,7 @@ describe("attribute", () => {
           chain: [entry(400, ["-zsh"]), serverEntry],
         },
         server,
+        now,
         liveRuns: [run("a", [{ text: "pnpm dev" }])],
         providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
         serverSudos: [],
@@ -223,6 +349,7 @@ describe("attribute", () => {
       attribute({
         hello: { argv: ["/usr/bin/sudo", "-n", "true"], chain: [serverEntry] },
         server,
+        now,
         liveRuns: [],
         providerProcesses: [],
         serverSudos: [own],
@@ -232,6 +359,7 @@ describe("attribute", () => {
       attribute({
         hello: { argv: ["sudo", "-S", "-k", "-p", "", "true"], chain: [serverEntry] },
         server,
+        now,
         liveRuns: [run("a", [{ text: "sudo -S -k -p true" }])],
         providerProcesses: [],
         serverSudos: [own],

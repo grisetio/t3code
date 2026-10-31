@@ -34,6 +34,7 @@ import {
   type ElevationRevokeInput,
   type ElevationStatus,
   type ElevationUninstallInput,
+  type OrchestrationV2ElevationChanges,
   type OrchestrationV2ElevationRequestFailure,
   type OrchestrationV2ElevationResolvedBy,
   type OrchestrationV2ProviderRef,
@@ -48,6 +49,7 @@ import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -63,13 +65,18 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { attribute, type LiveRun, type ServerSudo } from "./attribution.ts";
+import { uncommittedChanges } from "./changes.ts";
 import { ElevationRunCancellation } from "./runCancellation.ts";
 import {
   checkSignature,
+  type HostCheck,
+  isManagedPath,
   isTrustedHelper,
   readEnrolledKeys,
+  readPathsWrittenByT3,
   readUserConfig,
   staticChecks,
+  withFixBy,
   type HostPaths,
 } from "./hostState.ts";
 import {
@@ -94,6 +101,9 @@ const MAX_CONNECTIONS = 32;
 const HELLO_TIMEOUT = "5 seconds";
 const REQUEST_TIMEOUT = "5 seconds";
 const EXPIRY_GRACE_SECONDS = 5;
+// The checkout is read from the hello on; a slow read leaves the pointer out
+// rather than holding the request back.
+const CHANGES_WAIT = "750 millis";
 // A device-approved helper call waits for the phone, up to the 300 s window.
 const DEVICE_SUDO_TIMEOUT = "6 minutes";
 const PASSWORD_SUDO_TIMEOUT = "60 seconds";
@@ -104,6 +114,7 @@ const INSTALL_KEY_FILE = /^elevation-install-[0-9a-f-]{36}\.json$/;
 const INSTALL_KEY_FILE_MAX_AGE_MS = 60 * 60 * 1000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const RUNNING_ITEM_STATUSES = new Set(["pending", "running", "waiting"]);
+const FINISHED_ITEM_STATUSES = new Set(["completed"]);
 
 export interface ElevationOptions {
   readonly user: string;
@@ -283,12 +294,15 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       readonly host: string;
       readonly warnings: ElevationPayload["command"]["warnings"];
       readonly explanation: string | null;
+      readonly agentCommand: string | undefined;
+      readonly changes: OrchestrationV2ElevationChanges | null;
       readonly payload: string | null;
       readonly elevationStatus: "pending" | "cancelled";
       readonly failure?: OrchestrationV2ElevationRequestFailure;
     },
-  ) =>
-    orchestrator.dispatch({
+  ) => {
+    const { agentCommand, changes, ...rest } = fields;
+    return orchestrator.dispatch({
       type: "elevation_request.record",
       commandId: CommandId.make(`elevation:${turnItemId}:record`),
       threadId: run.threadId,
@@ -296,8 +310,11 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       nodeId: run.rootNodeId,
       turnItemId,
       kind: "sudo",
-      ...fields,
+      ...rest,
+      ...(agentCommand === undefined ? {} : { agentCommand }),
+      ...(changes === null ? {} : { changes }),
     });
+  };
 
   const liveRuns = Effect.gen(function* () {
     const threadIds = yield* projections.listLiveRunThreadIds();
@@ -334,16 +351,25 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
             threadId: run.threadId,
             runId: run.id,
             rootNodeId: run.rootNodeId,
-            commands: items.flatMap((item) =>
-              item.type === "command_execution" && RUNNING_ITEM_STATUSES.has(item.status)
-                ? [
-                    {
-                      text: item.input,
-                      explanation: item.description ?? reasonFor(item.nativeItemRef),
-                    },
-                  ]
-                : [],
-            ),
+            commands: items
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+              )
+              .flatMap((item) =>
+                item.type === "command_execution" &&
+                (RUNNING_ITEM_STATUSES.has(item.status) || FINISHED_ITEM_STATUSES.has(item.status))
+                  ? [
+                      {
+                        text: item.input,
+                        explanation: item.description ?? reasonFor(item.nativeItemRef),
+                        finishedAt: RUNNING_ITEM_STATUSES.has(item.status)
+                          ? null
+                          : DateTime.toEpochMillis(item.updatedAt),
+                      },
+                    ]
+                  : [],
+              ),
           };
         });
       }),
@@ -416,6 +442,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     if (!options.peerCredentialsSupported() && !options.plausiblePeer(decoded.value)) return;
     const attribution = attribute({
       hello: decoded.value,
+      now: DateTime.toEpochMillis(yield* DateTime.now),
       server: serverProcess(),
       liveRuns: yield* liveRuns,
       providerProcesses: providerProcesses.list(),
@@ -425,9 +452,37 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       send({ type: "hello_reply", v: 1, decision: "not_mine" });
       return;
     }
-    send({ type: "hello_reply", v: 1, decision: "mine" });
     const ownSudo = attribution.serverSudo as OwnSudo | undefined;
+    send({
+      type: "hello_reply",
+      v: 1,
+      decision: "mine",
+      ...(ownSudo === undefined ? {} : { ownSudo: true }),
+    });
     if (ownSudo !== undefined) ownSudo.reached = true;
+    // Only checkouts the server already runs git in for this thread's checkpoints.
+    const changesRoots =
+      attribution.run === null
+        ? Effect.succeed([])
+        : projections.getCheckpointContext(attribution.run.threadId).pipe(
+            Effect.map(({ checkpointScopes }) => checkpointScopes.map((scope) => scope.cwd)),
+            Effect.orElseSucceed((): ReadonlyArray<string> => []),
+          );
+    const changesFiber =
+      ownSudo === undefined
+        ? yield* changesRoots.pipe(
+            Effect.flatMap((roots) => uncommittedChanges(decoded.value.cwd, roots)),
+            Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+            Effect.forkChild,
+          )
+        : null;
+    const changes =
+      changesFiber === null
+        ? Effect.succeed(null)
+        : Fiber.join(changesFiber).pipe(
+            Effect.timeoutOption(CHANGES_WAIT),
+            Effect.map(Option.getOrNull),
+          );
     const finish = (outcome: string) => {
       if (ownSudo !== undefined) ownSudo.outcome = outcome;
     };
@@ -449,6 +504,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           host: decoded.value.host.name,
           warnings: [],
           explanation: attribution.explanation,
+          agentCommand: attribution.command,
+          changes: null,
           payload: null,
           elevationStatus: "cancelled",
           failure: message.outcome,
@@ -465,6 +522,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     if (payloadBytes === null || payload === null || payload._tag === "Failure") return;
 
     const requestId = ElevationRequestId.make(NodeCrypto.randomUUID());
+    const requestChanges = yield* changes;
     let item: { readonly run: LiveRun; readonly turnItemId: TurnItemId } | null = null;
     if (attribution.run !== null) {
       const turnItemId = TurnItemId.make(`elevation:${requestId}`);
@@ -476,6 +534,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         host: payload.success.host.name,
         warnings: payload.success.command.warnings,
         explanation: attribution.explanation,
+        agentCommand: attribution.command,
+        changes: requestChanges,
         payload: message.payload,
         elevationStatus: "pending",
       }).pipe(
@@ -492,6 +552,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         turnItemId: item?.turnItemId ?? null,
         payload: message.payload,
         explanation: attribution.explanation,
+        ...(attribution.command === undefined ? {} : { agentCommand: attribution.command }),
+        ...(requestChanges === null ? {} : { changes: requestChanges }),
         createdAt: yield* DateTime.now,
       },
       runId: attribution.run?.runId ?? null,
@@ -712,10 +774,34 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     }));
     // Agent sudo doesn't need the helper, so it doesn't count against `ready`;
     // adding and removing devices does.
-    const helperCheck =
+    const helperCheck: ReadonlyArray<HostCheck> =
       !helperInstalled && (listening || devices.length > 0)
-        ? [{ id: "helper", ok: false, message: untrustedHelperMessage }]
+        ? [
+            {
+              id: "helper",
+              ok: false,
+              message: untrustedHelperMessage,
+              missingPath: options.hostPaths.helperPath,
+            },
+          ]
         : [];
+    const hostChecks = [...host.checks, ...helperCheck];
+    const plannedChanges = helper?.plannedChanges ?? [];
+    const missingPaths = hostChecks.flatMap((check) =>
+      check.missingPath === undefined ? [] : [check.missingPath],
+    );
+    const managed = new Set<string>();
+    for (const path of missingPaths) {
+      if (yield* isManagedPath(path)) managed.add(path);
+    }
+    const fixContext = {
+      plannedChanges,
+      writtenByT3:
+        missingPaths.length === 0
+          ? new Set<string>()
+          : yield* readPathsWrittenByT3(options.hostPaths),
+      managed,
+    };
     return {
       supported: unsupported === null,
       ...(unsupported === null ? {} : { unsupportedReason: unsupported }),
@@ -724,8 +810,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       user: options.user,
       setupOutsideT3: helper?.setupOutsideT3 ?? false,
       helperInstalled,
-      checks: [...host.checks, ...helperCheck],
-      plannedChanges: helper?.plannedChanges ?? [],
+      checks: hostChecks.map((check) => withFixBy(check, fixContext)),
+      plannedChanges,
       devices,
     };
   }).pipe(Effect.withSpan("ElevationService.status"));
@@ -922,7 +1008,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   const test: Effect.Effect<ElevationCheck, ElevationError> = Effect.gen(function* () {
     yield* requireSupported;
     if (listener === null) {
-      return { id: "live_test", ok: false, message: "This server doesn't receive approvals" };
+      return {
+        id: "live_test",
+        ok: false,
+        message: "This server doesn't receive approvals",
+        fixBy: "agent" as const,
+      };
     }
     const own: OwnSudo = {
       argv: [options.sudoPath, "-n", "true"],
@@ -946,14 +1037,21 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         message: succeeded
           ? "sudo -n succeeded without asking a device"
           : "sudo -n doesn't reach device approval",
+        fixBy: "agent" as const,
       };
     }
+    // The user declined or let it expire; nothing is broken.
     if (own.outcome !== "approved") {
       return { id: "live_test", ok: false, message: "The test wasn't approved on a device" };
     }
     return succeeded
       ? { id: "live_test", ok: true, message: "sudo -n is approved on a device" }
-      : { id: "live_test", ok: false, message: "sudo -n failed after approval" };
+      : {
+          id: "live_test",
+          ok: false,
+          message: "sudo -n failed after approval",
+          fixBy: "agent" as const,
+        };
   }).pipe(Effect.withSpan("ElevationService.test"));
 
   const respond = Effect.fn("ElevationService.respond")(function* (input: ElevationRespondInput) {

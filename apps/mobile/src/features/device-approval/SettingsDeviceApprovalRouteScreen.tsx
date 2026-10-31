@@ -1,98 +1,124 @@
 import { useAtomValue } from "@effect/atom-react";
+import { elevationFailureMessage } from "@t3tools/client-runtime/elevation";
 import {
-  ELEVATION_TOUCH_ID_HINT,
-  elevationFailureMessage,
-  elevationKeyAlias,
-  elevationSudoApproval,
-} from "@t3tools/client-runtime/elevation";
+  deviceApprovalFailingChecks,
+  deviceApprovalFixSheetText,
+  deviceApprovalInstalled,
+  deviceApprovalState,
+  planDeviceApprovalFix,
+  type DeviceApprovalFixPlan,
+  type DeviceApprovalRepairAttempt,
+} from "@t3tools/client-runtime/elevation-fix";
 import { environmentSupportsDeviceApproval } from "@t3tools/client-runtime/state/elevation";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type {
-  ElevationCheck,
-  ElevationDevice,
-  ElevationEnrollmentDevice,
-  ElevationStatus,
-  EnvironmentId,
-} from "@t3tools/contracts";
-import * as Base64Url from "effect/encoding/Base64Url";
-import * as Result from "effect/Result";
-import * as Clipboard from "expo-clipboard";
-import * as ExpoCrypto from "expo-crypto";
-import * as Device from "expo-device";
+import type { ElevationDevice, ElevationStatus, EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { ListActionRow } from "../../components/ui/ListActionRow";
-import { ListRowLayout } from "../../components/ui/ListRowLayout";
-import { cn } from "../../lib/cn";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import { Sheet } from "../../components/ui/Sheet";
 import { elevation } from "../../state/elevation";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
+import { approvalHaptic } from "./approvalHaptics";
+import { createPhoneKey } from "./deviceApprovalEnrollment";
 import { deviceApprovalKeys, type DeviceApprovalKeyRecord } from "./deviceApprovalKeys";
 import {
   deviceApprovalSigner,
-  DeviceApprovalSignerError,
   deviceApprovalSignerErrorCode,
   deviceApprovalSignerErrorMessage,
 } from "./deviceApprovalSigner";
-import { useComparisonCode } from "./ElevationRequestDetails";
+import { DeviceApprovalSetupFlow } from "./DeviceApprovalSetupFlow";
+import {
+  openSudoApprovalNotificationSettings,
+  useSudoApprovalNotificationsOn,
+} from "./sudoApprovalNotifications";
+import { useDeviceApprovalAgentHandoff } from "./useDeviceApprovalAgentHandoff";
 
-const SECURITY_LEVEL_LABELS: Record<ElevationDevice["securityLevel"], string> = {
-  strongbox: "StrongBox",
-  tee: "TEE",
-  software: "Software (development)",
-};
+const STATE_LABELS = { on: "On", needs_fixing: "Needs fixing", off: "Off" } as const;
+// Long enough to read "T3 couldn't fix this one" before the thread opens.
+const HANDOFF_NOTICE_MS = 1400;
 
-const formatDate = (value: { readonly epochMilliseconds: number }) =>
-  new Date(value.epochMilliseconds).toLocaleDateString();
-
-const deviceLabel = () => (Device.modelName ?? "Android phone").trim().slice(0, 64);
+interface SetupTarget {
+  readonly environmentId: EnvironmentId;
+  readonly machine: string;
+  readonly status: ElevationStatus;
+}
 
 export function SettingsDeviceApprovalRouteScreen() {
   const insets = useSafeAreaInsets();
   const { environments } = useEnvironments();
+  const [setup, setSetup] = useState<SetupTarget | null>(null);
   const supported = environments.filter((environment) =>
     environmentSupportsDeviceApproval(environment.serverConfig),
   );
   return (
     <SettingsScreen title="Device approval">
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        showsVerticalScrollIndicator={false}
-        className="flex-1"
-        contentContainerClassName="gap-6 px-5 pt-4"
-        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
-      >
-        <Text className="text-sm text-foreground-muted">
-          Approve an agent's sudo with your fingerprint, one command per approval.
-        </Text>
-        {supported.length === 0 ? (
-          <Text className="text-sm text-foreground-muted">
-            No connected environment offers device approval.
-          </Text>
-        ) : (
-          supported.map((environment) => (
-            <EnvironmentDeviceApproval
-              key={environment.environmentId}
-              environmentId={environment.environmentId}
-              title={environment.label}
-            />
-          ))
-        )}
-      </ScrollView>
+      {setup !== null ? (
+        <DeviceApprovalSetupFlow
+          environmentId={setup.environmentId}
+          machine={setup.machine}
+          status={setup.status}
+          onClose={() => setSetup(null)}
+        />
+      ) : (
+        <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
+          showsVerticalScrollIndicator={false}
+          className="flex-1"
+          contentContainerClassName="gap-6 px-5 pt-4"
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+        >
+          {supported.length === 0 ? (
+            <Text className="text-sm text-foreground-muted">
+              No connected environment offers device approval.
+            </Text>
+          ) : (
+            <>
+              {supported.map((environment) => (
+                <EnvironmentDeviceApproval
+                  key={environment.environmentId}
+                  environmentId={environment.environmentId}
+                  // The phone's own name for the machine, never the server's.
+                  machine={environment.label}
+                  onSetUp={setSetup}
+                />
+              ))}
+              <NotificationsRow />
+            </>
+          )}
+        </ScrollView>
+      )}
     </SettingsScreen>
+  );
+}
+
+/** Mirrors Android's "Sudo approvals" channel; the switch itself lives in Android's settings. */
+function NotificationsRow() {
+  const on = useSudoApprovalNotificationsOn();
+  if (on === null) return null;
+  return (
+    <SettingsSection>
+      <ListActionRow
+        label="Notifications"
+        description={on ? undefined : "Requests show only in the app"}
+        detail={on ? "On" : "Off"}
+        onPress={() => void openSudoApprovalNotificationSettings()}
+      />
+    </SettingsSection>
   );
 }
 
@@ -113,15 +139,17 @@ function useKeyRecord(environmentId: EnvironmentId) {
 
 function EnvironmentDeviceApproval(props: {
   readonly environmentId: EnvironmentId;
-  readonly title: string;
+  readonly machine: string;
+  readonly onSetUp: (target: SetupTarget) => void;
 }) {
   const status = useEnvironmentQuery(
     elevation.status({ environmentId: props.environmentId, input: {} }),
   );
-  return (
-    <SettingsSection title={props.title}>
-      {status.data === null ? (
-        <View className="gap-2 rounded-2xl bg-grouped-card p-4">
+  if (status.data === null) {
+    return (
+      <SettingsSection>
+        <View className="gap-2 p-4">
+          <Text className="text-base text-foreground">{props.machine}</Text>
           <Text className="text-sm text-foreground-muted">
             {status.error ?? "Checking this machine…"}
           </Text>
@@ -129,493 +157,528 @@ function EnvironmentDeviceApproval(props: {
             <Button label="Retry" tone="secondary" onPress={status.refresh} />
           )}
         </View>
-      ) : (
-        <DeviceApprovalStatus
-          environmentId={props.environmentId}
-          status={status.data}
-          refreshing={status.isPending}
-          onRefresh={status.refresh}
-        />
-      )}
-    </SettingsSection>
+      </SettingsSection>
+    );
+  }
+  return (
+    <DeviceApprovalGroup
+      environmentId={props.environmentId}
+      machine={props.machine}
+      status={status.data}
+      onSetUp={props.onSetUp}
+    />
   );
 }
 
-type SudoAction = (password: string | undefined) => Promise<AtomCommandResult<unknown, unknown>>;
+type Phase = "idle" | "checking" | "handoff";
 
-function DeviceApprovalStatus(props: {
+function DeviceApprovalGroup(props: {
   readonly environmentId: EnvironmentId;
+  readonly machine: string;
   readonly status: ElevationStatus;
-  readonly refreshing: boolean;
-  readonly onRefresh: () => void;
+  readonly onSetUp: (target: SetupTarget) => void;
 }) {
-  const { environmentId, status } = props;
-  const install = useAtomCommand(elevation.install, "set up device approval");
-  const enroll = useAtomCommand(elevation.enroll, "add device approval key");
-  const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
-  const uninstall = useAtomCommand(elevation.uninstall, "turn off device approval");
+  const { environmentId, machine, status } = props;
+  const [record, setRecord] = useKeyRecord(environmentId);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [fixSheet, setFixSheet] = useState<Extract<
+    DeviceApprovalFixPlan,
+    { kind: "repair" }
+  > | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const handoff = useDeviceApprovalAgentHandoff();
   const canInstall = useAtomValue(elevation.install.permissionAtom(environmentId));
   const canEnroll = useAtomValue(elevation.enroll.permissionAtom(environmentId));
-  const canRevoke = useAtomValue(elevation.revoke.permissionAtom(environmentId));
-  const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(environmentId));
-  const test = useAtomCommand(elevation.test, "test device approval");
-  const canTest = useAtomValue(elevation.test.permissionAtom(environmentId));
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<ElevationCheck | null>(null);
-  const [record, setRecord] = useKeyRecord(environmentId);
-  const [password, setPassword] = useState("");
-  const [usePassword, setUsePassword] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [terminalCommand, setTerminalCommand] = useState<string | null>(null);
-  const [newKey, setNewKey] = useState<Uint8Array | null>(null);
-  const comparisonCode = useComparisonCode(newKey);
-  const inFlight = useRef(false);
+  const signerPresent = deviceApprovalSigner.isPresent();
 
   if (!status.supported) {
     return (
-      <StaticRow
-        label="Not supported on this machine"
-        description={status.unsupportedReason ?? "Agent sudo keeps asking for the password here."}
-      />
+      <SettingsSection>
+        <HeaderRow machine={machine} trail="Off" warn={false} />
+        <Body
+          text={status.unsupportedReason ?? "Agents' sudo keeps asking for the password here."}
+        />
+      </SettingsSection>
     );
   }
 
-  const installed = status.ownsApprovals || status.devices.length > 0;
-  const thisDevice =
-    record && record.user === status.user
-      ? status.devices.find((device) => device.keyId === record.keyId)
-      : undefined;
-  // With a phone enrolled, it approves setup changes; the password stays a fallback.
-  const showPassword = status.devices.length === 0 || usePassword;
-  const sudoPassword = !showPassword || password === "" ? undefined : password;
-  const approval = elevationSudoApproval(status);
-  const missingPassword = approval.passwordRequired && sudoPassword === undefined;
+  const phoneRecord = record && record.user === status.user ? record : null;
+  const phone = { keyId: phoneRecord?.keyId ?? null };
+  const state = deviceApprovalState(status, phone);
+  const thisDevice = status.devices.find((device) => device.keyId === phoneRecord?.keyId);
+  const canRepair = signerPresent && status.user !== undefined && canInstall && canEnroll;
+  const setUp = () => props.onSetUp({ environmentId, machine, status });
 
-  /** Runs one setup change; the sudo password, if any, is used once and cleared. */
-  const run = async (label: string, action: () => Promise<boolean>) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(label);
-    setError(null);
-    try {
-      if (await action()) setPassword("");
-    } catch (cause) {
-      const code = deviceApprovalSignerErrorCode(cause);
-      if (code !== "cancelled") setError(deviceApprovalSignerErrorMessage(code));
-    }
-    // After the catch rather than in `finally`, which the React Compiler cannot lower.
-    inFlight.current = false;
-    setBusy(null);
-    setNewKey(null);
-  };
-  const succeeded = (result: AtomCommandResult<unknown, unknown>) => {
-    if (result._tag === "Success") return true;
-    if (!isAtomCommandInterrupted(result)) {
-      setError(elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong."));
-    }
-    return false;
-  };
-  /** The live check: only a real approval proves sudo reaches device approval. */
-  const runTest = async () => {
-    setTesting(true);
-    setTestResult(null);
-    setError(null);
-    const result = await test({ environmentId, input: {} }).finally(() => setTesting(false));
-    if (result._tag === "Success") setTestResult(result.value);
-    else succeeded(result);
-  };
-  const sudo = (label: string, action: SudoAction, after?: () => Promise<void>) =>
-    run(label, async () => {
-      if (!succeeded(await action(sudoPassword))) return false;
-      await after?.();
-      return true;
+  const handOff = (current: ElevationStatus, repair: DeviceApprovalRepairAttempt | null) =>
+    handoff({
+      environmentId,
+      machine,
+      status: current,
+      failing: deviceApprovalFailingChecks(current, phone),
+      repair,
     });
 
-  /**
-   * Creates this phone's key and sends it with its attestation. The first
-   * phone installs; later ones are added and approved by an enrolled phone or
-   * the password. A previous key under the same alias is replaced, which is how
-   * a key invalidated by a fingerprint change is recovered.
-   */
-  const setUpThisPhone = (replacing: DeviceApprovalKeyRecord | null) =>
-    run(installed ? "enroll" : "install", async () => {
-      const user = status.user;
-      if (user === undefined) return false;
-      const challenge = Base64Url.encode(ExpoCrypto.getRandomBytes(32));
-      const alias = elevationKeyAlias(environmentId, user);
-      const key = await deviceApprovalSigner.generateKey(alias, challenge);
-      const [leaf, ...rest] = key.attestationChain;
-      if (leaf === undefined) throw new DeviceApprovalSignerError("failed");
-      const label = deviceLabel();
-      const device: ElevationEnrollmentDevice = {
-        label,
-        publicKey: key.publicKeySpki,
-        challenge,
-        attestationChain: [leaf, ...rest],
-      };
-      const nextRecord = { alias, keyId: key.keyId, user, label };
-      if (!installed) {
-        const result = await install({
-          environmentId,
-          input: { password: sudoPassword ?? null, device },
-        });
-        if (!succeeded(result)) return false;
-        // Either way the key is this phone's now; the command enrolls it once run.
-        await deviceApprovalKeys.write(environmentId, nextRecord);
-        setRecord(nextRecord);
-        if (result._tag === "Success" && result.value.type === "terminal_command") {
-          setTerminalCommand(result.value.command);
-        } else {
-          void runTest();
-        }
-        return true;
-      }
-      const publicKey = Base64Url.decode(key.publicKeySpki);
-      if (Result.isSuccess(publicKey)) setNewKey(publicKey.success);
-      const enrolled = await enroll({
-        environmentId,
-        input: { device, ...(sudoPassword === undefined ? {} : { password: sudoPassword }) },
-      });
-      if (!succeeded(enrolled)) return false;
-      await deviceApprovalKeys.write(environmentId, nextRecord);
-      setRecord(nextRecord);
-      if (replacing !== null && replacing.keyId !== key.keyId) {
-        succeeded(
-          await revoke({
-            environmentId,
-            input: {
-              keyId: replacing.keyId,
-              ...(sudoPassword === undefined ? {} : { password: sudoPassword }),
-            },
-          }),
+  const fix = () => {
+    const plan = planDeviceApprovalFix(status, phone, { canRepair });
+    switch (plan.kind) {
+      case "none":
+        return;
+      case "agent":
+        return void handOff(status, null);
+      case "phone":
+        return Dialog.alert(
+          "This phone can't repair it",
+          "Approving needs the T3 app on Android with a fingerprint sensor.",
         );
-      }
-      void runTest();
-      return true;
-    });
+      case "repair":
+        return setFixSheet(plan);
+    }
+  };
 
-  const removeThisPhone = (current: DeviceApprovalKeyRecord) =>
-    sudo(
-      "remove",
-      (password) =>
-        revoke({
-          environmentId,
-          input: { keyId: current.keyId, ...(password === undefined ? {} : { password }) },
-        }),
-      async () => {
-        await deviceApprovalSigner.deleteKey(current.alias).catch(() => undefined);
-        await deviceApprovalKeys.remove(environmentId);
-        setRecord(null);
-      },
-    );
+  /** After T3's repair: done if the checks pass, otherwise an agent takes it with the diagnosis. */
+  const afterRepair = (
+    current: ElevationStatus,
+    nextPhone: { readonly keyId: string | null },
+    repair: DeviceApprovalRepairAttempt,
+    expectedAgent: boolean,
+  ) => {
+    const remaining = deviceApprovalFailingChecks(current, nextPhone);
+    if (remaining.length === 0 && current.ready) {
+      setPhase("idle");
+      approvalHaptic("setupComplete");
+      return;
+    }
+    const plan = planDeviceApprovalFix(current, nextPhone, { canRepair });
+    // Only the parts already meant for an agent remain: continue straight on.
+    if (expectedAgent && plan.kind === "agent" && repair.error === null) {
+      setPhase("idle");
+      void handoff({ environmentId, machine, status: current, failing: remaining, repair });
+      return;
+    }
+    setPhase("handoff");
+    setTimeout(() => {
+      setPhase("idle");
+      void handoff({ environmentId, machine, status: current, failing: remaining, repair });
+    }, HANDOFF_NOTICE_MS);
+  };
 
-  const signerPresent = deviceApprovalSigner.isPresent();
-  const statusLabel = status.ready ? "Ready" : installed ? "Needs attention" : "Not set up";
   return (
     <>
-      <View className="gap-2 rounded-2xl bg-grouped-card p-4">
-        <Text className="font-t3-bold text-base text-foreground">{statusLabel}</Text>
-        <Text className="text-sm text-foreground-muted">
-          {status.ready
-            ? "An agent's sudo on this machine waits for approval on a phone."
-            : "Agent sudo asks for the password as usual."}
-        </Text>
-        {status.checks.map((check) => (
-          <Text
-            key={check.id}
-            className={`text-sm ${check.ok ? "text-foreground-muted" : "text-danger-foreground"}`}
-          >
-            {check.ok ? "✓" : "✗"} {check.message}
-          </Text>
-        ))}
-        {status.setupOutsideT3 ? (
-          <Text className="text-sm text-foreground-muted">
-            Some parts were set up outside T3; turning off leaves them in place.
-          </Text>
+      <SettingsSection>
+        <HeaderRow machine={machine} trail={STATE_LABELS[state]} warn={state === "needs_fixing"} />
+        {state === "off" ? (
+          signerPresent && status.user !== undefined ? (
+            <Body
+              text="Approve agents' sudo on this Mac with this phone."
+              action={{ label: "Set up", disabled: !canInstall, onPress: setUp }}
+            />
+          ) : (
+            <Body text={offReason(signerPresent)} />
+          )
+        ) : phase === "checking" ? (
+          <Body text="Checking…" />
+        ) : phase === "handoff" ? (
+          <Body text="T3 couldn't fix this one, so an agent will." />
+        ) : state === "needs_fixing" ? (
+          <Body
+            text="Agents' sudo will ask for the password"
+            action={{ label: "Fix", onPress: fix }}
+          />
+        ) : thisDevice === undefined && signerPresent && status.user !== undefined ? (
+          <Body
+            text="Approve agents' sudo on this Mac with this phone."
+            action={{ label: "Add this phone", disabled: !canEnroll, onPress: setUp }}
+          />
         ) : null}
-        <Button
-          label="Check again"
-          tone="secondary"
-          disabled={props.refreshing}
-          onPress={props.onRefresh}
+        <DetailsToggle open={detailsOpen} onPress={() => setDetailsOpen((open) => !open)} />
+        {detailsOpen ? (
+          <DeviceApprovalDetails
+            environmentId={environmentId}
+            machine={machine}
+            status={status}
+            thisDevice={thisDevice}
+            record={phoneRecord}
+            onRemoved={() => setRecord(null)}
+          />
+        ) : null}
+      </SettingsSection>
+      {fixSheet !== null ? (
+        <FixSheet
+          environmentId={environmentId}
+          machine={machine}
+          status={status}
+          record={phoneRecord}
+          plan={fixSheet}
+          onClose={() => setFixSheet(null)}
+          onStarted={() => {
+            setFixSheet(null);
+            setDetailsOpen(false);
+            setPhase("checking");
+          }}
+          onRecord={setRecord}
+          onFinished={(current, nextPhone, repair) =>
+            afterRepair(current, nextPhone, repair, fixSheet.agentAfter)
+          }
         />
-      </View>
-
-      {installed ? (
-        <View className="gap-2">
-          <View className="overflow-hidden rounded-2xl">
-            <ListActionRow
-              icon="checkmark.circle"
-              label="Test"
-              description={
-                testing
-                  ? "Waiting for approval on a phone…"
-                  : (approval.testUnavailableReason ??
-                    "Runs sudo -n true on this machine for a phone to approve.")
-              }
-              disabled={
-                !canTest || testing || busy !== null || approval.testUnavailableReason !== null
-              }
-              onPress={() => void runTest()}
-            />
-          </View>
-          {testResult !== null ? (
-            <Text
-              className={`text-sm ${testResult.ok ? "text-foreground-muted" : "text-danger-foreground"}`}
-            >
-              {testResult.ok ? "✓" : "✗"} {testResult.message}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-
-      {!installed && status.plannedChanges.length > 0 ? (
-        <View className="gap-1 rounded-2xl bg-grouped-card p-4">
-          <Text className="text-sm text-foreground-muted">Setup will change:</Text>
-          {status.plannedChanges.map((change) => (
-            <Text key={change.path} className="text-sm text-foreground">
-              <Text className="font-mono text-sm text-foreground">{change.path}</Text> ·{" "}
-              {change.summary}
-            </Text>
-          ))}
-        </View>
-      ) : null}
-
-      {showPassword ? (
-        <View className="gap-2">
-          <TextInput
-            accessibilityLabel="sudo password"
-            placeholder={approval.passwordRequired ? "sudo password" : "sudo password (optional)"}
-            value={password}
-            onChangeText={setPassword}
-            editable={busy === null}
-            secureTextEntry
-            autoCorrect={false}
-            autoCapitalize="none"
-            autoComplete="off"
-            textContentType="none"
-            importantForAutofill="no"
-          />
-          <Text className="text-xs text-foreground-muted">
-            {approval.passwordRequired
-              ? "No phone is enrolled yet, so changes need the sudo password."
-              : installed
-                ? "Without it, changes are approved on an enrolled phone."
-                : "Without it, setup gives you a command to paste into a terminal on this machine."}{" "}
-            The password goes through the T3 server to sudo once and is never stored.{" "}
-            {ELEVATION_TOUCH_ID_HINT}
-            {installed
-              ? ""
-              : " Setup trusts this account: anything running as you, including an agent, could change what it installs, the same as typing your sudo password into T3."}
-          </Text>
-        </View>
-      ) : (
-        <View className="gap-1">
-          <Text className="text-xs text-foreground-muted">
-            Changes here are approved on an enrolled phone.
-          </Text>
-          <Button
-            label="Use the sudo password instead"
-            tone="text"
-            disabled={busy !== null}
-            onPress={() => setUsePassword(true)}
-          />
-        </View>
-      )}
-
-      {busy === "enroll" && comparisonCode !== null ? (
-        <View className="gap-1 rounded-2xl bg-grouped-card p-4">
-          <Text className="text-sm text-foreground-muted">
-            {sudoPassword === undefined
-              ? "Approve on a phone that's already set up. It must show this code:"
-              : "This phone's code:"}
-          </Text>
-          <Text selectable className="font-mono text-2xl tracking-widest text-foreground">
-            {comparisonCode}
-          </Text>
-        </View>
-      ) : null}
-
-      {terminalCommand !== null ? (
-        <View className="gap-2 rounded-2xl bg-grouped-card p-4">
-          <Text className="text-sm text-foreground-muted">
-            Run this in a terminal on this machine, then tap Check again:
-          </Text>
-          <Text selectable className="font-mono text-sm text-foreground">
-            {terminalCommand}
-          </Text>
-          <Button
-            label="Copy command"
-            tone="secondary"
-            onPress={() => void Clipboard.setStringAsync(terminalCommand)}
-          />
-        </View>
-      ) : null}
-
-      {error !== null ? (
-        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-          {error}
-        </Text>
-      ) : null}
-
-      <View className="overflow-hidden rounded-2xl">
-        {!signerPresent ? (
-          <StaticRow
-            icon="iphone"
-            label="This phone can't approve"
-            description="Approving needs the T3 app on Android with a fingerprint sensor."
-          />
-        ) : status.user === undefined ? (
-          <StaticRow
-            icon="iphone"
-            label="Update T3 on this machine"
-            description="This server doesn't say which user it approves for yet."
-          />
-        ) : installed && !status.helperInstalled ? (
-          // Adding and removing devices runs the root-owned helper; the helper check says why it can't.
-          <StaticRow
-            icon="iphone"
-            label="Devices can't be changed from T3"
-            description="The helper that adds and removes them isn't installed safely. See the checks above."
-          />
-        ) : thisDevice !== undefined && record ? (
-          <>
-            <ListActionRow
-              icon="iphone"
-              label="Set up this phone again"
-              description="Use this if a fingerprint change broke this phone's key."
-              disabled={!canEnroll || busy !== null}
-              loading={busy === "enroll"}
-              onPress={() => void setUpThisPhone(record)}
-            />
-            <ListActionRow
-              icon="minus"
-              tone="danger"
-              label="Remove this device"
-              description="Revokes this phone's key on this machine and deletes it."
-              disabled={!canRevoke || busy !== null}
-              loading={busy === "remove"}
-              onPress={() =>
-                Dialog.confirm({
-                  title: "Remove this device?",
-                  message: "This phone will no longer approve sudo on this machine.",
-                  confirmText: "Remove",
-                  destructive: true,
-                  onConfirm: () => void removeThisPhone(record),
-                })
-              }
-            />
-          </>
-        ) : (
-          <ListActionRow
-            icon="iphone"
-            label={installed ? "Add this phone" : "Set up on this machine"}
-            description={
-              !installed
-                ? "Creates a key on this phone and installs approval on this machine."
-                : approval.passwordRequired
-                  ? "Creates a key on this phone. The sudo password above approves it."
-                  : "Creates a key on this phone. An enrolled phone or the password approves it."
-            }
-            disabled={(installed ? !canEnroll || missingPassword : !canInstall) || busy !== null}
-            loading={busy === "install" || busy === "enroll"}
-            onPress={() => void setUpThisPhone(record ?? null)}
-          />
-        )}
-      </View>
-
-      {status.devices.length > 0 ? (
-        <View
-          className={cn(
-            "overflow-hidden rounded-2xl",
-            !status.helperInstalled && "bg-grouped-card",
-          )}
-        >
-          {status.devices.map((device) => {
-            const label =
-              device.keyId === thisDevice?.keyId ? `${device.label} (this phone)` : device.label;
-            const description = `${SECURITY_LEVEL_LABELS[device.securityLevel]} · Added ${formatDate(device.enrolledAt)}${
-              device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`
-            }`;
-            return status.helperInstalled ? (
-              <ListActionRow
-                key={device.keyId}
-                icon="iphone"
-                label={label}
-                description={description}
-                detail="Revoke"
-                disabled={!canRevoke || busy !== null}
-                loading={busy === `revoke:${device.keyId}`}
-                onPress={() =>
-                  Dialog.confirm({
-                    title: `Revoke ${device.label}?`,
-                    message: "It will no longer approve sudo on this machine.",
-                    confirmText: "Revoke",
-                    destructive: true,
-                    onConfirm: () =>
-                      void sudo(`revoke:${device.keyId}`, (password) =>
-                        revoke({
-                          environmentId,
-                          input: {
-                            keyId: device.keyId,
-                            ...(password === undefined ? {} : { password }),
-                          },
-                        }),
-                      ),
-                  })
-                }
-              />
-            ) : (
-              <ListRowLayout
-                key={device.keyId}
-                icon="iphone"
-                label={label}
-                description={description}
-              />
-            );
-          })}
-        </View>
-      ) : null}
-
-      {installed && status.helperInstalled ? (
-        <View className="overflow-hidden rounded-2xl">
-          <ListActionRow
-            icon="xmark"
-            tone="danger"
-            label="Turn off"
-            description="Restores the files T3 changed; agent sudo asks for the password again."
-            disabled={!canUninstall || missingPassword || busy !== null}
-            loading={busy === "uninstall"}
-            onPress={() =>
-              Dialog.confirm({
-                title: "Turn off device approval?",
-                confirmText: "Turn off",
-                destructive: true,
-                onConfirm: () =>
-                  void sudo("uninstall", (password) =>
-                    uninstall({
-                      environmentId,
-                      input: password === undefined ? {} : { password },
-                    }),
-                  ),
-              })
-            }
-          />
-        </View>
       ) : null}
     </>
   );
 }
 
-function StaticRow(props: {
-  readonly icon?: "iphone";
-  readonly label: string;
-  readonly description?: string;
+const offReason = (signerPresent: boolean) =>
+  signerPresent
+    ? "Update T3 on this machine to set up device approval from here."
+    : "Approving needs the T3 app on Android with a fingerprint sensor.";
+
+function HeaderRow(props: {
+  readonly machine: string;
+  readonly trail: string;
+  readonly warn: boolean;
 }) {
   return (
-    <View className="overflow-hidden rounded-2xl bg-grouped-card">
-      <ListRowLayout icon={props.icon} label={props.label} description={props.description} />
+    <View className="min-h-14 flex-row items-center gap-3 px-4 py-3">
+      <Text textRole="body" className="min-w-0 flex-1 text-foreground" numberOfLines={1}>
+        {props.machine}
+      </Text>
+      <Text
+        textRole="body"
+        className={props.warn ? "text-warning-foreground" : "text-foreground-muted"}
+      >
+        {props.trail}
+      </Text>
     </View>
+  );
+}
+
+function Body(props: {
+  readonly text: string;
+  readonly action?: {
+    readonly label: string;
+    readonly disabled?: boolean;
+    readonly onPress: () => void;
+  };
+}) {
+  return (
+    <View className="flex-row items-center gap-3 px-4 pb-3">
+      <Text className="min-w-0 flex-1 text-sm text-foreground-muted">{props.text}</Text>
+      {props.action ? (
+        <Button
+          label={props.action.label}
+          tone="primary"
+          disabled={props.action.disabled}
+          onPress={props.action.onPress}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function DetailsToggle(props: { readonly open: boolean; readonly onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ expanded: props.open }}
+      onPress={props.onPress}
+      className="min-h-12 flex-row items-center gap-3 border-t border-border px-4 py-3"
+    >
+      <Text textRole="body" className="flex-1 text-foreground">
+        Details
+      </Text>
+      <SymbolView
+        name={props.open ? "chevron.up" : "chevron.down"}
+        size={16}
+        tintColorClassName="accent-icon"
+        type="monochrome"
+      />
+    </Pressable>
+  );
+}
+
+const SECURITY_LEVEL_LABELS: Record<ElevationDevice["securityLevel"], string> = {
+  strongbox: "StrongBox",
+  tee: "TEE",
+  software: "Software (development)",
+};
+
+const formatDate = (value: { readonly epochMilliseconds: number }) =>
+  new Date(value.epochMilliseconds).toLocaleDateString();
+
+/** Checks, paths and devices: what an agent or a curious user needs, kept out of the normal path. */
+function DeviceApprovalDetails(props: {
+  readonly environmentId: EnvironmentId;
+  readonly machine: string;
+  readonly status: ElevationStatus;
+  readonly thisDevice: ElevationDevice | undefined;
+  readonly record: DeviceApprovalKeyRecord | null;
+  readonly onRemoved: () => void;
+}) {
+  const { environmentId, status, thisDevice, record } = props;
+  const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
+  const uninstall = useAtomCommand(elevation.uninstall, "turn off device approval");
+  const canRevoke = useAtomValue(elevation.revoke.permissionAtom(environmentId));
+  const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(environmentId));
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const installed = deviceApprovalInstalled(status);
+
+  const run = async (label: string, action: () => Promise<AtomCommandResult<unknown, unknown>>) => {
+    setBusy(label);
+    setError(null);
+    try {
+      const result = await action();
+      if (result._tag === "Success") return true;
+      if (!isAtomCommandInterrupted(result)) {
+        setError(
+          elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong."),
+        );
+      }
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // The last phone takes the whole setup with it, so agents' sudo goes back to the password.
+  const lastPhone = thisDevice !== undefined && status.devices.length === 1;
+  const removeThisPhone = async () => {
+    if (thisDevice === undefined || record === null) return;
+    const removed = await run("remove", () =>
+      lastPhone
+        ? uninstall({ environmentId, input: {} })
+        : revoke({ environmentId, input: { keyId: thisDevice.keyId } }),
+    );
+    if (!removed) return;
+    await deviceApprovalSigner.deleteKey(record.alias).catch(() => undefined);
+    await deviceApprovalKeys.remove(environmentId);
+    props.onRemoved();
+  };
+
+  return (
+    <View className="gap-3 px-4 pb-4">
+      {status.checks.map((check) => (
+        <View key={check.id} className="flex-row items-start gap-2">
+          <SymbolView
+            name={check.ok ? "checkmark" : "xmark"}
+            size={14}
+            tintColorClassName={check.ok ? "accent-success-foreground" : "accent-danger-foreground"}
+            type="monochrome"
+          />
+          <Text selectable className="min-w-0 flex-1 text-sm text-foreground-muted">
+            {check.message}
+          </Text>
+        </View>
+      ))}
+      {status.setupOutsideT3 ? (
+        <Text className="text-sm text-foreground-muted">
+          Some parts were set up outside T3; turning off leaves them in place.
+        </Text>
+      ) : null}
+      {status.devices.map((device) => (
+        <View key={device.keyId} className="flex-row items-center gap-3">
+          <View className="min-w-0 flex-1 gap-0.5">
+            <Text className="text-sm text-foreground">
+              {device.keyId === thisDevice?.keyId ? `${device.label} (this phone)` : device.label}
+            </Text>
+            <Text className="text-xs text-foreground-muted">
+              {SECURITY_LEVEL_LABELS[device.securityLevel]} · Added {formatDate(device.enrolledAt)}
+              {device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`}
+            </Text>
+          </View>
+          {device.keyId !== thisDevice?.keyId && status.helperInstalled ? (
+            <Button
+              label="Revoke"
+              tone="text"
+              disabled={!canRevoke || busy !== null}
+              loading={busy === `revoke:${device.keyId}`}
+              onPress={() =>
+                Dialog.confirm({
+                  title: `Revoke ${device.label}?`,
+                  message: `It will no longer approve sudo on ${props.machine}.`,
+                  confirmText: "Revoke",
+                  destructive: true,
+                  onConfirm: () =>
+                    void run(`revoke:${device.keyId}`, () =>
+                      revoke({ environmentId, input: { keyId: device.keyId } }),
+                    ),
+                })
+              }
+            />
+          ) : null}
+        </View>
+      ))}
+      {error !== null ? (
+        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+          {error}
+        </Text>
+      ) : null}
+      {/* Removing runs the root-owned helper; without it the helper check above says why. */}
+      {status.helperInstalled && thisDevice !== undefined ? (
+        <Button
+          label="Remove this phone"
+          tone="danger"
+          disabled={!(lastPhone ? canUninstall : canRevoke) || busy !== null}
+          loading={busy === "remove"}
+          onPress={() =>
+            Dialog.confirm({
+              title: "Remove this phone?",
+              message: `Agents' sudo on ${props.machine} will ask for the password again.`,
+              confirmText: "Remove",
+              destructive: true,
+              onConfirm: () => void removeThisPhone(),
+            })
+          }
+        />
+      ) : null}
+      {status.helperInstalled && installed && thisDevice === undefined ? (
+        <Button
+          label="Turn off"
+          tone="danger"
+          disabled={!canUninstall || busy !== null}
+          loading={busy === "uninstall"}
+          onPress={() =>
+            Dialog.confirm({
+              title: "Turn off device approval?",
+              message: `Agents' sudo on ${props.machine} will ask for the password again. A phone that's set up approves this.`,
+              confirmText: "Turn off",
+              destructive: true,
+              onConfirm: () => void run("uninstall", () => uninstall({ environmentId, input: {} })),
+            })
+          }
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * T3's own repair: the Mac password approves a fresh key from this phone,
+ * through `install` when T3's config parts need rewriting (it adds the key it
+ * is given) or `enroll` when only the key is missing. The previous key, if the
+ * machine still lists it, is revoked so it doesn't linger.
+ */
+function FixSheet(props: {
+  readonly environmentId: EnvironmentId;
+  readonly machine: string;
+  readonly status: ElevationStatus;
+  readonly record: DeviceApprovalKeyRecord | null;
+  readonly plan: Extract<DeviceApprovalFixPlan, { kind: "repair" }>;
+  readonly onClose: () => void;
+  readonly onStarted: () => void;
+  readonly onRecord: (record: DeviceApprovalKeyRecord) => void;
+  readonly onFinished: (
+    status: ElevationStatus,
+    phone: { readonly keyId: string | null },
+    repair: DeviceApprovalRepairAttempt,
+  ) => void;
+}) {
+  const { environmentId, status, plan } = props;
+  const install = useAtomCommand(elevation.install, "repair device approval");
+  const enroll = useAtomCommand(elevation.enroll, "add device approval key");
+  const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const text = deviceApprovalFixSheetText(plan, props.machine);
+
+  const failureText = (result: AtomCommandResult<unknown, unknown>) =>
+    result._tag !== "Failure" || isAtomCommandInterrupted(result)
+      ? null
+      : elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong.");
+  const wrongPassword = (result: AtomCommandResult<unknown, unknown>) => {
+    if (result._tag !== "Failure") return false;
+    const failure = squashAtomCommandFailure(result);
+    return (
+      typeof failure === "object" &&
+      failure !== null &&
+      "reason" in failure &&
+      failure.reason === "wrong_password"
+    );
+  };
+
+  const submit = async () => {
+    if (inFlight.current || status.user === undefined) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    const ran: string[] = [];
+    try {
+      const key = await createPhoneKey(environmentId, status.user);
+      const result = plan.install
+        ? await install({ environmentId, input: { password, device: key.device } })
+        : await enroll({ environmentId, input: { device: key.device, password } });
+      if (wrongPassword(result)) {
+        setError("The Mac password was not accepted.");
+        return;
+      }
+      props.onStarted();
+      ran.push(plan.install ? "install" : "enroll");
+      if (result._tag !== "Success") {
+        props.onFinished(
+          status,
+          { keyId: props.record?.keyId ?? null },
+          {
+            ran,
+            error: failureText(result),
+          },
+        );
+        return;
+      }
+      await deviceApprovalKeys.write(environmentId, key.record);
+      props.onRecord(key.record);
+      let current = "status" in result.value ? result.value.status : status;
+      const previous = props.record?.keyId;
+      if (
+        previous !== undefined &&
+        previous !== key.record.keyId &&
+        current.devices.some((device) => device.keyId === previous)
+      ) {
+        const revoked = await revoke({ environmentId, input: { keyId: previous, password } });
+        ran.push("revoke");
+        if (revoked._tag === "Success") current = revoked.value;
+      }
+      props.onFinished(current, { keyId: key.record.keyId }, { ran, error: null });
+    } catch (cause) {
+      const code = deviceApprovalSignerErrorCode(cause);
+      if (code !== "cancelled") setError(deviceApprovalSignerErrorMessage(code));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+      setPassword("");
+    }
+  };
+
+  return (
+    <Sheet title="Fix device approval" onClose={props.onClose}>
+      <View className="gap-4 px-5 pt-3 pb-8">
+        <Text className="text-sm text-foreground-muted">{text.message}</Text>
+        <TextInput
+          accessibilityLabel="Mac password"
+          placeholder="Mac password"
+          value={password}
+          onChangeText={setPassword}
+          editable={!busy}
+          secureTextEntry
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+        />
+        {error !== null ? (
+          <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+            {error}
+          </Text>
+        ) : null}
+        <Button
+          label={text.action}
+          tone="primary"
+          fullWidth
+          loading={busy}
+          disabled={busy || password === ""}
+          onPress={() => void submit()}
+        />
+      </View>
+    </Sheet>
   );
 }

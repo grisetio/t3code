@@ -56,6 +56,7 @@ import {
   makeProviderFailure,
   makeProviderRetryTurnItem,
 } from "@t3tools/provider-core/server/failure";
+import { DeviceApprovalInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import {
   makePiRpcConnection,
@@ -419,6 +420,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const deviceApproval = yield* DeviceApprovalInstructions;
   const { continuationRequests } = options;
 
   const protocolError = (detail: string, payload?: unknown) =>
@@ -469,6 +471,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
+        deviceApproval: deviceApproval.enabled(),
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
@@ -1021,6 +1024,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const exitCode =
             recordNumber(recordField(resultRecord, "structuredContent"), "exit_code") ??
             recordNumber(recordField(resultRecord, "details"), "exitCode");
+          // T3's Pi extension adds this to Pi's bash.
+          const description = recordString(args, "description");
           yield* emit({
             type: "turn_item.updated",
             driver: PI_PROVIDER,
@@ -1029,6 +1034,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               title: toolName,
               type: "command_execution",
               input: recordString(args, "command") ?? "",
+              ...(description === undefined ? {} : { description }),
               ...(outputText.length > 0 ? { output: outputText } : {}),
               ...(exitCode === undefined ? {} : { exitCode }),
             },

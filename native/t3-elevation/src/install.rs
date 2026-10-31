@@ -736,6 +736,7 @@ pub fn plan_install(
         enabled: true,
         socket: socket.into(),
         approval_window_seconds: window,
+        session_max_uses: config::DEFAULT_SESSION_MAX_USES,
     };
     let config_path = layout.state(&format!("users/{user}.toml"));
     match std::fs::read_to_string(layout.path(&config_path)) {

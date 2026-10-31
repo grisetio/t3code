@@ -78,6 +78,12 @@ pub fn chain(start: i32) -> Vec<ChainEntry> {
     entries
 }
 
+/// A process's whole argv from the kernel, or None when it can't be read or
+/// isn't UTF-8 (a lossy read could hide a change).
+pub fn process_argv(pid: i32) -> Option<Vec<String>> {
+    crate::payload::utf8_strings(&proc_argv(pid)?)
+}
+
 #[cfg(target_os = "linux")]
 pub fn own_argv() -> Option<Vec<Vec<u8>>> {
     std::fs::read("/proc/self/cmdline")
@@ -105,6 +111,28 @@ fn proc_parent_and_start(pid: i32) -> Option<(i32, u64)> {
     let after_comm = &stat[stat.rfind(')')? + 2..];
     let fields: Vec<&str> = after_comm.split(' ').collect();
     Some((fields.get(1)?.parse().ok()?, fields.get(19)?.parse().ok()?))
+}
+
+/// What the module knows about a session leader: its start time at the
+/// finest grain the kernel keeps, and whether the session has a controlling
+/// terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaderFacts {
+    pub start: u64,
+    pub has_tty: bool,
+}
+
+/// Field 22 (start, clock ticks since boot) and field 7 (`tty_nr`) of
+/// `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+pub fn leader_facts(pid: i32) -> Option<LeaderFacts> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = &stat[stat.rfind(')')? + 2..];
+    let fields: Vec<&str> = after_comm.split(' ').collect();
+    Some(LeaderFacts {
+        start: fields.get(19)?.parse().ok()?,
+        has_tty: fields.get(4)?.parse::<i64>().ok()? != 0,
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -203,6 +231,20 @@ fn proc_parent_and_start(pid: i32) -> Option<(i32, u64)> {
     }
 }
 
+/// `p_starttime` in microseconds and `e_tdev` (`NODEV` without a terminal).
+#[cfg(target_os = "macos")]
+pub fn leader_facts(pid: i32) -> Option<LeaderFacts> {
+    unsafe {
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as c_int;
+        let read = libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size);
+        (read == size).then_some(LeaderFacts {
+            start: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
+            has_tty: info.e_tdev != u32::MAX,
+        })
+    }
+}
+
 /// SHA-256 of the IOPlatformUUID string; `gethostuuid` returns the same UUID.
 #[cfg(target_os = "macos")]
 pub fn machine_id() -> Option<String> {
@@ -224,6 +266,13 @@ pub fn machine_id() -> Option<String> {
         &hex[20..32]
     );
     Some(b64::encode(&Sha256::digest(text.as_bytes())))
+}
+
+/// The kernel session of the calling process. Its id is the leader's pid,
+/// which the kernel doesn't hand out again while the session has members.
+pub fn session_id() -> Option<i32> {
+    let sid = unsafe { libc::getsid(0) };
+    (sid > 0).then_some(sid)
 }
 
 pub fn hostname() -> Option<String> {
@@ -376,6 +425,21 @@ mod tests {
         assert!(chain[0].start_time > 0);
         assert!(chain.len() <= MAX_CHAIN);
         assert!(machine_id().is_some_and(|id| id.len() == 43));
+    }
+
+    #[test]
+    fn leader_facts_change_with_the_process() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let facts = leader_facts(pid).unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(facts.start > 0);
+        assert_eq!(leader_facts(pid), None);
+        assert!(session_id().is_some());
     }
 
     #[test]

@@ -77,6 +77,55 @@ describe("Pi orchestration prompt section", () => {
   });
 });
 
+describe("Pi device approval guidance", () => {
+  it("adds the sudo guidance only when device approval is on", async () => {
+    for (const deviceApproval of [true, false]) {
+      const bridge = await loadMcpBridge({ deviceApproval });
+      const result = await bridge.handlers.get("before_agent_start")!(
+        { systemPrompt: "base" },
+        { ui: { notify: assert.fail } },
+      );
+      assert.include(result!.systemPrompt, "orchestrator_capabilities");
+      assert.equal(
+        result!.systemPrompt.includes("Never pipe a password into sudo."),
+        deviceApproval,
+      );
+    }
+  });
+});
+
+describe("Pi bash description", () => {
+  const sessionContext = { cwd: "/work", model: { api: "anthropic" }, ui: { notify: assert.fail } };
+
+  it("rebuilds Pi's own bash with a description it doesn't pass to the shell", async () => {
+    const bridge = await loadMcpBridge({
+      bash: { settings: { shellCommandPrefix: "set -e", shellPath: "/bin/zsh" } },
+    });
+    const start = bridge.handlers.get("session_start")!;
+    await start({ systemPrompt: "" }, sessionContext);
+    assert.deepEqual(bridge.bashBuilds, [
+      { cwd: "/work", options: { commandPrefix: "set -e", shellPath: "/bin/zsh" } },
+    ]);
+    const bash = bridge.tools.find((tool) => tool.name === "bash");
+    assert.deepEqual(Object.keys((bash!.parameters as { properties: object }).properties), [
+      "command",
+      "description",
+    ]);
+    await bash!.execute("call-1", { command: "sudo true", description: "Check sudo" });
+    assert.deepEqual(bridge.bashRuns, [{ command: "sudo true" }]);
+
+    await start({ systemPrompt: "" }, sessionContext);
+    assert.equal(bridge.bashBuilds.length, 1);
+  });
+
+  it("leaves a bash another extension replaced", async () => {
+    const bridge = await loadMcpBridge({ bash: { sourcePath: "/home/user/.pi/extensions/sh.ts" } });
+    await bridge.handlers.get("session_start")!({ systemPrompt: "" }, sessionContext);
+    assert.deepEqual(bridge.bashBuilds, []);
+    assert.isUndefined(bridge.tools.find((tool) => tool.name === "bash"));
+  });
+});
+
 describe("Pi MCP tool results", () => {
   it("returns mixed screenshot blocks and typed script output without repeating structured text", async () => {
     const content = [

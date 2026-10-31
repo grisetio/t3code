@@ -3,6 +3,8 @@
 //! approves; everything from the socket is otherwise untrusted.
 
 use crate::config::{self, UserConfig};
+use crate::decline;
+use crate::grant::{self, Anchor, Scope, Shells};
 use crate::keys::{self, EnrolledKey};
 use crate::payload::{self, Payload};
 use crate::rootsafe::{self, Policy};
@@ -26,10 +28,52 @@ pub enum Outcome {
     Fail,
 }
 
+/// The outcome, and a line for sudo's stderr when the agent should know why.
+/// The PAM conversation can't carry it: sudo-rs drops it without a terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decision {
+    pub outcome: Outcome,
+    pub notice: Option<String>,
+}
+
+impl From<Outcome> for Decision {
+    fn from(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            notice: None,
+        }
+    }
+}
+
+fn fail_with(notice: impl Into<String>) -> Decision {
+    Decision {
+        outcome: Outcome::Fail,
+        notice: Some(notice.into()),
+    }
+}
+
+/// Where the sudo's session comes from. Tests pin it to a process they own
+/// and the argv its leader is taken to run.
+#[derive(Clone)]
+pub enum SessionSource {
+    Kernel,
+    Fixed(Option<(Anchor, Vec<String>)>),
+    /// As the kernel reports a sudo its shell exec'd: sudo leads the session.
+    Leading(Anchor),
+}
+
+/// A sudo's session. `scope` is set when an approval may start a grant there.
+struct Grouping {
+    anchor: Anchor,
+    leading: bool,
+    scope: Option<Scope>,
+}
+
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(3);
 const RESULT_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// What sudo's process knows about itself.
+#[derive(Clone)]
 pub struct Invocation {
     pub argv: Vec<Vec<u8>>,
     pub uid: u32,
@@ -45,6 +89,7 @@ pub struct Invocation {
 }
 
 /// Where the module looks and how strict it is. Tests swap these out.
+#[derive(Clone)]
 pub struct Environment {
     pub state_dir: PathBuf,
     pub policy: Policy,
@@ -52,6 +97,8 @@ pub struct Environment {
     pub shells: PathBuf,
     pub chain_start: i32,
     pub window_override: Option<i64>,
+    pub grants_dir: PathBuf,
+    pub session: SessionSource,
 }
 
 impl Environment {
@@ -63,6 +110,58 @@ impl Environment {
             shells: PathBuf::from("/etc/shells"),
             chain_start: unsafe { libc::getppid() },
             window_override: None,
+            grants_dir: PathBuf::from(grant::GRANTS_DIR),
+            session: SessionSource::Kernel,
+        }
+    }
+
+    fn grouping(&self, chain: &[ChainEntry], shells: &Shells) -> Option<Grouping> {
+        let leading = |anchor| Grouping {
+            anchor,
+            leading: true,
+            scope: None,
+        };
+        let scoped = |scope: Scope| Grouping {
+            anchor: scope.anchor,
+            leading: false,
+            scope: Some(scope),
+        };
+        match &self.session {
+            SessionSource::Fixed(fixed) => {
+                let (anchor, argv) = fixed.clone()?;
+                Scope::new(anchor, argv).map(scoped)
+            }
+            SessionSource::Leading(anchor) => Some(leading(*anchor)),
+            SessionSource::Kernel => {
+                let session = sys::session_id()?;
+                if session != std::process::id() as i32 {
+                    return grant::qualify(session, chain, sys::leader_facts(session), shells)
+                        .map(scoped);
+                }
+                // zsh and bash exec a command string's last command, so in
+                // `sudo a && sudo b` the second sudo is the shell itself, with
+                // its pid and start time. Nothing shows what the shell was any
+                // more, so this sudo can only be the last call of a grant an
+                // earlier sudo started under the qualified shell.
+                let facts = sys::leader_facts(session)?;
+                (!facts.has_tty).then(|| {
+                    leading(Anchor {
+                        session,
+                        leader_start: facts.start,
+                    })
+                })
+            }
+        }
+    }
+
+    /// The session leader's argv now, read from the kernel.
+    fn leader_argv(&self, pid: i32) -> Option<Vec<String>> {
+        match &self.session {
+            SessionSource::Fixed(fixed) => fixed
+                .as_ref()
+                .filter(|(anchor, _)| anchor.session == pid)
+                .map(|(_, argv)| argv.clone()),
+            _ => sys::process_argv(pid),
         }
     }
 }
@@ -78,9 +177,9 @@ fn invoked_as_sudo(argv: &[Vec<u8>]) -> bool {
     })
 }
 
-pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outcome {
+pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Decision {
     if !invoked_as_sudo(&invocation.argv) {
-        return Outcome::Ignore;
+        return Outcome::Ignore.into();
     }
     let argv_lossy: Vec<String> = invocation
         .argv
@@ -89,17 +188,17 @@ pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outco
         .collect();
     let parsed = sudo_argv::parse(&argv_lossy);
     let Some(user) = sys::user_by_uid(invocation.uid) else {
-        return Outcome::Ignore;
+        return Outcome::Ignore.into();
     };
     if !config::is_safe_user_name(&user.name) {
-        return Outcome::Ignore;
+        return Outcome::Ignore.into();
     }
     let config_path = environment
         .state_dir
         .join("users")
         .join(format!("{}.toml", user.name));
     if std::fs::symlink_metadata(&config_path).is_err() {
-        return Outcome::Ignore;
+        return Outcome::Ignore.into();
     }
     // From here the user is configured. `noninteractive_auth` lets any
     // program's `sudo -n` reach PAM, so with -n every outcome that would be
@@ -111,8 +210,27 @@ pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outco
         Outcome::Ignore
     };
     let Some(prepared) = prepare(invocation, environment, &user, &config_path) else {
-        return soft;
+        return soft.into();
     };
+    let grouping = (prepared.config.session_max_uses > 0)
+        .then(|| {
+            let (gids, _) = sys::groups_of(&user);
+            let shells = Shells::load(&environment.shells, &environment.policy, user.uid, &gids);
+            environment.grouping(&prepared.chain, &shells)
+        })
+        .flatten();
+    if let Some(grouping) = &grouping
+        && grant::present(
+            &environment.grants_dir,
+            invocation.uid,
+            grouping.anchor.session,
+        )
+        && let Some(decision) =
+            use_grant(invocation, environment, &user, &parsed, &prepared, grouping)
+    {
+        return decision;
+    }
+    let scope = grouping.and_then(|grouping| grouping.scope);
     match exchange(
         invocation,
         environment,
@@ -120,10 +238,127 @@ pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outco
         &argv_lossy,
         &parsed,
         prepared,
+        scope,
     ) {
-        Exchange::NotOurs => soft,
-        Exchange::Decided(outcome) => outcome,
+        Exchange::NotOurs => soft.into(),
+        Exchange::Decided(decision) => decision,
     }
+}
+
+/// The helper changes which devices approve; enrolling one always needs a
+/// device or the password, never an earlier approval.
+fn is_helper(command: &payload::Command) -> bool {
+    command
+        .resolved_path
+        .as_deref()
+        .or(command.argv.first().map(String::as_str))
+        .is_some_and(|program| program.rsplit('/').next() == Some("t3-elevation"))
+}
+
+/// A sudo in a session an earlier approval covers. Declines still apply, so
+/// an agent sees the same rules inside an approved command; None falls back
+/// to asking the phone, as for anything the phone didn't show: a warning, an
+/// unresolved program, or the helper.
+fn use_grant(
+    invocation: &Invocation,
+    environment: &Environment,
+    user: &sys::Passwd,
+    parsed: &sudo_argv::Parsed,
+    prepared: &Prepared,
+    grouping: &Grouping,
+) -> Option<Decision> {
+    let request = describe_request(invocation, environment, user, parsed, prepared)?;
+    if let Some(hint) = request.decline {
+        return Some(fail_with(hint));
+    }
+    let command = &request.described.command;
+    if is_helper(command) || !command.warnings.is_empty() {
+        return None;
+    }
+    let taken = grant::take(
+        &environment.grants_dir,
+        &environment.policy,
+        &grant::Request {
+            uid: invocation.uid,
+            user: &user.name,
+            anchor: grouping.anchor,
+            leading: grouping.leading,
+            args: request.argv.get(1..)?,
+            resolved_path: command.resolved_path.as_deref()?,
+            run_as: &request.described.run_as,
+            run_as_group: request.described.run_as_group.as_deref(),
+            cwd: &request.cwd,
+        },
+        &prepared.keys,
+        sys::now(),
+        grant::Leader {
+            start: |pid| sys::leader_facts(pid).map(|facts| facts.start),
+            argv: |pid| environment.leader_argv(pid),
+        },
+    );
+    taken.then(|| Outcome::Approved.into())
+}
+
+/// The session an approval of `request` would also cover: the other sudos
+/// written in the leader's command string, described as their own requests
+/// would be, keeping those a grant could pass. None when `request` itself
+/// isn't one of the written sudos (a startup file's or a script's), or
+/// nothing else would be covered.
+fn plan_session(
+    invocation: &Invocation,
+    environment: &Environment,
+    user: &sys::Passwd,
+    prepared: &Prepared,
+    request: &Described,
+    scope: Scope,
+) -> Option<Planned> {
+    let mut calls = crate::shell_words::sudo_calls(&scope.command)?;
+    let own = calls.iter().position(|call| call.is(&request.argv[1..]))?;
+    calls.remove(own);
+    let covered: Vec<grant::Covered> = calls
+        .into_iter()
+        .filter_map(|call| {
+            let args: Vec<String> = call.args.into_iter().collect::<Option<_>>()?;
+            let argv: Vec<String> = request.argv[..1].iter().chain(&args).cloned().collect();
+            let other = Invocation {
+                argv: argv.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
+                ..invocation.clone()
+            };
+            let parsed = sudo_argv::parse(&argv);
+            let described = describe_request(&other, environment, user, &parsed, prepared)?;
+            let command = described.described.command;
+            if described.decline.is_some() || is_helper(&command) || !command.warnings.is_empty() {
+                return None;
+            }
+            Some(grant::Covered {
+                args,
+                resolved_path: command.resolved_path?,
+                run_as: described.described.run_as,
+                run_as_group: described.described.run_as_group,
+                exec_tail: call.exec_tail,
+            })
+        })
+        .take(prepared.config.session_max_uses as usize)
+        .collect();
+    if covered.is_empty() {
+        return None;
+    }
+    Some(Planned {
+        session: payload::Session {
+            id: scope.anchor.session,
+            leader_start: scope.anchor.leader_start,
+            max_uses: covered.len() as u32,
+            command: Some(scope.command),
+        },
+        covered,
+        leader_argv: scope.leader_argv,
+    })
+}
+
+struct Planned {
+    session: payload::Session,
+    covered: Vec<grant::Covered>,
+    leader_argv: Vec<String>,
 }
 
 struct Prepared {
@@ -179,7 +414,7 @@ fn prepare(
 
 enum Exchange {
     NotOurs,
-    Decided(Outcome),
+    Decided(Decision),
 }
 
 fn hello_line(
@@ -245,6 +480,7 @@ fn exchange(
     argv_lossy: &[String],
     parsed: &sudo_argv::Parsed,
     prepared: Prepared,
+    scope: Option<Scope>,
 ) -> Exchange {
     let socket = Path::new(&prepared.config.socket);
     if rootsafe::check_socket(socket, invocation.uid).is_err() {
@@ -284,15 +520,48 @@ fn exchange(
     {
         return Exchange::NotOurs;
     }
+    // The server's own sudo (its live test, the helper) has no agent to read
+    // a hint, and grouping it would let it cover the server's later sudo.
+    // The flag is the server's word, so it only lets through what the server
+    // itself runs: a probe, or the helper.
+    let own_sudo = reply.get("ownSudo") == Some(&Value::Bool(true));
 
-    let Some(payload) = build_payload(invocation, environment, user, parsed, &prepared) else {
+    let Some(request) = describe_request(invocation, environment, user, parsed, &prepared) else {
         send_result(&mut connection, "invalid_encoding");
-        return Exchange::Decided(Outcome::Fail);
+        return Exchange::Decided(Outcome::Fail.into());
     };
-    let bytes = payload.to_bytes();
+    let servers_own =
+        own_sudo && (decline::is_probe(parsed) || is_helper(&request.described.command));
+    if !servers_own && let Some(hint) = request.decline.clone() {
+        // Closing without a request leaves nothing for the server to show.
+        return Exchange::Decided(fail_with(hint));
+    }
+    let mut planned = scope
+        .filter(|_| !own_sudo && !is_helper(&request.described.command))
+        .and_then(|scope| plan_session(invocation, environment, user, &prepared, &request, scope));
+    let Some(mut payload) = build_payload(
+        invocation,
+        environment,
+        user,
+        &prepared,
+        request.clone(),
+        planned.as_ref().map(|planned| planned.session.clone()),
+    ) else {
+        return Exchange::Decided(Outcome::Fail.into());
+    };
+    let mut bytes = payload.to_bytes();
+    // A long command string costs the grant, not the request.
+    if bytes.len() > MAX_PAYLOAD_BYTES && planned.take().is_some() {
+        let Some(alone) = build_payload(invocation, environment, user, &prepared, request, None)
+        else {
+            return Exchange::Decided(Outcome::Fail.into());
+        };
+        payload = alone;
+        bytes = payload.to_bytes();
+    }
     if bytes.len() > MAX_PAYLOAD_BYTES {
         send_result(&mut connection, "too_large");
-        return Exchange::Decided(Outcome::Fail);
+        return Exchange::Decided(Outcome::Fail.into());
     }
     let request = format!(
         "{{\"type\":\"request\",\"payload\":\"{}\"}}",
@@ -301,24 +570,24 @@ fn exchange(
     let seconds_left = (payload.expires_at - sys::now()).max(0) as u64;
     let deadline = Instant::now() + Duration::from_secs(seconds_left);
     if !connection.write_line(&request, deadline) {
-        return Exchange::Decided(Outcome::Fail);
+        return Exchange::Decided(Outcome::Fail.into());
     }
     let message = match connection.read_line(deadline) {
         Ok(line) => parse_message(&line),
         Err(crate::socket::ReadError::Timeout) => {
             send_result(&mut connection, "expired");
-            return Exchange::Decided(Outcome::Fail);
+            return Exchange::Decided(fail_with(decline::EXPIRED));
         }
-        Err(_) => return Exchange::Decided(Outcome::Fail),
+        Err(_) => return Exchange::Decided(Outcome::Fail.into()),
     };
     let Some(message) = message else {
-        return Exchange::Decided(Outcome::Fail);
+        return Exchange::Decided(Outcome::Fail.into());
     };
     let text = |key: &str| message.get(key).and_then(Value::as_str);
     match (text("type"), text("decision")) {
         (Some("response"), Some("deny")) => {
             send_result(&mut connection, "denied");
-            Exchange::Decided(Outcome::Fail)
+            Exchange::Decided(fail_with(decline::DENIED))
         }
         (Some("response"), Some("approve")) => {
             let response = Response {
@@ -334,35 +603,62 @@ fn exchange(
                 sys::now(),
             ) {
                 Ok(_) => {
+                    if let Some(planned) = planned {
+                        // The window counts from the request, so a late
+                        // approval doesn't stretch the grant past it.
+                        let grant = grant::Grant::new(
+                            (invocation.uid, &user.name),
+                            &planned.session,
+                            &planned.leader_argv,
+                            &payload.cwd,
+                            response.key_id,
+                            payload.expires_at,
+                            planned.covered,
+                        );
+                        grant::record(
+                            &environment.grants_dir,
+                            &environment.policy,
+                            &grant,
+                            sys::now(),
+                        );
+                    }
                     send_result(&mut connection, "approved");
-                    Exchange::Decided(Outcome::Approved)
+                    Exchange::Decided(Outcome::Approved.into())
                 }
                 Err(verify::VerifyError::Expired) => {
                     send_result(&mut connection, "expired");
-                    Exchange::Decided(Outcome::Fail)
+                    Exchange::Decided(fail_with(decline::EXPIRED))
                 }
                 Err(_) => {
                     send_result(&mut connection, "bad_signature");
-                    Exchange::Decided(Outcome::Fail)
+                    Exchange::Decided(Outcome::Fail.into())
                 }
             }
         }
         // `cancel`, unknown types and decisions: close without a result.
-        _ => Exchange::Decided(Outcome::Fail),
+        _ => Exchange::Decided(Outcome::Fail.into()),
     }
 }
 
-fn build_payload(
+/// What sudo will run, as the payload shows it, and the hint when it
+/// shouldn't reach the phone. None when argv or cwd isn't UTF-8.
+#[derive(Clone)]
+struct Described {
+    argv: Vec<String>,
+    cwd: String,
+    described: sudo_argv::Described,
+    decline: Option<String>,
+}
+
+fn describe_request(
     invocation: &Invocation,
     environment: &Environment,
     user: &sys::Passwd,
     parsed: &sudo_argv::Parsed,
     prepared: &Prepared,
-) -> Option<Payload> {
+) -> Option<Described> {
     let argv = payload::utf8_strings(&invocation.argv)?;
     let cwd = String::from_utf8(invocation.cwd.clone()?).ok()?;
-    let mut nonce = [0u8; 32];
-    getrandom::getrandom(&mut nonce).ok()?;
     let (gids, group_names) = sys::groups_of(user);
     let run_as_for_sudoers = match (&parsed.user, &parsed.group) {
         (Some(target), _) => sudo_argv::numeric_id(target)
@@ -437,6 +733,31 @@ fn build_payload(
             .warnings
             .push(crate::payload::Warning::new("user_environment"));
     }
+    let decline = decline::decline(parsed, &described.command, &context);
+    Some(Described {
+        argv,
+        cwd,
+        described,
+        decline,
+    })
+}
+
+fn build_payload(
+    invocation: &Invocation,
+    environment: &Environment,
+    user: &sys::Passwd,
+    prepared: &Prepared,
+    request: Described,
+    session: Option<payload::Session>,
+) -> Option<Payload> {
+    let Described {
+        argv,
+        cwd,
+        described,
+        ..
+    } = request;
+    let mut nonce = [0u8; 32];
+    getrandom::getrandom(&mut nonce).ok()?;
     let issued_at = sys::now();
     let window = environment
         .window_override
@@ -456,6 +777,7 @@ fn build_payload(
         cwd,
         service: invocation.service.clone().unwrap_or_default(),
         key_ids: prepared.keys.iter().map(|key| key.key_id.clone()).collect(),
+        session,
     })
 }
 
@@ -521,6 +843,8 @@ mod tests {
             shells: PathBuf::from("/etc/shells"),
             chain_start: unsafe { libc::getppid() },
             window_override: None,
+            grants_dir: dir.join("grants"),
+            session: SessionSource::Fixed(None),
         };
         Setup {
             dir,
@@ -545,6 +869,15 @@ mod tests {
 
         /// Runs one authentication against a fixture server in `mode`.
         fn run(&self, mode: Mode, invocation: &Invocation) -> (Outcome, fixture_server::Exchange) {
+            let (decision, exchange) = self.run_decision(mode, invocation);
+            (decision.outcome, exchange)
+        }
+
+        fn run_decision(
+            &self,
+            mode: Mode,
+            invocation: &Invocation,
+        ) -> (Decision, fixture_server::Exchange) {
             let path = self.dir.join("s.sock");
             let _ = std::fs::remove_file(&path);
             let listener = UnixListener::bind(&path).unwrap();
@@ -563,12 +896,12 @@ mod tests {
     #[test]
     fn approves_only_a_valid_signature() {
         let setup = setup();
-        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "true"]));
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
         assert_eq!(outcome, Outcome::Approved);
         assert_eq!(exchange.result.as_deref(), Some("approved"));
         let payload = exchange.payload.unwrap();
         assert_eq!(payload["user"], setup.user.as_str());
-        assert_eq!(payload["command"]["argv"], serde_json::json!(["true"]));
+        assert_eq!(payload["command"]["argv"], serde_json::json!(["id"]));
         assert_eq!(
             payload["expiresAt"].as_i64().unwrap() - payload["issuedAt"].as_i64().unwrap(),
             100
@@ -588,7 +921,7 @@ mod tests {
             ("close", Mode::Close, None),
         ] {
             let setup = setup();
-            let (outcome, exchange) = setup.run(mode, &setup.invocation(&["sudo", "true"]));
+            let (outcome, exchange) = setup.run(mode, &setup.invocation(&["sudo", "id"]));
             assert_eq!(outcome, Outcome::Fail, "{name}");
             assert_eq!(exchange.result.as_deref(), result, "{name}");
         }
@@ -598,7 +931,7 @@ mod tests {
     fn expiry_fails_the_stack() {
         let mut setup = setup();
         setup.environment.window_override = Some(1);
-        let (outcome, exchange) = setup.run(Mode::Expire, &setup.invocation(&["sudo", "true"]));
+        let (outcome, exchange) = setup.run(Mode::Expire, &setup.invocation(&["sudo", "id"]));
         assert_eq!(outcome, Outcome::Fail);
         assert_eq!(exchange.result.as_deref(), Some("expired"));
     }
@@ -608,28 +941,23 @@ mod tests {
         for (name, mode) in [("notmine", Mode::NotMine), ("garbage", Mode::Garbage)] {
             let setup = setup();
             assert_eq!(
-                setup.run(mode, &setup.invocation(&["sudo", "true"])).0,
+                setup.run(mode, &setup.invocation(&["sudo", "id"])).0,
                 Outcome::Ignore,
                 "{name}"
             );
             assert_eq!(
-                setup
-                    .run(mode, &setup.invocation(&["sudo", "-n", "true"]))
-                    .0,
+                setup.run(mode, &setup.invocation(&["sudo", "-n", "id"])).0,
                 Outcome::Fail,
                 "{name}"
             );
         }
         let setup = setup();
         assert_eq!(
-            authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment),
+            authenticate(&setup.invocation(&["sudo", "id"]), &setup.environment).outcome,
             Outcome::Ignore
         );
         assert_eq!(
-            authenticate(
-                &setup.invocation(&["sudo", "-n", "true"]),
-                &setup.environment
-            ),
+            authenticate(&setup.invocation(&["sudo", "-n", "id"]), &setup.environment).outcome,
             Outcome::Fail
         );
     }
@@ -671,14 +999,14 @@ mod tests {
             setup
                 .run(
                     Mode::Approve,
-                    &setup.invocation(&["/usr/bin/sudo.ws", "true"])
+                    &setup.invocation(&["/usr/bin/sudo.ws", "id"])
                 )
                 .0,
             Outcome::Approved
         );
         assert_eq!(
             setup
-                .run(Mode::NotMine, &setup.invocation(&["sudo.ws", "-n", "true"]))
+                .run(Mode::NotMine, &setup.invocation(&["sudo.ws", "-n", "id"]))
                 .0,
             Outcome::Fail
         );
@@ -696,10 +1024,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            authenticate(
-                &setup.invocation(&["sudo", "-n", "true"]),
-                &setup.environment
-            ),
+            authenticate(&setup.invocation(&["sudo", "-n", "id"]), &setup.environment).outcome,
             Outcome::Ignore
         );
     }
@@ -716,29 +1041,26 @@ mod tests {
         // No server is listening: reaching the socket would also be IGNORE, so
         // check -n, which only fails when the module got as far as deciding.
         assert_eq!(
-            authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment),
+            authenticate(&setup.invocation(&["sudo", "id"]), &setup.environment).outcome,
             Outcome::Ignore
         );
         assert_eq!(
-            authenticate(
-                &setup.invocation(&["sudo", "-n", "true"]),
-                &setup.environment
-            ),
+            authenticate(&setup.invocation(&["sudo", "-n", "id"]), &setup.environment).outcome,
             Outcome::Fail
         );
         std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        let mut invocation = setup.invocation(&["sudo", "true"]);
+        let mut invocation = setup.invocation(&["sudo", "id"]);
         invocation.service = Some("login".into());
         assert_eq!(setup.run(Mode::Approve, &invocation).0, Outcome::Ignore);
-        let mut invocation = setup.invocation(&["sudo", "true"]);
+        let mut invocation = setup.invocation(&["sudo", "id"]);
         invocation.pam_user = Some("root".into());
         assert_eq!(setup.run(Mode::Approve, &invocation).0, Outcome::Ignore);
         let keys = setup.environment.state_dir.join("keys").join(&setup.user);
         std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert_eq!(
             setup
-                .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
+                .run(Mode::Approve, &setup.invocation(&["sudo", "id"]))
                 .0,
             Outcome::Ignore
         );
@@ -762,13 +1084,13 @@ mod tests {
         setup.environment.sudoers = sudoers;
         assert_eq!(
             setup
-                .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
+                .run(Mode::Approve, &setup.invocation(&["sudo", "id"]))
                 .0,
             Outcome::Ignore
         );
         assert_eq!(
             setup
-                .run(Mode::Approve, &setup.invocation(&["sudo", "-n", "true"]))
+                .run(Mode::Approve, &setup.invocation(&["sudo", "-n", "id"]))
                 .0,
             Outcome::Fail
         );
@@ -803,7 +1125,7 @@ mod tests {
         setup.environment.sudoers = root.join("sudoers");
         assert_eq!(
             setup
-                .run(Mode::Approve, &setup.invocation(&["sudo", "true"]))
+                .run(Mode::Approve, &setup.invocation(&["sudo", "id"]))
                 .0,
             Outcome::Approved
         );
@@ -822,7 +1144,7 @@ mod tests {
                 format!("{extra}\n{}", crate::install::sudoers_drop_in(user)),
             );
             let (outcome, exchange) =
-                setup.run(Mode::Approve, &setup.invocation(&["sudo", "/usr/bin/true"]));
+                setup.run(Mode::Approve, &setup.invocation(&["sudo", "/usr/bin/id"]));
             assert_eq!(outcome, Outcome::Approved);
             exchange.payload.unwrap()["command"]["warnings"]
                 .as_array()
@@ -841,7 +1163,7 @@ mod tests {
     #[test]
     fn unrepresentable_or_huge_requests_fail_with_a_result() {
         let setup = setup();
-        let mut invocation = setup.invocation(&["sudo", "true"]);
+        let mut invocation = setup.invocation(&["sudo", "id"]);
         invocation.argv.push(vec![0xff, 0xfe]);
         let (outcome, exchange) = setup.run(Mode::Approve, &invocation);
         assert_eq!(
@@ -856,5 +1178,342 @@ mod tests {
             (outcome, exchange.result.as_deref()),
             (Outcome::Fail, Some("too_large"))
         );
+    }
+
+    #[test]
+    fn deny_and_expiry_tell_the_agent_on_stderr() {
+        let setup = setup();
+        let (decision, _) = setup.run_decision(Mode::Deny, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(decision, fail_with(decline::DENIED));
+        let mut setup = setup;
+        setup.environment.window_override = Some(1);
+        let (decision, _) = setup.run_decision(Mode::Expire, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(decision, fail_with(decline::EXPIRED));
+        let (decision, _) = setup.run_decision(Mode::Close, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(decision, Outcome::Fail.into());
+    }
+
+    #[test]
+    fn declines_never_reach_the_server_and_only_apply_to_t3_sudo() {
+        let setup = setup();
+        let (decision, exchange) =
+            setup.run_decision(Mode::Approve, &setup.invocation(&["sudo", "python3", "-"]));
+        assert_eq!(decision.outcome, Outcome::Fail);
+        assert!(decision.notice.unwrap().starts_with(decline::PREFIX));
+        assert_eq!((exchange.payload, exchange.result), (None, None));
+        // Someone's own sudo keeps its password prompt.
+        let (decision, _) =
+            setup.run_decision(Mode::NotMine, &setup.invocation(&["sudo", "python3", "-"]));
+        assert_eq!(decision, Outcome::Ignore.into());
+        let (decision, exchange) = setup.run_decision(
+            Mode::Approve,
+            &setup.invocation(&["sudo", "sh", "-c", "echo x > /etc/f"]),
+        );
+        assert_eq!(decision, Outcome::Approved.into());
+        assert_eq!(
+            exchange.payload.unwrap()["command"]["warnings"],
+            serde_json::json!([])
+        );
+    }
+
+    /// Review M1: `ownSudo` is the server's word, and it switched off every
+    /// decline, so an agent could get `sudo -S` or a stdin-fed interpreter
+    /// in front of the phone.
+    #[test]
+    fn the_servers_word_only_lifts_the_probe_decline() {
+        let setup = setup();
+        for argv in [&["sudo", "python3", "-"][..], &["sudo", "-S", "id"]] {
+            let (decision, exchange) =
+                setup.run_decision(Mode::ApproveOwn, &setup.invocation(argv));
+            assert_eq!(decision.outcome, Outcome::Fail, "{argv:?}");
+            assert!(decision.notice.is_some(), "{argv:?}");
+            assert_eq!(exchange.payload, None, "{argv:?}");
+        }
+    }
+
+    /// A process standing in for the tool call's shell.
+    struct Leader {
+        child: std::process::Child,
+        anchor: Anchor,
+    }
+
+    impl Leader {
+        fn spawn() -> Self {
+            let child = std::process::Command::new("/bin/sleep")
+                .arg("60")
+                .spawn()
+                .unwrap();
+            let pid = child.id() as i32;
+            let anchor = Anchor {
+                session: pid,
+                leader_start: sys::leader_facts(pid).unwrap().start,
+            };
+            Self { child, anchor }
+        }
+
+        /// The session as if this leader were `zsh -lc <command>`.
+        fn running(&self, command: &str) -> SessionSource {
+            SessionSource::Fixed(Some((
+                self.anchor,
+                vec!["/bin/zsh".into(), "-lc".into(), command.into()],
+            )))
+        }
+    }
+
+    impl Drop for Leader {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    impl Setup {
+        fn later(&self, argv: &[&str]) -> Decision {
+            authenticate(&self.invocation(argv), &self.environment)
+        }
+
+        /// A sudo from the same place in another session.
+        fn later_in(&self, session: SessionSource, argv: &[&str]) -> Decision {
+            let environment = Environment {
+                session,
+                ..self.environment.clone()
+            };
+            authenticate(&self.invocation(argv), &environment)
+        }
+    }
+
+    /// T3's live test is `sudo -n true` from the server itself; it must reach
+    /// the phone, and it never covers the server's later sudo.
+    #[test]
+    fn the_servers_own_probe_reaches_the_phone_ungrouped() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        setup.environment.session = leader.running("sudo -n true && sudo -n id");
+        let invocation = setup.invocation(&["sudo", "-n", "true"]);
+        let (decision, exchange) = setup.run_decision(Mode::ApproveOwn, &invocation);
+        assert_eq!(decision, Outcome::Approved.into());
+        assert!(exchange.payload.unwrap().get("session").is_none());
+        assert!(!setup.environment.grants_dir.exists());
+        let (decision, _) = setup.run_decision(Mode::Approve, &invocation);
+        assert_eq!(decision.outcome, Outcome::Fail);
+        assert!(decision.notice.unwrap().contains("approve nothing"));
+    }
+
+    const COMMAND: &str = "sudo id && sudo -n ls / && sudo -n whoami && sudo -n python3 - \
+         && sudo -n /usr/local/lib/t3-elevation/t3-elevation revoke";
+
+    #[test]
+    fn one_approval_covers_the_other_sudos_written_in_the_command() {
+        let mut leader = Leader::spawn();
+        let mut setup = setup();
+        setup.environment.session = leader.running(COMMAND);
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        // A declined call and the helper (here unresolved) aren't covered.
+        assert_eq!(
+            exchange.payload.unwrap()["session"],
+            serde_json::json!({
+                "id": leader.anchor.session,
+                "leaderStart": leader.anchor.leader_start,
+                "maxUses": 2,
+                "command": COMMAND,
+            })
+        );
+        // No server is listening now: only the grant can approve.
+        assert_eq!(
+            setup.later(&["sudo", "-n", "ls", "/"]),
+            Outcome::Approved.into()
+        );
+        assert_eq!(
+            setup.later(&["sudo", "-n", "ls", "/"]),
+            Outcome::Fail.into(),
+            "each call once"
+        );
+        assert_eq!(setup.later(&["sudo", "-n", "id"]), Outcome::Fail.into());
+        // Declines still apply inside an approved command.
+        assert!(
+            setup
+                .later(&["sudo", "-n", "python3", "-"])
+                .notice
+                .is_some()
+        );
+        assert_eq!(
+            setup.later(&["sudo", "-n", "-u", "nobody", "whoami"]),
+            Outcome::Fail.into()
+        );
+        // Another session, or the leader gone, isn't covered.
+        let other = Leader::spawn();
+        assert_eq!(
+            setup.later_in(other.running(COMMAND), &["sudo", "-n", "whoami"]),
+            Outcome::Fail.into()
+        );
+        leader.child.kill().unwrap();
+        leader.child.wait().unwrap();
+        assert_eq!(setup.later(&["sudo", "-n", "whoami"]), Outcome::Fail.into());
+    }
+
+    /// zsh and bash exec the string's last command, so its sudo leads the
+    /// session and can still be covered.
+    #[test]
+    fn the_exec_d_last_sudo_is_covered() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        setup.environment.session = leader.running("sudo id && sudo -n whoami");
+        let (outcome, _) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        let exec_d = SessionSource::Leading(leader.anchor);
+        assert_eq!(
+            setup.later_in(exec_d, &["sudo", "-n", "whoami"]),
+            Outcome::Approved.into()
+        );
+        assert!(
+            !setup
+                .environment
+                .grants_dir
+                .join(format!(
+                    "{}-{}.json",
+                    unsafe { libc::getuid() },
+                    leader.anchor.session
+                ))
+                .exists()
+        );
+    }
+
+    /// Review H1: a grant covered any sudo the session ran, so a startup
+    /// file, a script, or text the command only echoes could run another
+    /// program as root on the first approval.
+    #[test]
+    fn later_sudos_outside_the_approved_command_ask_the_phone() {
+        let approve = |command: &str, first: &[&str]| {
+            let leader = Leader::spawn();
+            let mut setup = setup();
+            setup.environment.session = leader.running(command);
+            let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(first));
+            assert_eq!(outcome, Outcome::Approved);
+            (leader, setup, exchange.payload.unwrap())
+        };
+        // Not written in the command (a startup file's, a script's).
+        let (_leader, setup, _) = approve("sudo id && sudo -n whoami", &["sudo", "id"]);
+        assert_eq!(
+            setup.later(&["sudo", "-n", "ls", "/"]),
+            Outcome::Fail.into()
+        );
+        // A first sudo that isn't the command's starts nothing.
+        let (_leader, setup, payload) = approve("sudo id && sudo -n whoami", &["sudo", "ls", "/"]);
+        assert!(payload.get("session").is_none());
+        assert_eq!(setup.later(&["sudo", "-n", "whoami"]), Outcome::Fail.into());
+        // Only text: echoed, or a heredoc body.
+        let (_leader, setup, payload) = approve(
+            "echo sudo -n ls / && sudo id\ncat <<EOF\nsudo -n whoami\nEOF",
+            &["sudo", "id"],
+        );
+        assert!(payload.get("session").is_none());
+        assert_eq!(
+            setup.later(&["sudo", "-n", "ls", "/"]),
+            Outcome::Fail.into()
+        );
+        // Written for another target.
+        let (_leader, setup, _) = approve(
+            "sudo id && sudo -n -u nobody whoami && sudo -n ls /",
+            &["sudo", "id"],
+        );
+        assert_eq!(setup.later(&["sudo", "-n", "whoami"]), Outcome::Fail.into());
+        // The leader now runs something else (it exec'd a script).
+        let (leader, mut setup, _) = approve("sudo id && sudo -n whoami", &["sudo", "id"]);
+        setup.environment.session = SessionSource::Fixed(Some((
+            leader.anchor,
+            vec!["/bin/bash".into(), "./install.sh".into()],
+        )));
+        assert_eq!(setup.later(&["sudo", "-n", "whoami"]), Outcome::Fail.into());
+        // Unreadable strings cover nothing.
+        let (_leader, _, payload) = approve("sudo id && sudo -n whoami $(true)", &["sudo", "id"]);
+        assert!(payload.get("session").is_none());
+    }
+
+    /// Review H1: a program the shell exec'd leads the session too, and its
+    /// sudo used the grant without any check of what the session was.
+    #[test]
+    fn a_leading_sudo_that_isnt_the_commands_last_asks_the_phone() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        setup.environment.session = leader.running("sudo id && sudo -n ls / && ./x");
+        let (outcome, _) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        let exec_d = SessionSource::Leading(leader.anchor);
+        assert_eq!(
+            setup.later_in(exec_d, &["sudo", "-n", "ls", "/"]),
+            Outcome::Fail.into()
+        );
+        assert_eq!(
+            setup.later(&["sudo", "-n", "ls", "/"]),
+            Outcome::Approved.into()
+        );
+    }
+
+    /// What the phone didn't show isn't covered: a call with a warning of
+    /// its own asks again.
+    #[test]
+    fn calls_with_their_own_warnings_ask_the_phone() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        test_fs::write(&setup.dir.join("f"), "x");
+        setup.environment.session = leader.running("sudo id && sudo -n cat ./f");
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        assert!(exchange.payload.unwrap().get("session").is_none());
+        assert_eq!(
+            setup.later(&["sudo", "-n", "cat", "./f"]),
+            Outcome::Fail.into()
+        );
+    }
+
+    #[test]
+    fn a_command_too_long_to_sign_asks_per_sudo() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        let command = format!(
+            "sudo id && sudo -n whoami # {}",
+            "x".repeat(MAX_PAYLOAD_BYTES)
+        );
+        setup.environment.session = leader.running(&command);
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        assert!(exchange.payload.unwrap().get("session").is_none());
+        assert_eq!(setup.later(&["sudo", "-n", "whoami"]), Outcome::Fail.into());
+    }
+
+    /// A sudo leading its own session asks the phone and never starts a grant.
+    #[test]
+    fn a_sudo_leading_its_session_starts_no_grant() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        setup.environment.session = SessionSource::Leading(leader.anchor);
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        assert!(exchange.payload.unwrap().get("session").is_none());
+        assert!(!setup.environment.grants_dir.exists());
+    }
+
+    #[test]
+    fn a_session_max_of_zero_asks_for_every_sudo() {
+        let leader = Leader::spawn();
+        let mut setup = setup();
+        let config = setup
+            .environment
+            .state_dir
+            .join("users")
+            .join(format!("{}.toml", setup.user));
+        test_fs::write(
+            &config,
+            format!(
+                "version = 1\nenabled = true\nsocket = \"{}\"\nsession_max_uses = 0\n",
+                setup.dir.join("s.sock").display()
+            ),
+        );
+        setup.environment.session = leader.running("sudo id && sudo -n id");
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        assert!(exchange.payload.unwrap().get("session").is_none());
+        assert_eq!(setup.later(&["sudo", "-n", "id"]), Outcome::Fail.into());
     }
 }

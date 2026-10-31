@@ -71,7 +71,16 @@ export function androidAlertForState(
     alert_title: notification.title,
     alert_body: notification.body,
     alert_path: notification.deepLink,
+    ...requestKindData(state),
   };
+}
+
+/**
+ * Lets the phone post a sudo approval on its own channel. Carries no request
+ * content; a grouped alert stays a plain one.
+ */
+function requestKindData(row: Pick<RelayAgentActivityState, "pendingRequestKind">) {
+  return row.pendingRequestKind === undefined ? {} : { alert_request_kind: row.pendingRequestKind };
 }
 
 export function androidAlertForAggregate(input: {
@@ -97,6 +106,7 @@ export function androidAlertForAggregate(input: {
       alert_title: notification.title,
       alert_body: notification.body,
       alert_path: notification.deepLink,
+      ...requestKindData(first),
     };
   }
   return {

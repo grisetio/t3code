@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.CancellationSignal
 import androidx.annotation.RequiresApi
 import expo.modules.kotlin.Promise
+import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.records.Field
@@ -24,6 +25,12 @@ class SignPrompt : Record {
 
   @Field val description: String? = null
 }
+
+/**
+ * The user backed out of the prompt (its Cancel button or Back). Kept apart from `cancelled`, which
+ * also covers the system dismissing the prompt, because a request's caller treats this as Deny.
+ */
+class PromptDeclinedException : CodedException("declined", "Device approval declined", null)
 
 class T3DeviceApprovalModule : Module() {
   // Signing runs off the main thread: StrongBox operations can take hundreds of milliseconds.
@@ -60,9 +67,17 @@ class T3DeviceApprovalModule : Module() {
       activity.runOnUiThread { authenticate(activity, signature, bytes, prompt, promise) }
     }
 
-    AsyncFunction("deleteKey") { alias: String -> DeviceApprovalKeys.delete(alias) }
+    AsyncFunction("deleteKey") { alias: String ->
+      val context = appContext.reactContext ?: throw ApprovalException(ApprovalError.UNAVAILABLE)
+      DeviceApprovalKeys.delete(context, alias)
+    }
 
     AsyncFunction("hasKey") { alias: String -> DeviceApprovalKeys.has(alias) }
+
+    AsyncFunction("signsWhileLocked") { alias: String ->
+      val context = appContext.reactContext ?: throw ApprovalException(ApprovalError.UNAVAILABLE)
+      DeviceApprovalKeys.signsWhileLocked(context, alias)
+    }
   }
 
   @RequiresApi(Build.VERSION_CODES.R)
@@ -77,6 +92,9 @@ class T3DeviceApprovalModule : Module() {
     fun reject(error: ApprovalError, cause: Throwable? = null) {
       if (settled.compareAndSet(false, true)) promise.reject(ApprovalException(error, cause))
     }
+    fun declined() {
+      if (settled.compareAndSet(false, true)) promise.reject(PromptDeclinedException())
+    }
 
     val builder = BiometricPrompt.Builder(activity)
       .setTitle(prompt.title)
@@ -84,7 +102,7 @@ class T3DeviceApprovalModule : Module() {
       // A passive strong face match must not approve a command at a glance.
       .setConfirmationRequired(true)
       .setNegativeButton(activity.getString(android.R.string.cancel), promptExecutor) { _, _ ->
-        reject(ApprovalError.CANCELLED)
+        declined()
       }
     prompt.subtitle?.let { builder.setSubtitle(it) }
     prompt.description?.let { builder.setDescription(it) }
@@ -105,7 +123,11 @@ class T3DeviceApprovalModule : Module() {
       }
 
       override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-        reject(DeviceApprovalCodec.errorForPrompt(errorCode))
+        if (errorCode == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED) {
+          declined()
+        } else {
+          reject(DeviceApprovalCodec.errorForPrompt(errorCode))
+        }
       }
     }
 

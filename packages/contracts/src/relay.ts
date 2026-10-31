@@ -116,6 +116,9 @@ export const RelayDeviceUnregistrationParams = Schema.Struct({
 });
 export type RelayDeviceUnregistrationParams = typeof RelayDeviceUnregistrationParams.Type;
 
+export const RelayAgentPendingRequestKind = Schema.Literal("sudo");
+export type RelayAgentPendingRequestKind = typeof RelayAgentPendingRequestKind.Type;
+
 export const RelayAgentActivityState = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
@@ -124,6 +127,11 @@ export const RelayAgentActivityState = Schema.Struct({
   phase: RelayAgentAwarenessPhase,
   headline: TrimmedNonEmptyString,
   detail: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Set while the approval is a device-approval sudo. Relays that predate it
+   * drop it from both the request and the proof, so the push stays a plain approval.
+   */
+  pendingRequestKind: Schema.optional(RelayAgentPendingRequestKind),
   modelTitle: TrimmedNonEmptyString,
   updatedAt: TrimmedNonEmptyString,
   deepLink: TrimmedNonEmptyString,
@@ -137,6 +145,7 @@ export const RelayAgentActivityAggregateRow = Schema.Struct({
   threadTitle: TrimmedNonEmptyString,
   modelTitle: TrimmedNonEmptyString,
   phase: RelayAgentAwarenessPhase,
+  pendingRequestKind: Schema.optional(RelayAgentPendingRequestKind),
   status: TrimmedNonEmptyString,
   updatedAt: TrimmedNonEmptyString,
   deepLink: TrimmedNonEmptyString,

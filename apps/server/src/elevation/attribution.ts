@@ -12,8 +12,17 @@ export interface LiveRun {
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly rootNodeId: NodeId;
-  /** Command items still running in this run. */
-  readonly commands: ReadonlyArray<{ readonly text: string; readonly explanation: string | null }>;
+  /** This run's command items, newest first. */
+  readonly commands: ReadonlyArray<{
+    readonly text: string;
+    readonly explanation: string | null;
+    /**
+     * Epoch millis when the tool call returned; null while it runs. A
+     * background command (Claude's `run_in_background`) returns before its
+     * shell reaches sudo.
+     */
+    readonly finishedAt: number | null;
+  }>;
 }
 
 /** A sudo the server spawned itself, such as the setup test or a helper call. */
@@ -28,6 +37,8 @@ export type Attribution =
       readonly type: "mine";
       readonly run: LiveRun | null;
       readonly explanation: string | null;
+      /** The matched tool call's command line. */
+      readonly command?: string;
       /** Set when the sudo is one this server spawned. */
       readonly serverSudo?: ServerSudo;
     };
@@ -56,6 +67,37 @@ function containsSequence(haystack: ReadonlyArray<string>, needle: ReadonlyArray
 
 const basename = (path: string | undefined) => path?.split("/").at(-1);
 
+// A finished call stands in only for a sudo that follows it closely, so a
+// later background sudo can't borrow an old call's text and reason.
+const FINISHED_CALL_WINDOW_MS = 2_000;
+// sudo options that take the next argument as their value.
+const SUDO_VALUE_OPTIONS = new Set([
+  "-C",
+  "-D",
+  "-R",
+  "-T",
+  "-U",
+  "-g",
+  "-h",
+  "-p",
+  "-r",
+  "-t",
+  "-u",
+]);
+
+/** The program sudo runs, or null for `sudo -s`, `sudo -i` and the like. */
+export function sudoProgram(argv: ReadonlyArray<string>): string | null {
+  for (let index = 1; index < argv.length; index++) {
+    const arg = argv[index]!;
+    if (arg === "--") return basename(argv[index + 1]) ?? null;
+    if (SUDO_VALUE_OPTIONS.has(arg)) index++;
+    else if (!arg.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+      return basename(arg) ?? null;
+    }
+  }
+  return null;
+}
+
 /** argv[0] is whatever the spawner passed, a bare name or a resolved path. */
 const sameArgv = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
   left.length === right.length &&
@@ -64,6 +106,8 @@ const sameArgv = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
 
 export function attribute(input: {
   readonly hello: Pick<Hello, "argv" | "chain">;
+  /** Epoch millis when the sudo asked. */
+  readonly now: number;
   readonly server: { readonly pid: number; readonly startTime: number | null };
   readonly liveRuns: ReadonlyArray<LiveRun>;
   readonly providerProcesses: ReadonlyArray<ProviderProcess>;
@@ -90,28 +134,42 @@ export function attribute(input: {
   // (the shell) must contain the command text.
   const belowServer = hello.chain.slice(0, serverIndex);
   const levels = [hello.argv, ...belowServer.map((entry) => entry.argv)];
-  for (const [level, argv] of levels.entries()) {
-    if (argv === null) continue;
-    const processTokens = tokens(argv.join(" "));
-    const matches = input.liveRuns.flatMap((run) =>
-      run.commands
-        .filter((command) => {
-          const commandTokens = tokens(command.text);
-          return level === 0
-            ? containsSequence(commandTokens, processTokens)
-            : containsSequence(processTokens, commandTokens);
-        })
-        .map((command) => ({ run, command })),
-    );
-    const threads = new Set(matches.map((match) => match.run.threadId));
-    const first = matches[0];
-    if (threads.size === 1 && first !== undefined) {
-      return {
-        type: "mine",
-        run: first.run,
-        explanation:
-          matches.find((match) => match.command.explanation !== null)?.command.explanation ?? null,
-      };
+  // Finished calls only after every level missed, so an old `sudo x` item
+  // can't take the place of the running script that runs it.
+  const program = sudoProgram(hello.argv);
+  const eligible = (command: LiveRun["commands"][number], running: boolean) =>
+    running
+      ? command.finishedAt === null
+      : command.finishedAt !== null &&
+        input.now - command.finishedAt <= FINISHED_CALL_WINDOW_MS &&
+        program !== null &&
+        command.text.split(/[\s;&|()<>'"`\\]+/).some((word) => basename(word) === program);
+  for (const running of [true, false]) {
+    for (const [level, argv] of levels.entries()) {
+      if (argv === null) continue;
+      const processTokens = tokens(argv.join(" "));
+      const matches = input.liveRuns.flatMap((run) =>
+        run.commands
+          .filter((command) => {
+            if (!eligible(command, running)) return false;
+            const commandTokens = tokens(command.text);
+            return level === 0
+              ? containsSequence(commandTokens, processTokens)
+              : containsSequence(processTokens, commandTokens);
+          })
+          .map((command) => ({ run, command })),
+      );
+      const threads = new Set(matches.map((match) => match.run.threadId));
+      const first = matches[0];
+      if (threads.size === 1 && first !== undefined) {
+        const explained = matches.find((match) => match.command.explanation !== null) ?? first;
+        return {
+          type: "mine",
+          run: first.run,
+          explanation: explained.command.explanation,
+          command: explained.command.text,
+        };
+      }
     }
   }
 

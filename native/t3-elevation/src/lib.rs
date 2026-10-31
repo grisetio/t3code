@@ -6,17 +6,20 @@
 pub mod attestation;
 pub mod b64;
 pub mod config;
+pub mod decline;
 pub mod der;
 pub mod enroll;
 pub mod escape;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixture_server;
 pub mod flow;
+pub mod grant;
 pub mod install;
 pub mod json;
 pub mod keys;
 pub mod payload;
 pub mod rootsafe;
+pub mod shell_words;
 pub mod socket;
 pub mod sudo_argv;
 pub mod sudoers;

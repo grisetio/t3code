@@ -22,6 +22,10 @@ pub struct Parsed {
     pub user: Option<String>,
     pub group: Option<String>,
     pub non_interactive: bool,
+    /// `-S`: the password from stdin.
+    pub stdin_password: bool,
+    /// `-v` or `-l`: authenticates and runs nothing.
+    pub runs_nothing: bool,
 }
 
 fn basename(path: &str) -> &str {
@@ -446,6 +450,8 @@ fn parse_for(argv: &[String], flavors: &[Flavor]) -> Parsed {
         user: agreed(&|scan| scan.value('u').map(str::to_string)),
         group: agreed(&|scan| scan.value('g').map(str::to_string)),
         non_interactive: !scans.is_empty() && scans.iter().all(|scan| scan.has('n')),
+        stdin_password: !scans.is_empty() && scans.iter().all(|scan| scan.has('S')),
+        runs_nothing: !scans.is_empty() && scans.iter().all(|scan| scan.has('v') || scan.has('l')),
     }
 }
 
@@ -540,6 +546,7 @@ pub struct Context<'a> {
     pub shells: &'a [String],
 }
 
+#[derive(Clone)]
 pub struct Described {
     pub run_as: String,
     pub run_as_group: Option<String>,
@@ -581,7 +588,7 @@ fn describe_command(sudo_argv: &[String], parsed: &Parsed, context: &Context) ->
         .as_deref()
         .map(|group| with_name(group, crate::sys::group_name));
     let mut warnings = Vec::new();
-    let (argv, resolved_path, shell, arg_checks) = match &parsed.mode {
+    let (argv, resolved_path, shell, arg_checks, reads_cwd) = match &parsed.mode {
         Mode::Unparsed => {
             warnings.push(Warning::new("unparsed_options"));
             if cwd_writable(context) {
@@ -626,7 +633,9 @@ fn describe_command(sudo_argv: &[String], parsed: &Parsed, context: &Context) ->
                 argv.push(shell_command_string(command));
             }
             let resolved = shell.starts_with('/').then(|| shell.clone());
-            (argv, resolved, true, false)
+            // The command string is what runs; a bare shell reads stdin.
+            let reads_cwd = command.is_empty() || command_string_reads_cwd(&argv[2]);
+            (argv, resolved, command.is_empty(), false, reads_cwd)
         }
         Mode::Run(command) => {
             let resolved = match resolve_program(&command[0], context) {
@@ -638,7 +647,18 @@ fn describe_command(sudo_argv: &[String], parsed: &Parsed, context: &Context) ->
                 }
             };
             let is_shell = is_shell_program(&command[0], resolved.as_deref(), context.shells);
-            (command.clone(), resolved, is_shell, true)
+            let script = is_shell.then(|| shell_command_arg(command)).flatten();
+            let reads_cwd = match script {
+                Some(script) => command_string_reads_cwd(script),
+                None => is_shell || program_reads_cwd(command, resolved.as_deref()),
+            };
+            (
+                command.clone(),
+                resolved,
+                is_shell && script.is_none(),
+                true,
+                reads_cwd,
+            )
         }
     };
     if let Some(path) = &resolved_path
@@ -647,14 +667,22 @@ fn describe_command(sudo_argv: &[String], parsed: &Parsed, context: &Context) ->
         warnings.push(Warning::new("user_writable_program"));
     }
     if arg_checks {
+        // A program that loads code or files by name from the cwd can be
+        // handed a file created there after approval.
+        // Inline code and module names aren't files; the cwd warning
+        // covers what they load from it.
+        let names_are_paths = match interpreter_source(&argv) {
+            Some((source, _)) => source == Source::Script,
+            None => reads_cwd,
+        };
         for (index, arg) in argv.iter().enumerate().skip(1) {
-            if argument_writable(arg, context) {
+            if argument_writable(arg, names_are_paths, context) {
                 warnings.push(Warning::at("user_writable_argument", index));
             }
         }
     }
     // `-i` starts in the target user's home instead.
-    if !matches!(parsed.mode, Mode::Login(_)) && cwd_writable(context) {
+    if reads_cwd && !matches!(parsed.mode, Mode::Login(_)) && cwd_writable(context) {
         warnings.push(Warning::new("user_writable_cwd"));
     }
     if shell {
@@ -832,6 +860,21 @@ fn replaceable(path: &Path, context: &Context) -> bool {
     }
 }
 
+/// Whether a user with `uid` and `gids` could change what runs at `path`.
+pub fn replaceable_by(path: &Path, uid: u32, gids: &[u32]) -> bool {
+    let context = Context {
+        user: "",
+        uid,
+        gids,
+        cwd: "/",
+        caller_shell: None,
+        target_shell: None,
+        search: Search::caller(""),
+        shells: &[],
+    };
+    replaceable(path, &context)
+}
+
 /// Programs read config, build files, hooks and modules from the cwd (git
 /// trusts a repository owned by `SUDO_UID`, make reads the Makefile, Python
 /// puts it on `sys.path`), so a cwd the user can change runs the user's code.
@@ -852,11 +895,11 @@ fn creatable(path: &Path, context: &Context) -> bool {
 /// one counts as a path only with a `/` or `.` in it: every word of
 /// `systemctl restart nginx` is "missing" in a writable cwd, and warning on
 /// all of them would teach people to skip warnings.
-fn argument_writable(arg: &str, context: &Context) -> bool {
-    if option_value(arg).is_some_and(|value| path_writable(value, context)) {
+fn argument_writable(arg: &str, names_are_paths: bool, context: &Context) -> bool {
+    if option_value(arg).is_some_and(|value| path_writable(value, names_are_paths, context)) {
         return true;
     }
-    !arg.starts_with('-') && path_writable(arg, context)
+    !arg.starts_with('-') && path_writable(arg, names_are_paths, context)
 }
 
 /// The part of an argument a program may read as a path: after the first `=`
@@ -877,7 +920,12 @@ fn option_value(arg: &str) -> Option<&str> {
     (!name.is_empty() && !name.contains('/')).then_some(value)
 }
 
-fn path_writable(arg: &str, context: &Context) -> bool {
+/// A missing argument counts as a path when it's absolute or starts with
+/// `./` or `../`, and, for programs that read files by name from the cwd,
+/// when it has a `/` or `.`. To other programs missing relative words
+/// (`nginx.service`, `mongodb/brew`, globs) are names, and flagging them
+/// fired on most requests from a project folder.
+fn path_writable(arg: &str, names_are_paths: bool, context: &Context) -> bool {
     if arg.is_empty() {
         return false;
     }
@@ -885,7 +933,319 @@ fn path_writable(arg: &str, context: &Context) -> bool {
     if std::fs::symlink_metadata(&path).is_ok() {
         return replaceable(&path, context);
     }
-    (arg.contains('/') || arg.contains('.')) && creatable(&path, context)
+    let explicit = arg.starts_with('/') || arg.starts_with("./") || arg.starts_with("../");
+    let named = names_are_paths && (arg.contains('/') || arg.contains('.'));
+    (explicit || named) && creatable(&path, context)
+}
+
+/// The command string of `sh -c <string>`, `zsh -lc <string>`: the first
+/// operand after an option cluster containing `c`. Options that take a
+/// value (`-o pipefail`) end the search, which only errs towards no string.
+pub fn shell_command_arg(argv: &[String]) -> Option<&str> {
+    let mut command = false;
+    for arg in argv.iter().skip(1) {
+        if arg == "--" || arg == "-" || !(arg.starts_with('-') || arg.starts_with('+')) {
+            return command.then_some(arg.as_str());
+        }
+        if !arg.starts_with("--") && arg[1..].contains('c') {
+            command = true;
+        }
+    }
+    None
+}
+
+/// Programs that load config, build files or code from the cwd (`git`
+/// trusts a repository owned by `SUDO_UID`, `make` reads the Makefile).
+const CWD_READERS: &[&str] = &[
+    "git",
+    "make",
+    "gmake",
+    "just",
+    "cmake",
+    "ninja",
+    "meson",
+    "mvn",
+    "gradle",
+    "rake",
+    "bundle",
+    "vagrant",
+    "npm",
+    "npx",
+    "pnpm",
+    "yarn",
+    "bun",
+    "cargo",
+    "go",
+    "uv",
+    "poetry",
+    "pytest",
+    "nix-build",
+    "nix-shell",
+    "docker-compose",
+    "terraform",
+    "tofu",
+    "ansible",
+    "ansible-playbook",
+    "mise",
+    "asdf",
+    "direnv",
+];
+
+fn is_python(name: &str) -> bool {
+    name.starts_with("python") || name.starts_with("pypy")
+}
+
+/// A flake reference that resolves against the cwd.
+fn relative_flake(value: &str) -> bool {
+    value.starts_with('.')
+        || value.starts_with("path:.")
+        || !(value.starts_with('/') || value.contains(':'))
+}
+
+/// Whether running `command` reads something from the cwd; only then can a
+/// cwd the user controls change what root does.
+fn program_reads_cwd(command: &[String], resolved: Option<&str>) -> bool {
+    let name = basename(resolved.unwrap_or(&command[0]));
+    let args = &command[1..];
+    let has = |word: &str| args.iter().any(|arg| arg == word);
+    if CWD_READERS.contains(&name) {
+        return true;
+    }
+    if is_python(name) || name == "node" || name == "nodejs" {
+        // Python puts the cwd on `sys.path` for `-c`, `-m` and stdin; node
+        // resolves `node_modules` from it for `-e`, `-p` and stdin.
+        return !matches!(interpreter_source(command), Some((Source::Script, _)));
+    }
+    match name {
+        "nix" => {
+            let operands: Vec<&String> = args.iter().filter(|arg| !arg.starts_with('-')).collect();
+            operands
+                .iter()
+                .skip(1)
+                .any(|arg| arg.starts_with('.') || arg.starts_with("path:."))
+                || (operands.first().is_some_and(|sub| {
+                    ["build", "develop", "run", "shell", "flake"].contains(&sub.as_str())
+                }) && !operands
+                    .iter()
+                    .skip(1)
+                    .any(|arg| arg.contains('#') || arg.contains(':')))
+        }
+        "darwin-rebuild" | "nixos-rebuild" | "home-manager" => {
+            args.iter()
+                .enumerate()
+                .any(|(index, arg)| match arg.strip_prefix("--flake") {
+                    Some("") => args
+                        .get(index + 1)
+                        .is_some_and(|value| relative_flake(value)),
+                    Some(rest) => rest.strip_prefix('=').is_some_and(relative_flake),
+                    None => false,
+                })
+        }
+        "docker" | "podman" => has("compose") || has("build"),
+        "brew" => has("bundle") && !args.iter().any(|arg| arg.starts_with("--file")),
+        _ => false,
+    }
+}
+
+/// A shell command string runs whatever it names; it reads the cwd when it
+/// runs something by a relative path or a program that reads the cwd.
+fn command_string_reads_cwd(script: &str) -> bool {
+    script
+        .split(|c: char| c.is_whitespace() || ";|&()<>`'\"$".contains(c))
+        .filter(|word| !word.is_empty())
+        .any(|word| {
+            let name = basename(word);
+            word.starts_with("./")
+                || word.starts_with("../")
+                || CWD_READERS.contains(&name)
+                || is_python(name)
+                || [
+                    "node",
+                    "nix",
+                    "darwin-rebuild",
+                    "nixos-rebuild",
+                    "home-manager",
+                    "docker",
+                    "podman",
+                ]
+                .contains(&name)
+        })
+}
+
+/// Where an interpreter takes its program from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// In the argv (`-c`, `-e`), so the phone shows it.
+    Inline,
+    /// A module name (`python -m`).
+    Module,
+    /// A script file operand.
+    Script,
+    /// Standard input, which the phone can't show.
+    Stdin,
+}
+
+/// Options that take their value from the next argument, and the letters
+/// that mean "the program follows", per interpreter.
+struct Grammar {
+    inline: &'static str,
+    module: &'static str,
+    valued: &'static [&'static str],
+    /// The option an agent should use instead of stdin.
+    hint: &'static str,
+}
+
+fn grammar(name: &str) -> Option<Grammar> {
+    if KNOWN_SHELLS.contains(&name) {
+        return None;
+    }
+    Some(if is_python(name) {
+        Grammar {
+            inline: "c",
+            module: "m",
+            valued: &["-W", "-X", "-Q"],
+            hint: "-c",
+        }
+    } else {
+        match name {
+            "node" | "nodejs" => Grammar {
+                inline: "ep",
+                module: "",
+                valued: &[
+                    "-r",
+                    "--require",
+                    "--import",
+                    "--loader",
+                    "-C",
+                    "--conditions",
+                ],
+                hint: "-e",
+            },
+            "ruby" => Grammar {
+                inline: "e",
+                module: "",
+                valued: &["-I", "-r", "-C"],
+                hint: "-e",
+            },
+            "perl" => Grammar {
+                inline: "eE",
+                module: "",
+                valued: &["-I", "-M", "-m"],
+                hint: "-e",
+            },
+            "php" => Grammar {
+                inline: "r",
+                module: "",
+                valued: &["-d", "-c", "-z"],
+                hint: "-r",
+            },
+            "osascript" => Grammar {
+                inline: "e",
+                module: "",
+                valued: &["-l", "-s"],
+                hint: "-e",
+            },
+            _ => return None,
+        }
+    })
+}
+
+/// Where `command`'s interpreter reads its program from, with the option
+/// that passes it inline; None for programs that aren't interpreters.
+pub fn interpreter_source(command: &[String]) -> Option<(Source, &'static str)> {
+    let name = basename(&command[0]);
+    if KNOWN_SHELLS.contains(&name) {
+        if shell_command_arg(command).is_some() {
+            return Some((Source::Inline, "-c"));
+        }
+        let mut args = command.iter().skip(1);
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "-" => return Some((Source::Stdin, "-c")),
+                "--" => return Some((args.next().map_or(Source::Stdin, |_| Source::Script), "-c")),
+                "-o" | "+o" | "-O" | "+O" => {
+                    args.next();
+                }
+                _ if arg.starts_with("--") => {}
+                _ if arg.starts_with('-') || arg.starts_with('+') => {
+                    if arg[1..].contains('s') {
+                        return Some((Source::Stdin, "-c"));
+                    }
+                }
+                _ => return Some((Source::Script, "-c")),
+            }
+        }
+        return Some((Source::Stdin, "-c"));
+    }
+    let grammar = grammar(name)?;
+    let mut args = command.iter().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "-" {
+            return Some((Source::Stdin, grammar.hint));
+        }
+        if arg == "--" {
+            return Some((
+                args.next().map_or(Source::Stdin, |_| Source::Script),
+                grammar.hint,
+            ));
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            if ["eval", "print"].contains(&long) && grammar.hint == "-e" && name.starts_with("node")
+            {
+                return Some((Source::Inline, grammar.hint));
+            }
+            if grammar.valued.contains(&arg.as_str()) {
+                args.next();
+            }
+            continue;
+        }
+        let Some(cluster) = arg.strip_prefix('-') else {
+            return Some((Source::Script, grammar.hint));
+        };
+        if grammar.valued.contains(&arg.as_str()) {
+            args.next();
+            continue;
+        }
+        for (offset, letter) in cluster.char_indices() {
+            if grammar.inline.contains(letter) {
+                return Some((Source::Inline, grammar.hint));
+            }
+            if grammar.module.contains(letter) {
+                return Some((Source::Module, grammar.hint));
+            }
+            // A valued option with its value attached ends the cluster.
+            if grammar.valued.contains(&format!("-{letter}").as_str()) {
+                if cluster[offset + letter.len_utf8()..].is_empty() {
+                    args.next();
+                }
+                break;
+            }
+        }
+    }
+    Some((Source::Stdin, grammar.hint))
+}
+
+/// A copy of `name` the user can't change, on the PATH sudo searches or in
+/// the usual system folders, other than `resolved` itself.
+pub fn system_copy(name: &str, resolved: &str, context: &Context) -> Option<String> {
+    let search = &context.search;
+    let mut dirs: Vec<&str> = search
+        .secure_path
+        .iter()
+        .flatten()
+        .chain(search.env_paths.iter().flatten())
+        .flat_map(|path| path.split(':'))
+        .collect();
+    dirs.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+    let current = std::fs::canonicalize(resolved).ok();
+    dirs.into_iter()
+        .filter(|dir| dir.starts_with('/'))
+        .map(|dir| format!("{}/{name}", dir.trim_end_matches('/')))
+        .find(|candidate| {
+            executable_file(Path::new(candidate))
+                && !replaceable(Path::new(candidate), context)
+                && std::fs::canonicalize(candidate).ok() != current
+        })
 }
 
 #[cfg(test)]
@@ -1045,7 +1405,6 @@ mod tests {
             vec![
                 Warning::new("user_writable_program"),
                 Warning::at("user_writable_argument", 1),
-                Warning::new("user_writable_cwd"),
             ]
         );
 
@@ -1061,10 +1420,8 @@ mod tests {
             described.command.argv,
             argv(&["/bin/zsh", "-c", "echo a\\;b"])
         );
-        assert_eq!(
-            described.command.warnings,
-            vec![Warning::new("user_writable_cwd"), Warning::new("shell")]
-        );
+        // The command string is what runs, and it reads nothing from the cwd.
+        assert_eq!(described.command.warnings, vec![]);
 
         let sudo = argv(&["sudo", "-i"]);
         assert_eq!(
@@ -1074,9 +1431,22 @@ mod tests {
 
         let sudo = argv(&["sudo", "sh", "-c", "id"]);
         let described = describe(&sudo, &parse(&sudo), &ctx);
+        assert_eq!(described.command.warnings, vec![]);
+        let sudo = argv(&["sudo", "sh", "-c", "cd /src && make install"]);
+        let described = describe(&sudo, &parse(&sudo), &ctx);
         assert_eq!(
             described.command.warnings,
-            vec![Warning::new("user_writable_cwd"), Warning::new("shell")]
+            vec![Warning::new("user_writable_cwd")]
+        );
+        let sudo = argv(&["sudo", "sh", "x.py"]);
+        let described = describe(&sudo, &parse(&sudo), &ctx);
+        assert_eq!(
+            described.command.warnings,
+            vec![
+                Warning::at("user_writable_argument", 1),
+                Warning::new("user_writable_cwd"),
+                Warning::new("shell")
+            ]
         );
 
         let sudo = argv(&["sudo", "-e", "/etc/hosts"]);
@@ -1385,15 +1755,21 @@ mod tests {
         let cwd = tmp.to_string_lossy().into_owned();
         let shells = vec![];
         let ctx = context(&cwd, &[], &shells);
-        let warnings = |arg: &str| {
-            let sudo = argv(&["sudo", "/bin/cat", arg]);
+        let warnings = |program: &str, arg: &str| {
+            let sudo = argv(&["sudo", program, arg]);
             argument_warnings(describe(&sudo, &parse(&sudo), &ctx).command.warnings)
         };
-        let symlinked = warnings("tool.py");
-        let missing = warnings("later.py");
+        let results = [
+            warnings("/bin/cat", "tool.py"),
+            warnings("/bin/cat", "./later.py"),
+            // An interpreter runs whatever appears under that name.
+            warnings("python3", "later.py"),
+            // To other programs a missing relative word is a name.
+            warnings("/bin/cat", "later.py"),
+        ];
         std::fs::remove_dir_all(&tmp).unwrap();
-        let expected = vec![Warning::at("user_writable_argument", 1)];
-        assert_eq!((symlinked, missing), (expected.clone(), expected));
+        let flagged = vec![Warning::at("user_writable_argument", 1)];
+        assert_eq!(results, [flagged.clone(), flagged.clone(), flagged, vec![]]);
     }
 
     /// Review 2: `/dev/null` is 0666, so it was flagged on every
@@ -1510,18 +1886,48 @@ mod tests {
                 .contains(&Warning::new("user_writable_cwd"))
         };
         let proj = tmp.join("proj");
-        let results = [
-            warned(&proj, &["sudo", "/usr/bin/true"]),
-            warned(&proj, &["sudo", "-s"]),
-            warned(&proj, &["sudo", "-E", "make"]),
-            // A login shell starts in the target's home.
-            warned(&proj, &["sudo", "-i"]),
-            // sudoedit runs the editor as the user.
-            warned(&proj, &["sudo", "-e", "/etc/hosts"]),
-            warned(Path::new("/"), &["sudo", "/usr/bin/true"]),
+        let in_proj = |sudo: &[&str]| warned(&proj, sudo);
+        let reads = [
+            &["sudo", "git", "clean", "-fdx"][..],
+            &["sudo", "make", "install"],
+            &["sudo", "-E", "make"],
+            &["sudo", "-s"],
+            &["sudo", "python3", "-c", "import x"],
+            &["sudo", "python3", "-m", "pip", "list"],
+            &["sudo", "nix", "build", ".#x"],
+            &["sudo", "nix", "build"],
+            &["sudo", "darwin-rebuild", "switch", "--flake", ".#mac"],
+            &["sudo", "nixos-rebuild", "switch", "--flake=.#box"],
+            &["sudo", "docker", "compose", "up"],
+            &["sudo", "sh", "-c", "cd sub && ./configure"],
         ];
+        // Programs that don't look at the cwd: 58% of real agent sudo.
+        let ignores = [
+            &["sudo", "/usr/bin/true"][..],
+            &["sudo", "systemctl", "restart", "nginx.service"],
+            &["sudo", "launchctl", "kickstart", "system/com.apple.mds"],
+            &["sudo", "python3", "/etc/t3/x.py"],
+            &["sudo", "nix", "build", "nixpkgs#hello"],
+            &[
+                "sudo",
+                "darwin-rebuild",
+                "switch",
+                "--flake",
+                "/etc/nix-darwin#mac",
+            ],
+            &["sudo", "sh", "-c", "echo x > /etc/f"],
+            // A login shell starts in the target's home.
+            &["sudo", "-i"],
+            // sudoedit runs the editor as the user.
+            &["sudo", "-e", "/etc/hosts"],
+        ];
+        let read: Vec<bool> = reads.iter().map(|sudo| in_proj(sudo)).collect();
+        let ignored: Vec<bool> = ignores.iter().map(|sudo| in_proj(sudo)).collect();
+        let from_root = warned(Path::new("/"), &["sudo", "make", "install"]);
         std::fs::remove_dir_all(&tmp).unwrap();
-        assert_eq!(results, [true, true, true, false, false, false]);
+        assert_eq!(read, vec![true; reads.len()]);
+        assert_eq!(ignored, vec![false; ignores.len()]);
+        assert!(!from_root);
     }
 
     #[test]

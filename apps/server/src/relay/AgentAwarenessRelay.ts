@@ -73,6 +73,12 @@ function isTurnItemPayload(
   );
 }
 
+/** Turn items the thread shell folds into its pending request (ProjectionStore). */
+const PENDING_REQUEST_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
+  "secret_request",
+  "elevation_request",
+]);
+
 function shouldPublishAgentAwarenessEvent(
   event: Pick<OrchestrationV2DomainEvent, "type"> & { readonly payload?: unknown },
 ): boolean {
@@ -125,7 +131,11 @@ function shouldPublishAgentAwarenessEvent(
     case "provider-session.detached":
     case "provider-turn.updated":
     case "turn-item.updated":
-      return isTurnItemPayload(event.payload) && turnItemUpdateCanEndBackgroundWork(event.payload);
+      return (
+        isTurnItemPayload(event.payload) &&
+        (turnItemUpdateCanEndBackgroundWork(event.payload) ||
+          PENDING_REQUEST_TURN_ITEM_TYPES.has(event.payload.type))
+      );
     case "message.updated":
     case "plan.updated":
     case "checkpoint-scope.created":

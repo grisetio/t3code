@@ -61,7 +61,13 @@ export function parseModuleLine(
 }
 
 export type ServerMessage =
-  | { readonly type: "hello_reply"; readonly v: 1; readonly decision: "mine" | "not_mine" }
+  | {
+      readonly type: "hello_reply";
+      readonly v: 1;
+      readonly decision: "mine" | "not_mine";
+      /** The server ran this sudo itself, so the module skips its agent hints. */
+      readonly ownSudo?: true;
+    }
   | ({ readonly type: "response"; readonly decision: "approve" } & ElevationSignedResponse)
   | { readonly type: "response"; readonly decision: "deny" }
   | { readonly type: "cancel"; readonly reason: "shutdown" | "interrupted" };

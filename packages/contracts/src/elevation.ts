@@ -2,7 +2,13 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Base64Url from "effect/encoding/Base64Url";
 
-import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import {
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnItemId,
+} from "./baseSchemas.ts";
 
 // Formats are specified in docs/internals/device-approval.md; the shared test
 // vectors in packages/contracts/test-vectors/device-approval.json pin them.
@@ -58,6 +64,20 @@ export const ElevationPayload = Schema.Struct({
   cwd: Schema.String,
   service: Schema.String,
   keyIds: Schema.Array(ElevationKeyId),
+  /**
+   * The kernel session the approval also covers: up to `maxUses` other sudos
+   * written in `command` pass without the phone while its leader lives,
+   * within the window. Absent when only this sudo is approved.
+   */
+  session: Schema.optionalKey(
+    Schema.Struct({
+      id: PositiveInt,
+      leaderStart: NonNegativeInt,
+      maxUses: NonNegativeInt,
+      /** The session leader's `-c` string, read from the kernel. Older modules omit it. */
+      command: Schema.optionalKey(Schema.String),
+    }),
+  ),
 }).check(
   Schema.makeFilter(
     (payload) =>
@@ -244,6 +264,11 @@ export const ElevationPendingRequest = Schema.Struct({
   turnItemId: Schema.NullOr(TurnItemId),
   payload: ElevationBase64Url,
   explanation: Schema.NullOr(Schema.String),
+  /** The agent's shell command line from its tool call; unverified. */
+  agentCommand: Schema.optionalKey(Schema.String),
+  changes: Schema.optionalKey(
+    Schema.Struct({ files: NonNegativeInt, additions: NonNegativeInt, deletions: NonNegativeInt }),
+  ),
   createdAt: Schema.DateTimeUtc,
 });
 export type ElevationPendingRequest = typeof ElevationPendingRequest.Type;
@@ -271,6 +296,8 @@ export const ElevationCheck = Schema.Struct({
   id: Schema.String,
   ok: Schema.Boolean,
   message: Schema.String,
+  /** Who repairs it when failing: T3 itself, or an agent given the diagnosis. Absent when ok. */
+  fixBy: Schema.optionalKey(Schema.Literals(["t3", "agent"])),
 });
 export type ElevationCheck = typeof ElevationCheck.Type;
 

@@ -1484,6 +1484,7 @@ function renderFeedEntry(
         environmentId={props.environmentId}
         projectedItem={entry.activities[0]!.projectedItem}
         iconColor={iconSubtleColor}
+        runActive={props.unsettledTurnId !== null && entry.runId === props.unsettledTurnId}
       />
     );
   }

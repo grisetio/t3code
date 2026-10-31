@@ -1580,6 +1580,14 @@ export const OrchestrationV2ElevationResolvedBy = Schema.Struct({
 });
 export type OrchestrationV2ElevationResolvedBy = typeof OrchestrationV2ElevationResolvedBy.Type;
 
+/** Uncommitted changes in the checkout at the request's cwd when it arrived. */
+export const OrchestrationV2ElevationChanges = Schema.Struct({
+  files: NonNegativeInt,
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type OrchestrationV2ElevationChanges = typeof OrchestrationV2ElevationChanges.Type;
+
 /**
  * Display fields mirror the payload for lists and history. A client that signs
  * renders from `payload` instead (docs/internals/device-approval.md).
@@ -1596,6 +1604,10 @@ const OrchestrationV2ElevationRequestFields = {
   warnings: Schema.Array(ElevationWarning),
   /** From the agent's tool call; unverified. */
   explanation: Schema.NullOr(Schema.String),
+  /** The agent's shell command line from its tool call; unverified. */
+  agentCommand: Schema.optionalKey(Schema.String),
+  /** Absent when the checkout is clean or isn't a git repository. */
+  changes: Schema.optionalKey(OrchestrationV2ElevationChanges),
   /** The exact signed bytes, null when the module could not build them (see `failure`). */
   payload: Schema.NullOr(ElevationBase64Url),
   elevationStatus: OrchestrationV2ElevationRequestStatus,
@@ -2068,6 +2080,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   /** False for async questions the run keeps working past. Absent from older servers. */
   blocking: Schema.optional(Schema.Boolean),
+  /** True for a device-approval sudo request, which reads as a `command` approval otherwise. */
+  elevation: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2PendingRuntimeRequestSummary =
   typeof OrchestrationV2PendingRuntimeRequestSummary.Type;
@@ -3579,6 +3593,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     host: Schema.String,
     warnings: Schema.Array(ElevationWarning),
     explanation: Schema.NullOr(Schema.String),
+    agentCommand: Schema.optionalKey(Schema.String),
+    changes: Schema.optionalKey(OrchestrationV2ElevationChanges),
     payload: Schema.NullOr(ElevationBase64Url),
     elevationStatus: Schema.Literals(["pending", "cancelled"]),
     failure: Schema.optionalKey(OrchestrationV2ElevationRequestFailure),

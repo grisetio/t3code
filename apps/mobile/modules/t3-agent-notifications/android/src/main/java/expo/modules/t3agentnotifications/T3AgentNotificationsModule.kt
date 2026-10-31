@@ -4,12 +4,27 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class T3AgentNotificationsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3AgentNotifications")
+
+    // A signal only: JS reads the tap with `consumeSudoApprovalOpen`, which also covers cold starts.
+    Events("onSudoApprovalOpened")
+
+    OnCreate {
+      SudoApprovals.onLaunch = { sendEvent("onSudoApprovalOpened", emptyMap<String, Any>()) }
+    }
+
+    OnDestroy { SudoApprovals.onLaunch = null }
+
+    // An app already running gets a lock-screen tap here; a cold start reads it from its intent.
+    OnNewIntent { intent ->
+      appContext.currentActivity?.let { SudoApprovals.onNewIntent(it, intent) }
+    }
 
     Function("configure") {
         deviceId: String,
@@ -49,6 +64,39 @@ class T3AgentNotificationsModule : Module() {
         } catch (_: ActivityNotFoundException) {
           false
         }
+      }
+    }
+
+    // Sudo approvals: a tapped push, optionally over the lock screen.
+
+    Function("setSudoApprovalMachines") { machines: Map<String, String> ->
+      appContext.reactContext?.let { SudoApprovals.setMachines(it, machines) }
+    }
+
+    Function("clearSudoApprovals") {
+      appContext.reactContext?.let { SudoApprovals.clear(it) }
+    }
+
+    Function("consumeSudoApprovalOpen") { SudoApprovals.consume()?.toMap() }
+
+    Function("isOverLockScreen") { SudoApprovals.overLockScreen() }
+
+    Function("lockScreenHidesSensitiveContent") {
+      appContext.reactContext?.let { SudoApprovals.hidesSensitiveContent(it) } ?: true
+    }
+
+    Function("leaveLockScreen") {
+      appContext.currentActivity?.let { activity ->
+        activity.runOnUiThread { SudoApprovals.end(activity, leave = true) }
+      }
+    }
+
+    AsyncFunction("requestUnlock") { promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.resolve(false)
+      } else {
+        activity.runOnUiThread { SudoApprovals.requestUnlock(activity) { promise.resolve(it) } }
       }
     }
   }

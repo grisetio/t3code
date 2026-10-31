@@ -1,7 +1,9 @@
 //! `pam_t3_elevation`: approves one `sudo` with a signature from an enrolled
 //! device. It only adds a way to authenticate. Anything not from T3 returns
 //! PAM_IGNORE and sudo continues unchanged. The PAM conversation is never
-//! used: on classic sudo and macOS its text lands in the command's stdout.
+//! used: on classic sudo and macOS its text lands in the command's stdout,
+//! and sudo-rs drops it without a terminal. A line for the agent (a decline,
+//! an expiry, a deny) goes straight to sudo's stderr instead.
 //!
 //! Linux-PAM: `auth [success=done ignore=ignore default=die] <path>` first.
 //! macOS (`/etc/pam.d/sudo_local`): `auth sufficient <path>` then
@@ -72,6 +74,20 @@ unsafe fn has_arg(argc: c_int, argv: *const *const c_char, wanted: &str) -> bool
     })
 }
 
+/// The line and its newline go in one buffer, so one `write` normally
+/// carries both and sudo's own message can't land in between.
+fn write_stderr(line: &str) {
+    let text = format!("{line}\n");
+    let mut rest = text.as_bytes();
+    while !rest.is_empty() {
+        let written = unsafe { libc::write(2, rest.as_ptr().cast(), rest.len()) };
+        if written <= 0 {
+            return;
+        }
+        rest = &rest[written as usize..];
+    }
+}
+
 unsafe fn authenticate(
     pamh: *mut pam::pam_handle,
     argc: c_int,
@@ -104,7 +120,11 @@ unsafe fn authenticate(
             })
             .collect(),
     };
-    let code = match flow::authenticate(&invocation, &Environment::system()) {
+    let decision = flow::authenticate(&invocation, &Environment::system());
+    if let Some(notice) = &decision.notice {
+        write_stderr(notice);
+    }
+    let code = match decision.outcome {
         Outcome::Approved => pam::PAM_SUCCESS,
         Outcome::Ignore => pam::PAM_IGNORE,
         Outcome::Fail => pam::PAM_CRED_INSUFFICIENT,

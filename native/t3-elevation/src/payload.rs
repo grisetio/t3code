@@ -34,6 +34,23 @@ pub struct Command {
     pub warnings: Vec<Warning>,
 }
 
+/// The kernel session an approval also covers: later sudos written in
+/// `command` pass without the phone while the leader lives, within the
+/// window, at most `max_uses` of them. Absent when the module approves only
+/// this sudo.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Session {
+    /// The session id, which is the leader's pid.
+    pub id: i32,
+    /// The leader's start time: clock ticks since boot (Linux) or Unix
+    /// microseconds (macOS).
+    pub leader_start: u64,
+    pub max_uses: u32,
+    /// The leader's `-c` string, read from the kernel. Payloads from before
+    /// it was signed lack it.
+    pub command: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Payload {
     pub nonce: [u8; 32],
@@ -50,6 +67,7 @@ pub struct Payload {
     pub cwd: String,
     pub service: String,
     pub key_ids: Vec<String>,
+    pub session: Option<Session>,
 }
 
 impl Payload {
@@ -94,6 +112,17 @@ impl Payload {
         json::push_str(&mut out, &self.service);
         out.push_str(",\"keyIds\":");
         json::push_str_array(&mut out, &self.key_ids);
+        if let Some(session) = &self.session {
+            out.push_str(&format!(
+                ",\"session\":{{\"id\":{},\"leaderStart\":{},\"maxUses\":{}",
+                session.id, session.leader_start, session.max_uses
+            ));
+            if let Some(command) = &session.command {
+                out.push_str(",\"command\":");
+                json::push_str(&mut out, command);
+            }
+            out.push('}');
+        }
         out.push('}');
         out.into_bytes()
     }
@@ -188,7 +217,7 @@ fn b64_of_len(value: &Value, chars: usize) -> Option<String> {
 }
 
 fn fields(object: &Map<String, Value>) -> Option<Payload> {
-    if !exact_keys(object, &PAYLOAD_KEYS, &[]) {
+    if !exact_keys(object, &PAYLOAD_KEYS, &["session"]) {
         return None;
     }
     let nonce_text = b64_of_len(&object["nonce"], 43)?;
@@ -231,6 +260,26 @@ fn fields(object: &Map<String, Value>) -> Option<Payload> {
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let session = match object.get("session") {
+        None => None,
+        Some(value) => {
+            let session = value.as_object()?;
+            if !exact_keys(session, &["id", "leaderStart", "maxUses"], &["command"]) {
+                return None;
+            }
+            Some(Session {
+                id: i32::try_from(non_negative(&session["id"])?)
+                    .ok()
+                    .filter(|id| *id > 0)?,
+                leader_start: non_negative(&session["leaderStart"])?,
+                max_uses: u32::try_from(non_negative(&session["maxUses"])?).ok()?,
+                command: match session.get("command") {
+                    Some(command) => Some(command.as_str()?.to_string()),
+                    None => None,
+                },
+            })
+        }
+    };
     let key_ids = strings(&object["keyIds"])?;
     if !key_ids.iter().all(|id| crate::keys::is_key_id(id)) {
         return None;
@@ -260,6 +309,7 @@ fn fields(object: &Map<String, Value>) -> Option<Payload> {
         cwd: object["cwd"].as_str()?.to_string(),
         service: object["service"].as_str()?.to_string(),
         key_ids,
+        session,
     })
 }
 

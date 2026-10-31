@@ -5,7 +5,7 @@ Link each PR you create, take over, or push to: one link_pull_request per PR, fu
 </pull_request_linking>`;
 
 export const DEVICE_APPROVAL_INSTRUCTIONS =
-  "sudo commands are approved by the user on their phone, one command per approval; run them directly (no TTY needed); if denied, do not retry; ask the user.";
+  "sudo goes to the user's phone for approval. Run sudo directly: no TTY or password is needed, and one approval covers every sudo within the same command. If sudo fails with a hint starting with `t3:`, follow it. If the request is denied or expires, don't retry on your own: ask the user in the chat and wait for their answer. Never pipe a password into sudo.";
 
 /**
  * Whether this environment sends agents' `sudo` to a device for approval.

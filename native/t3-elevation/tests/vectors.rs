@@ -5,7 +5,7 @@ use serde_json::Value;
 use t3_elevation::attestation::Trust;
 use t3_elevation::keys::{self, EnrolledKey};
 use t3_elevation::verify::{self, Response};
-use t3_elevation::{b64, enroll, escape, payload};
+use t3_elevation::{b64, enroll, escape, payload, shell_words};
 
 fn vectors() -> Value {
     let path = concat!(
@@ -278,5 +278,30 @@ fn helper_input() {
         let body = enroll::unframe_input(&mut input).map(String::from_utf8_lossy);
         let expected = vector["body"].as_str().map(std::borrow::Cow::Borrowed);
         assert_eq!(body, expected, "{name}");
+    }
+}
+
+#[test]
+fn session_commands() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../packages/contracts/test-vectors/elevation-commands.json"
+    );
+    let vectors: Value = serde_json::from_slice(&std::fs::read(path).expect("vectors")).unwrap();
+    for vector in vectors["commands"].as_array().unwrap() {
+        let name = str_of(vector, "name");
+        let command = str_of(vector, "command");
+        assert_eq!(
+            shell_words::agent_command(command),
+            str_of(vector, "agentCommand"),
+            "{name}"
+        );
+        let calls = shell_words::sudo_calls(command).map(|calls| {
+            calls
+                .into_iter()
+                .map(|call| serde_json::json!({ "args": call.args, "execTail": call.exec_tail }))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(serde_json::json!(calls), vector["sudos"], "{name}");
     }
 }
