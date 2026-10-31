@@ -472,14 +472,8 @@ jobs:
           cargo clippy --locked --workspace --all-targets --all-features
           --manifest-path native/t3-elevation/Cargo.toml -- -D warnings
 
-      # t3-elevation's install and flow tests build a fake root that must pass
-      # the module's owner and mode checks, which reject /tmp (1777) and
-      # group-writable directories.
       - name: Test Rust crates
         run: |
-          umask 022
-          export TMPDIR="$RUNNER_TEMP/rust-tests"
-          mkdir -m 700 "$TMPDIR"
           for crate in resource-monitor kde-snap-shot hyprland-snap-shot t3-elevation; do
             cargo test --locked --workspace --manifest-path "native/$crate/Cargo.toml"
           done

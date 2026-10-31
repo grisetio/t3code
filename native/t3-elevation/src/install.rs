@@ -1481,6 +1481,7 @@ pub fn revoke(layout: &Layout, user: &str, key_id: Option<&str>) -> Result<Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fs;
 
     const UBUNTU_SUDO: &str = "#%PAM-1.0\n\n# Set up user limits from /etc/security/limits.conf.\nsession    required   pam_limits.so\n\n@include common-auth\n@include common-account\n@include common-session-noninteractive\n";
     const FEDORA_SUDO_I: &str = "#%PAM-1.0\nauth       include      sudo\naccount    include      sudo\nsession    optional     pam_keyinit.so force revoke\n";
@@ -1500,26 +1501,20 @@ mod tests {
     }
 
     impl Root {
-        fn new(name: &str, platform: Platform, files: &[(&str, &str)]) -> Self {
-            let root =
-                std::env::temp_dir().join(format!("t3e-install-{}-{name}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&root);
-            let uid = unsafe { libc::getuid() };
+        fn new(platform: Platform, files: &[(&str, &str)]) -> Self {
             let layout = Layout {
-                root,
-                policy: Policy {
-                    owners: vec![0, uid],
-                },
+                root: test_fs::private_dir(),
+                policy: test_fs::policy(),
                 platform,
                 chown_root: false,
                 visudo: None,
                 selinux_confined: false,
             };
             for dir in ["/etc/pam.d", "/etc/sudoers.d", "/usr/local/lib"] {
-                std::fs::create_dir_all(layout.path(dir)).unwrap();
+                test_fs::create_dirs(&layout.path(dir));
             }
             for (path, text) in files {
-                std::fs::write(layout.path(path), text).unwrap();
+                test_fs::write(&layout.path(path), text);
             }
             Self { layout }
         }
@@ -1586,7 +1581,6 @@ mod tests {
     #[test]
     fn linux_install_then_uninstall_restores_bytes() {
         let root = Root::new(
-            "linux",
             Platform::Linux,
             &[
                 ("/etc/pam.d/sudo", UBUNTU_SUDO),
@@ -1649,7 +1643,6 @@ mod tests {
     #[test]
     fn linux_sudo_i_without_include_gets_its_own_line() {
         let root = Root::new(
-            "arch",
             Platform::Linux,
             &[
                 ("/etc/pam.d/sudo", ARCH_SUDO_I),
@@ -1668,18 +1661,17 @@ mod tests {
 
     #[test]
     fn managed_or_foreign_files_block_the_whole_install() {
-        let root = Root::new("blocked", Platform::Linux, &[("/etc/sudoers", SUDOERS)]);
-        std::fs::write(root.layout.root.join("store-sudo"), UBUNTU_SUDO).unwrap();
+        let root = Root::new(Platform::Linux, &[("/etc/sudoers", SUDOERS)]);
+        test_fs::write(&root.layout.root.join("store-sudo"), UBUNTU_SUDO);
         std::os::unix::fs::symlink(
             root.layout.root.join("store-sudo"),
             root.layout.path("/etc/pam.d/sudo"),
         )
         .unwrap();
-        std::fs::write(
-            root.layout.path(SUDOERS_DROP_IN),
+        test_fs::write(
+            &root.layout.path(SUDOERS_DROP_IN),
             "Defaults:alice !requiretty\n",
-        )
-        .unwrap();
+        );
         let before = root.snapshot();
         let plan = plan_install(&root.layout, "alice", "/s.sock", 100, &root.sources());
         let blocked: Vec<&str> = plan
@@ -1698,7 +1690,6 @@ mod tests {
             linux_pam_line("/opt/pam_t3_elevation.so")
         );
         let root = Root::new(
-            "late",
             Platform::Linux,
             &[("/etc/pam.d/sudo", &late), ("/etc/sudoers", SUDOERS)],
         );
@@ -1715,7 +1706,6 @@ mod tests {
             linux_pam_line(module)
         );
         let root = Root::new(
-            "external",
             Platform::Linux,
             &[(
                 "/etc/sudoers",
@@ -1725,22 +1715,21 @@ mod tests {
             )],
         );
         // Managed elsewhere, like NixOS's /etc/pam.d -> /etc/static links.
-        std::fs::create_dir_all(root.layout.path("/etc/static/pam.d")).unwrap();
-        std::fs::write(root.layout.path("/etc/static/pam.d/sudo"), &pam).unwrap();
+        test_fs::create_dirs(&root.layout.path("/etc/static/pam.d"));
+        test_fs::write(&root.layout.path("/etc/static/pam.d/sudo"), &pam);
         std::os::unix::fs::symlink(
             root.layout.path("/etc/static/pam.d/sudo"),
             root.layout.path("/etc/pam.d/sudo"),
         )
         .unwrap();
-        std::fs::create_dir_all(root.layout.path("/nix/store/abc-t3/lib/security")).unwrap();
-        std::fs::write(root.layout.path(module), MODULE).unwrap();
-        std::fs::create_dir_all(root.layout.path("/etc/t3-elevation/users")).unwrap();
-        std::fs::create_dir_all(root.layout.path("/etc/t3-elevation/keys/alice")).unwrap();
-        std::fs::write(
-            root.layout.path("/etc/t3-elevation/users/alice.toml"),
+        test_fs::create_dirs(&root.layout.path("/nix/store/abc-t3/lib/security"));
+        test_fs::write(&root.layout.path(module), MODULE);
+        test_fs::create_dirs(&root.layout.path("/etc/t3-elevation/users"));
+        test_fs::create_dirs(&root.layout.path("/etc/t3-elevation/keys/alice"));
+        test_fs::write(
+            &root.layout.path("/etc/t3-elevation/users/alice.toml"),
             "version = 1\nenabled = true\nsocket = \"/s.sock\"\n",
-        )
-        .unwrap();
+        );
         let status = status(&root.layout, "alice", &root.sources());
         assert!(
             status.checks.iter().all(|check| check.ok),
@@ -1759,7 +1748,6 @@ mod tests {
     #[test]
     fn sudoers_without_the_environment_settings_gets_the_drop_in() {
         let root = Root::new(
-            "envkeep",
             Platform::Linux,
             &[(
                 "/etc/sudoers",
@@ -1794,7 +1782,7 @@ mod tests {
         ] {
             assert!(contents.contains(line), "{contents}");
         }
-        std::fs::write(root.layout.path(SUDOERS_DROP_IN), &contents).unwrap();
+        test_fs::write(&root.layout.path(SUDOERS_DROP_IN), &contents);
         assert!(sudoers_has_settings(
             &root.layout.path("/etc/sudoers"),
             "alice"
@@ -1804,16 +1792,14 @@ mod tests {
     #[test]
     fn module_without_a_compatible_marker_fails_status() {
         let root = Root::new(
-            "marker",
             Platform::Linux,
             &[("/etc/pam.d/sudo", UBUNTU_SUDO), ("/etc/sudoers", SUDOERS)],
         );
         root.install();
-        std::fs::write(
-            root.layout.path(MODULE_INSTALL_PATH),
+        test_fs::write(
+            &root.layout.path(MODULE_INSTALL_PATH),
             b"\0t3-elevation-module protocol=2\0",
-        )
-        .unwrap();
+        );
         assert!(!root.check("module"));
         assert_eq!(
             module_protocol(&root.layout.path(MODULE_INSTALL_PATH)),
@@ -1824,13 +1810,12 @@ mod tests {
     #[test]
     fn uninstall_keeps_files_changed_since_install() {
         let root = Root::new(
-            "changed",
             Platform::Linux,
             &[("/etc/pam.d/sudo", UBUNTU_SUDO), ("/etc/sudoers", SUDOERS)],
         );
         root.install();
         let edited = format!("{}# edited by hand\n", root.read("/etc/pam.d/sudo"));
-        std::fs::write(root.layout.path("/etc/pam.d/sudo"), &edited).unwrap();
+        test_fs::write(&root.layout.path("/etc/pam.d/sudo"), &edited);
         let reverted = uninstall(&root.layout, "alice").unwrap();
         assert_eq!(reverted.kept[0].path, "/etc/pam.d/sudo");
         assert_eq!(root.read("/etc/pam.d/sudo"), edited);
@@ -1841,7 +1826,6 @@ mod tests {
     fn macos_creates_sudo_local_gate() {
         let sudo = "# sudo: auth account password session\nauth       include        sudo_local\nauth       sufficient     pam_smartcard.so\n";
         let root = Root::new(
-            "macos",
             Platform::Macos,
             &[
                 ("/etc/pam.d/sudo", sudo),
@@ -1862,7 +1846,6 @@ mod tests {
         let sudo = "auth       include        sudo_local\n";
         let local = "# sudo_local: local config file which survives system update\nauth       sufficient     pam_tid.so\n";
         let root = Root::new(
-            "macos-local",
             Platform::Macos,
             &[
                 ("/etc/pam.d/sudo", sudo),
@@ -1882,7 +1865,6 @@ mod tests {
     #[test]
     fn macos_without_sudo_local_include_is_blocked() {
         let root = Root::new(
-            "macos-old",
             Platform::Macos,
             &[("/etc/pam.d/sudo", "auth sufficient pam_smartcard.so\n")],
         );
@@ -1893,7 +1875,6 @@ mod tests {
     #[test]
     fn confined_selinux_users_are_refused() {
         let mut root = Root::new(
-            "selinux",
             Platform::Linux,
             &[("/etc/pam.d/sudo", UBUNTU_SUDO), ("/etc/sudoers", SUDOERS)],
         );
@@ -1918,7 +1899,6 @@ mod tests {
     #[test]
     fn revoke_removes_one_or_all() {
         let root = Root::new(
-            "revoke",
             Platform::Linux,
             &[("/etc/pam.d/sudo", UBUNTU_SUDO), ("/etc/sudoers", SUDOERS)],
         );

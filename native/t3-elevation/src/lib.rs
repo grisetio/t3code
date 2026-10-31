@@ -21,6 +21,8 @@ pub mod socket;
 pub mod sudo_argv;
 pub mod sudoers;
 pub mod sys;
+#[cfg(test)]
+mod test_fs;
 pub mod verify;
 
 pub const PROTOCOL_VERSION: u32 = 1;

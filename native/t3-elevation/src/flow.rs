@@ -445,6 +445,7 @@ fn target_login_shell(run_as: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::fixture_server::{self, Mode, vector_key};
+    use crate::test_fs;
     use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::net::UnixListener;
 
@@ -460,38 +461,34 @@ mod tests {
         }
     }
 
-    fn setup(name: &str) -> Setup {
+    fn setup() -> Setup {
         let uid = unsafe { libc::getuid() };
         let user = sys::user_by_uid(uid).unwrap().name;
-        let dir = std::env::temp_dir().join(format!("t3e-flow-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = test_fs::private_dir();
         let state = dir.join("state");
-        std::fs::create_dir_all(state.join("users")).unwrap();
-        std::fs::create_dir_all(state.join("keys").join(&user)).unwrap();
+        test_fs::create_dirs(&state.join("users"));
+        test_fs::create_dirs(&state.join("keys").join(&user));
         let config = format!(
             "version = 1\nenabled = true\nsocket = \"{}\"\n",
             dir.join("s.sock").display()
         );
-        std::fs::write(state.join("users").join(format!("{user}.toml")), config).unwrap();
+        test_fs::write(&state.join("users").join(format!("{user}.toml")), config);
         let key = vector_key("enrolled");
         let file = serde_json::json!({
             "version": 1, "keyId": key.key_id, "alg": "es256", "publicKey": crate::b64::encode(&key.spki),
             "label": "test", "securityLevel": "tee", "enrolledAt": "2026-10-30T12:00:00Z",
             "attestationSummary": { "packageName": "p", "signingCertDigest": "d", "devAttestation": true }
         });
-        std::fs::write(
-            state
+        test_fs::write(
+            &state
                 .join("keys")
                 .join(&user)
                 .join(format!("{}.json", key.key_id)),
             file.to_string(),
-        )
-        .unwrap();
+        );
         let environment = Environment {
             state_dir: state,
-            policy: Policy {
-                owners: vec![0, uid],
-            },
+            policy: test_fs::policy(),
             sudoers: dir.join("no-sudoers"),
             shells: PathBuf::from("/etc/shells"),
             chain_start: unsafe { libc::getppid() },
@@ -536,7 +533,7 @@ mod tests {
 
     #[test]
     fn approves_only_a_valid_signature() {
-        let setup = setup("approve");
+        let setup = setup();
         let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "true"]));
         assert_eq!(outcome, Outcome::Approved);
         assert_eq!(exchange.result.as_deref(), Some("approved"));
@@ -561,7 +558,7 @@ mod tests {
             ("cancel", Mode::Cancel, None),
             ("close", Mode::Close, None),
         ] {
-            let setup = setup(name);
+            let setup = setup();
             let (outcome, exchange) = setup.run(mode, &setup.invocation(&["sudo", "true"]));
             assert_eq!(outcome, Outcome::Fail, "{name}");
             assert_eq!(exchange.result.as_deref(), result, "{name}");
@@ -570,7 +567,7 @@ mod tests {
 
     #[test]
     fn expiry_fails_the_stack() {
-        let mut setup = setup("expire");
+        let mut setup = setup();
         setup.environment.window_override = Some(1);
         let (outcome, exchange) = setup.run(Mode::Expire, &setup.invocation(&["sudo", "true"]));
         assert_eq!(outcome, Outcome::Fail);
@@ -580,7 +577,7 @@ mod tests {
     #[test]
     fn not_ours_is_ignored_unless_non_interactive() {
         for (name, mode) in [("notmine", Mode::NotMine), ("garbage", Mode::Garbage)] {
-            let setup = setup(name);
+            let setup = setup();
             assert_eq!(
                 setup.run(mode, &setup.invocation(&["sudo", "true"])).0,
                 Outcome::Ignore,
@@ -594,7 +591,7 @@ mod tests {
                 "{name}"
             );
         }
-        let setup = setup("down");
+        let setup = setup();
         assert_eq!(
             authenticate(&setup.invocation(&["sudo", "true"]), &setup.environment),
             Outcome::Ignore
@@ -616,14 +613,14 @@ mod tests {
             &["sudo-rs", "-n", "true"],
             &[],
         ] {
-            let setup = setup("argv0");
+            let setup = setup();
             assert_eq!(
                 setup.run(Mode::Approve, &setup.invocation(argv)).0,
                 Outcome::Ignore,
                 "{argv:?}"
             );
         }
-        let setup = setup("argv0ok");
+        let setup = setup();
         assert_eq!(
             setup
                 .run(
@@ -637,7 +634,7 @@ mod tests {
 
     #[test]
     fn unconfigured_users_are_always_ignored() {
-        let setup = setup("noconfig");
+        let setup = setup();
         std::fs::remove_file(
             setup
                 .environment
@@ -657,7 +654,7 @@ mod tests {
 
     #[test]
     fn unsafe_or_foreign_contexts_never_reach_the_socket() {
-        let setup = setup("unsafe");
+        let setup = setup();
         let config = setup
             .environment
             .state_dir
@@ -697,7 +694,7 @@ mod tests {
 
     #[test]
     fn unrepresentable_or_huge_requests_fail_with_a_result() {
-        let setup = setup("encoding");
+        let setup = setup();
         let mut invocation = setup.invocation(&["sudo", "true"]);
         invocation.argv.push(vec![0xff, 0xfe]);
         let (outcome, exchange) = setup.run(Mode::Approve, &invocation);
