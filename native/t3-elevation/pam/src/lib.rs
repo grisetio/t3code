@@ -91,7 +91,10 @@ unsafe fn authenticate(
         pam_user: unsafe { item(pamh, pam::PAM_USER) },
         cwd: t3_elevation::sys::cwd(),
         env_shell: std::env::var("SHELL").ok(),
-        env_path: std::env::var("PATH").ok(),
+        env_paths: std::env::vars_os()
+            .filter(|(name, _)| name == "PATH")
+            .map(|(_, value)| value.into_encoded_bytes())
+            .collect(),
     };
     let code = match flow::authenticate(&invocation, &Environment::system()) {
         Outcome::Approved => pam::PAM_SUCCESS,

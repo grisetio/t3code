@@ -41,8 +41,8 @@ at most **16384 bytes**. Keys appear in this order, with no others:
 | `issuedAt`, `expiresAt` | int                                | Module clock. `0 < expiresAt − issuedAt ≤ 300`.                                                                                                                    |
 | `host`                  | `{ name, machineId }`              | `name` is `gethostname()`. `machineId` is base64url `SHA-256` of `/etc/machine-id` without its trailing newline (Linux) or of the `IOPlatformUUID` string (macOS). |
 | `user`, `uid`           | string, int ≥ 0                    | The requesting user (real uid).                                                                                                                                    |
-| `runAs`                 | string                             | Target user (`-u`, default `root`).                                                                                                                                |
-| `runAsGroup`            | string \| null                     | Target group from `-g`, else `null`.                                                                                                                               |
+| `runAs`                 | string                             | Target user (`-u`, default `root`). An id names its user: `#0 (root)`.                                                                                             |
+| `runAsGroup`            | string \| null                     | Target group from `-g`, else `null`. An id names its group: `#0 (wheel)`.                                                                                          |
 | `argv`                  | string[]                           | sudo's own argv, unchanged.                                                                                                                                        |
 | `command`               | `{ argv, resolvedPath, warnings }` | What sudo will run, from the module's parse of sudo's options.                                                                                                     |
 | `cwd`                   | string                             | The caller's working directory.                                                                                                                                    |
@@ -56,17 +56,31 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   `["sudoedit", ...files]`. If sudo's argv has any option the module does not
   fully understand, `argv` is sudo's argv without `argv[0]`, unparsed.
 - `resolvedPath`: absolute path of the program sudo will execute, resolved with
-  sudo's own PATH and `secure_path` rules, or `null` (unparsed, `-e`, not found).
+  sudo's own PATH and `secure_path` rules, or `null` (unparsed, `-e`, not found,
+  or not certain). sudo.ws searches relative PATH entries against the cwd and
+  reads the last `PATH=` in its environment; sudo-rs skips relative entries and
+  reads the first. On Linux either may be installed, so the module resolves
+  with both and shows a path only when they agree.
 - `warnings`: objects `{ "code": string, "arg"?: int }`. `arg` indexes
   `command.argv`. Codes in v1:
 
-  | Code                     | When                                                                                |
-  | ------------------------ | ----------------------------------------------------------------------------------- |
-  | `user_writable_program`  | `resolvedPath` is writable by the requesting user.                                  |
-  | `user_writable_argument` | `command.argv[arg]` is an existing file the user can write. One entry per argument. |
-  | `shell`                  | `-s`, `-i`, or the program is a shell.                                              |
-  | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                          |
-  | `edit`                   | `-e` / sudoedit.                                                                    |
+  | Code                     | When                                                                                                    |
+  | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+  | `user_writable_program`  | `resolvedPath` is writable by the requesting user.                                                      |
+  | `user_writable_argument` | `command.argv[arg]` is a path the user can change before it is used: one entry per argument. See below. |
+  | `shell`                  | `-s`, `-i`, or the program is a shell.                                                                  |
+  | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                                              |
+  | `edit`                   | `-e` / sudoedit.                                                                                        |
+  | `unresolved_program`     | The module can't tell which file sudo will run; `resolvedPath` is `null`.                               |
+  | `dev_attestation`        | `command.argv[arg]` is `--allow-dev-attestation`: a debug build of the app may enroll.                  |
+  | `test_attestation`       | `command.argv[arg]` is `--allow-test-attestation`: an emulator or unverified device may enroll.         |
+
+  An argument gets `user_writable_argument` when it exists and the user can
+  write it, replace it (a writable directory on the way), or change what it
+  points to (a symlink whose target is replaceable), or when it doesn't exist,
+  contains `/` or `.`, and the user can create it (its nearest existing
+  ancestor is replaceable). Missing bare words are skipped, so
+  `systemctl restart nginx` from a project directory stays clean.
 
   Clients render an unknown code as a generic red warning showing the code. A
   warning only adds caution, so this is safe without a version bump.
@@ -130,13 +144,24 @@ as a plain command:
 
 ```
 <path>/t3-elevation enroll --user <user> --label <label> --public-key <b64url SPKI>
-                           --challenge <b64url> [--allow-dev-attestation]
+                           --challenge <b64url>
+                           [--allow-dev-attestation | --allow-test-attestation]
 ```
 
 Each value is its own argv element; options may come in any order, each at
 most once, and nothing else is allowed. The basename of `argv[0]` is
 `t3-elevation`. Clients still show the full argv and warnings, and flag
-`--allow-dev-attestation`.
+either attestation option.
+
+**Attestation trust.** Release builds of the helper pin the Google attestation
+roots, the app package, and the app's signing digests
+(`T3_ELEVATION_ANDROID_SIGNING_DIGESTS` at build time). `--allow-dev-attestation`
+is for debug builds of the app on real phones: it keeps the root, hardware and
+verified-boot checks and only widens the app pins to the dev packages and the
+digests in `T3_ELEVATION_ANDROID_DEV_SIGNING_DIGESTS`.
+`--allow-test-attestation` drops the device checks for emulators and the VM
+fixture chains, so a key enrolled with it proves nothing about the device. The
+module warns on both in the approval itself.
 
 **Attestation challenge.** The phone draws 32 random bytes, uses them as the
 key's attestation challenge, and they travel in the enrollment object and the
@@ -207,7 +232,11 @@ Timeouts:
 Outcomes map to PAM results as in the spec: approve → `PAM_SUCCESS`; every
 failure after `mine` → `PAM_CRED_INSUFFICIENT`; `not_mine`, "T3 down", and
 unsafe config → `PAM_IGNORE`, or `PAM_CRED_INSUFFICIENT` when sudo's argv has
-`-n`.
+`-n`. The module can't ask sudo how it parsed its argv, so it scans it with the
+option table, arity and long-option prefix rules of each sudo that may be
+running (sudo.ws, and sudo-rs on Linux). A sudo that would reject the argv
+can't be the caller; `-n` counts only when every other one sees it. Anything
+less certain stays `PAM_IGNORE`, so an interactive sudo never fails early.
 
 ## Root-owned state
 
@@ -234,11 +263,12 @@ Unknown keys are ignored; `version` other than 1 or `enabled = false` means
 { "version": 1, "keyId": "<22 chars>", "alg": "es256", "publicKey": "<b64url SPKI DER>",
   "label": "Pixel 9 Pro Fold", "securityLevel": "strongbox" | "tee" | "software",
   "enrolledAt": "2026-10-30T12:00:00Z",
-  "attestationSummary": { "packageName": "...", "signingCertDigest": "<b64url SHA-256>", "devAttestation": false } }
+  "attestationSummary": { "packageName": "...", "signingCertDigest": "<b64url SHA-256>", "devAttestation": false, "testAttestation": false } }
 ```
 
 The module ignores a key file whose name, `keyId`, and derived keyId disagree.
-`software` only appears with `--allow-dev-attestation`. Last-used times are
+`devAttestation` is set by either option and `testAttestation` only by
+`--allow-test-attestation`; `software` only appears with the latter. Last-used times are
 the server's own state, never written here.
 
 `/etc/t3-elevation/installed-by-t3.json`, read and written only by the helper:
@@ -281,7 +311,15 @@ Any tool may produce this state; T3 verifies it whoever installed it.
   the decimal after `protocol=`; it never loads the library.
 - **sudoers** (any file under `/etc/sudoers.d`, validated with `visudo -cf`):
   `Defaults:<user> noninteractive_auth`, `Defaults:<user> !requiretty`,
-  `Defaults:<user> timestamp_timeout=0`.
+  `Defaults:<user> timestamp_timeout=0`, `Defaults:<user> always_set_home`,
+  `Defaults:<user> !env_editor`, and
+  `Defaults:<user> env_keep -= "HOME EDITOR VISUAL SUDO_EDITOR PATH KDEDIR QTDIR"`.
+  The payload can't show the environment, so an approved command must not
+  inherit variables that point root's code at the user's files: macOS keeps
+  HOME, the editors and PATH (it has no `secure_path`), Fedora keeps KDEDIR and
+  QTDIR. `!env_editor` also covers command-specific keeps such as Arch's
+  `Defaults!/usr/bin/visudo env_keep += "SUDO_EDITOR EDITOR VISUAL"`, which
+  sudo applies after user Defaults.
 - **Config** `users/<user>.toml` pointing at the owning server's socket.
 - **Keys dir** `keys/<user>/` exists, root-owned. External tools create it but
   never manage its contents; the helper writes keys.
@@ -303,14 +341,14 @@ between approval and sudo's exec. The first install has no such copy, so it
 runs a helper this OS account could have changed, the same trust as typing the
 sudo password into T3.
 
-| Command                                                                                           | Result                                                                                                                                                                                      |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `t3-elevation version`                                                                            | `{ ok, protocol: 1, version }`                                                                                                                                                              |
-| `t3-elevation status --user U`                                                                    | `{ ok, protocol, platform, checks: [{ id, ok, message }], config \| null, keys: [{ keyId, label, securityLevel, enrolledAt }], plannedChanges: [{ path, summary }], setupOutsideT3: bool }` |
-| `t3-elevation install --user U --socket P --key <-\|file> [--window S] [--allow-dev-attestation]` | Writes missing files, enrolls the first key. On a TTY it prints the label and comparison code and asks to confirm.                                                                          |
-| `t3-elevation enroll ...`                                                                         | See the grammar above; enrollment object on stdin.                                                                                                                                          |
-| `t3-elevation revoke --user U (--key-id ID \| --all)`                                             | Removes key files.                                                                                                                                                                          |
-| `t3-elevation uninstall --user U`                                                                 | Reverts `installed-by-t3.json`.                                                                                                                                                             |
+| Command                                                                                                                       | Result                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `t3-elevation version`                                                                                                        | `{ ok, protocol: 1, version }`                                                                                                                                                              |
+| `t3-elevation status --user U`                                                                                                | `{ ok, protocol, platform, checks: [{ id, ok, message }], config \| null, keys: [{ keyId, label, securityLevel, enrolledAt }], plannedChanges: [{ path, summary }], setupOutsideT3: bool }` |
+| `t3-elevation install --user U --socket P --key <-\|file> [--window S] [--allow-dev-attestation \| --allow-test-attestation]` | Writes missing files, enrolls the first key. On a TTY it prints the label and comparison code and asks to confirm.                                                                          |
+| `t3-elevation enroll ...`                                                                                                     | See the grammar above; enrollment object on stdin.                                                                                                                                          |
+| `t3-elevation revoke --user U (--key-id ID \| --all)`                                                                         | Removes key files.                                                                                                                                                                          |
+| `t3-elevation uninstall --user U`                                                                                             | Reverts `installed-by-t3.json`.                                                                                                                                                             |
 
 ## Server and clients
 

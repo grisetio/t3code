@@ -30,6 +30,10 @@ password.
 - Your own `sudo` in a terminal then asks every time, because setup turns off
   sudo's few-minute credential cache for your user. It asks as before: the
   password on Linux, Touch ID or the password on macOS.
+- Commands you run with `sudo` no longer get your `HOME`, `PATH`, or editor
+  variables. They get root's home and sudo's standard `PATH`, and `visudo` uses
+  the system editor. On macOS, a script that relies on Homebrew tools in your
+  `PATH` needs their full path under `sudo`.
 - `sudo` in T3 Code's terminal, and from anything T3 Code didn't start, asks the
   usual way, not the phone.
 - A request nobody answers expires after about 100 seconds, and the command

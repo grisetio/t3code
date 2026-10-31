@@ -3,6 +3,7 @@
 //! missing and writable; everything it writes is recorded with a backup in
 //! `installed-by-t3.json` so uninstall can restore files byte for byte.
 
+use crate::attestation::Trust;
 use crate::config::{self, UserConfig};
 use crate::rootsafe::{self, Policy};
 use crate::{MODULE_INSTALL_PATH, PROTOCOL_MARKER, keys};
@@ -91,12 +92,37 @@ pub fn macos_pam_lines(module: &str) -> [String; 2] {
     ]
 }
 
+/// Variables the platforms' default `env_keep` passes from the caller to
+/// root that point root's code at the caller's files: config under HOME,
+/// editors (`crontab -e`, `visudo`), PATH where there's no `secure_path`
+/// (macOS), and Qt/KDE plugin dirs (Fedora). The payload can't show any of
+/// them, so an approved command must not inherit them.
+pub const ENV_NOT_KEPT: &str = "HOME EDITOR VISUAL SUDO_EDITOR PATH KDEDIR QTDIR";
+
+/// What device approval needs from sudoers, besides `!requiretty`.
+/// `!env_editor` covers command-specific keeps such as Arch's
+/// `Defaults!/usr/bin/visudo env_keep += "SUDO_EDITOR EDITOR VISUAL"`, which
+/// sudo applies after user Defaults.
+fn required_settings() -> [String; 5] {
+    [
+        "noninteractive_auth".into(),
+        "timestamp_timeout=0".into(),
+        "always_set_home".into(),
+        "!env_editor".into(),
+        format!("env_keep -= \"{ENV_NOT_KEPT}\""),
+    ]
+}
+
 pub fn sudoers_drop_in(user: &str) -> String {
+    let [noninteractive, timestamp, home, editor, env_keep] = required_settings();
     format!(
         "# Written by t3-elevation for device approval; `t3-elevation uninstall` removes it.\n\
-         Defaults:{user} noninteractive_auth\n\
+         Defaults:{user} {noninteractive}\n\
          Defaults:{user} !requiretty\n\
-         Defaults:{user} timestamp_timeout=0\n"
+         Defaults:{user} {timestamp}\n\
+         Defaults:{user} {home}\n\
+         Defaults:{user} {editor}\n\
+         Defaults:{user} {env_keep}\n"
     )
 }
 
@@ -343,7 +369,10 @@ impl Step {
         match self {
             Self::CreateDir { .. } => "create directory".into(),
             Self::CreateFile { path, .. } if path == SUDOERS_DROP_IN => {
-                "add sudoers drop-in: noninteractive_auth, !requiretty, timestamp_timeout=0".into()
+                format!(
+                    "add sudoers drop-in: noninteractive_auth, !requiretty, timestamp_timeout=0, always_set_home, !env_editor, and don't pass {} from your environment",
+                    ENV_NOT_KEPT.replace(' ', ", ")
+                )
             }
             Self::CreateFile { path, .. } if path.ends_with(".toml") => {
                 "create device approval config".into()
@@ -610,7 +639,7 @@ impl Planner<'_> {
             })
         });
         if !includes_dir {
-            self.block("/etc/sudoers", "doesn't include /etc/sudoers.d; set noninteractive_auth, !requiretty and timestamp_timeout=0 for this user there");
+            self.block("/etc/sudoers", "doesn't include /etc/sudoers.d; set the device approval Defaults for this user there");
             return;
         }
         if self.layout.root == Path::new("/") && self.layout.visudo.is_none() {
@@ -644,23 +673,22 @@ fn without_requiretty(drop_in: &str) -> String {
 /// user. `!requiretty` isn't required: sudo-rs doesn't know it (see above).
 pub fn sudoers_has_settings(sudoers: &Path, user: &str) -> bool {
     let lines = crate::sudoers::defaults_lines(sudoers);
-    ["noninteractive_auth", "timestamp_timeout=0"]
-        .iter()
-        .all(|setting| {
-            lines.iter().any(|line| {
-                let (binding, params) = match line.strip_prefix("Defaults:") {
-                    Some(rest) => rest.split_once(char::is_whitespace).unwrap_or((rest, "")),
-                    None => match line.strip_prefix("Defaults") {
-                        Some(rest) if rest.starts_with(char::is_whitespace) => ("", rest),
-                        _ => return false,
-                    },
-                };
-                (binding.is_empty() || binding == user)
-                    && params
-                        .split(',')
-                        .any(|param| param.split_whitespace().collect::<String>() == *setting)
-            })
+    let compact = |text: &str| text.split_whitespace().collect::<String>();
+    required_settings().iter().all(|setting| {
+        lines.iter().any(|line| {
+            let (binding, params) = match line.strip_prefix("Defaults:") {
+                Some(rest) => rest.split_once(char::is_whitespace).unwrap_or((rest, "")),
+                None => match line.strip_prefix("Defaults") {
+                    Some(rest) if rest.starts_with(char::is_whitespace) => ("", rest),
+                    _ => return false,
+                },
+            };
+            (binding.is_empty() || binding == user)
+                && params
+                    .split(',')
+                    .any(|param| compact(param) == compact(setting))
         })
+    })
 }
 
 pub fn plan_install(
@@ -1298,7 +1326,7 @@ pub fn status(layout: &Layout, user: &str, sources: &Sources) -> Status {
             "sudoers",
             present,
             if present {
-                "sudoers sets noninteractive_auth, !requiretty and timestamp_timeout=0"
+                "sudoers sets the device approval Defaults"
             } else {
                 "sudoers settings for device approval are missing"
             },
@@ -1392,7 +1420,8 @@ pub fn key_file_bytes(
         attestation_summary: keys::AttestationSummary {
             package_name: verified.package_name.clone(),
             signing_cert_digest: verified.signing_cert_digest.clone(),
-            dev_attestation: verified.dev_attestation,
+            dev_attestation: verified.trust != Trust::Release,
+            test_attestation: verified.trust == Trust::Test,
         },
     };
     let mut bytes = serde_json::to_vec(&file).unwrap_or_default();
@@ -1690,7 +1719,9 @@ mod tests {
             Platform::Linux,
             &[(
                 "/etc/sudoers",
-                "Defaults:alice noninteractive_auth, !requiretty\nDefaults:alice timestamp_timeout=0\n",
+                &format!(
+                    "Defaults:alice noninteractive_auth, !requiretty\nDefaults:alice timestamp_timeout=0\nDefaults:alice always_set_home,!env_editor\nDefaults:alice env_keep -= \"{ENV_NOT_KEPT}\"\n"
+                ),
             )],
         );
         // Managed elsewhere, like NixOS's /etc/pam.d -> /etc/static links.
@@ -1723,6 +1754,51 @@ mod tests {
         );
         assert!(status.setup_outside_t3);
         assert!(uninstall(&root.layout, "alice").is_err());
+    }
+
+    #[test]
+    fn sudoers_without_the_environment_settings_gets_the_drop_in() {
+        let root = Root::new(
+            "envkeep",
+            Platform::Linux,
+            &[(
+                "/etc/sudoers",
+                &format!(
+                    "{SUDOERS}Defaults:alice noninteractive_auth\nDefaults:alice timestamp_timeout=0\n"
+                ),
+            )],
+        );
+        assert!(!sudoers_has_settings(
+            &root.layout.path("/etc/sudoers"),
+            "alice"
+        ));
+        let plan = plan_install(&root.layout, "alice", "/s.sock", 100, &root.sources());
+        let drop_in = plan
+            .steps
+            .iter()
+            .find(|step| step.path() == SUDOERS_DROP_IN)
+            .expect("drop-in planned");
+        assert!(
+            drop_in
+                .summary()
+                .contains("HOME, EDITOR, VISUAL, SUDO_EDITOR, PATH")
+        );
+        let Step::CreateFile { contents, .. } = drop_in else {
+            panic!("{drop_in:?}");
+        };
+        let contents = String::from_utf8(contents.clone()).unwrap();
+        for line in [
+            "Defaults:alice always_set_home\n",
+            "Defaults:alice !env_editor\n",
+            "Defaults:alice env_keep -= \"HOME EDITOR VISUAL SUDO_EDITOR PATH KDEDIR QTDIR\"\n",
+        ] {
+            assert!(contents.contains(line), "{contents}");
+        }
+        std::fs::write(root.layout.path(SUDOERS_DROP_IN), &contents).unwrap();
+        assert!(sudoers_has_settings(
+            &root.layout.path("/etc/sudoers"),
+            "alice"
+        ));
     }
 
     #[test]

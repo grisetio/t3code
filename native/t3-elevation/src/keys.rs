@@ -49,7 +49,11 @@ pub fn parse_p256_spki(spki_der: &[u8]) -> Option<VerifyingKey> {
 pub struct AttestationSummary {
     pub package_name: String,
     pub signing_cert_digest: String,
+    /// Enrolled with `--allow-dev-attestation` or `--allow-test-attestation`.
     pub dev_attestation: bool,
+    /// Enrolled with `--allow-test-attestation`: the device is unproven.
+    #[serde(default)]
+    pub test_attestation: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

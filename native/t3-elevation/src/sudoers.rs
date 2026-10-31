@@ -19,18 +19,29 @@ pub struct Subject<'a> {
     pub run_as: &'a str,
 }
 
-/// Every value `secure_path` may end up with; `None` means unset.
-pub fn secure_path(root: &Path, subject: &Subject) -> Vec<Option<String>> {
+/// A scalar or boolean Defaults setting as sudoers leaves it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Setting {
+    /// Never mentioned: sudo's compiled-in default.
+    Default,
+    /// `!name`.
+    Negated,
+    /// `name=value`, or `name` alone for a flag (empty value).
+    Value(String),
+}
+
+/// Every value `name` may end up with for `subject`.
+pub fn setting(root: &Path, subject: &Subject, name: &str) -> Vec<Setting> {
     let lines = defaults_lines(root);
     // sudo applies Defaults by binding type, in file order within a type.
-    let mut ordered: Vec<(u8, Applies, Option<String>)> = Vec::new();
+    let mut ordered: Vec<(u8, Applies, Setting)> = Vec::new();
     for line in &lines {
-        if let Some((rank, applies, value)) = defaults_secure_path(line, subject) {
-            ordered.push((rank, applies, value));
+        if let Some(entry) = defaults_setting(line, subject, name) {
+            ordered.push(entry);
         }
     }
     ordered.sort_by_key(|(rank, _, _)| *rank);
-    let mut possible: Vec<Option<String>> = vec![None];
+    let mut possible = vec![Setting::Default];
     for (_, applies, value) in ordered {
         match applies {
             Applies::Yes => possible = vec![value],
@@ -40,6 +51,21 @@ pub fn secure_path(root: &Path, subject: &Subject) -> Vec<Option<String>> {
                 }
             }
             Applies::No => {}
+        }
+    }
+    possible
+}
+
+/// Every value `secure_path` may end up with; `None` means unset.
+pub fn secure_path(root: &Path, subject: &Subject) -> Vec<Option<String>> {
+    let mut possible = Vec::new();
+    for value in setting(root, subject, "secure_path") {
+        let value = match value {
+            Setting::Value(path) => Some(path),
+            Setting::Default | Setting::Negated => None,
+        };
+        if !possible.contains(&value) {
+            possible.push(value);
         }
     }
     possible
@@ -122,7 +148,7 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-fn defaults_secure_path(line: &str, subject: &Subject) -> Option<(u8, Applies, Option<String>)> {
+fn defaults_setting(line: &str, subject: &Subject, name: &str) -> Option<(u8, Applies, Setting)> {
     let rest = line.strip_prefix("Defaults")?;
     let (rank, applies, params) = match rest.chars().next()? {
         c if c.is_whitespace() => (0, Applies::Yes, rest),
@@ -143,13 +169,15 @@ fn defaults_secure_path(line: &str, subject: &Subject) -> Option<(u8, Applies, O
     let mut found = None;
     for param in split_params(params) {
         let param = param.trim();
-        if let Some(value) = param.strip_prefix("secure_path") {
-            let value = value.trim_start();
-            if let Some(value) = value.strip_prefix('=') {
-                found = Some(Some(value.trim().trim_matches('"').to_string()));
+        if let Some(rest) = param.strip_prefix(name) {
+            let rest = rest.trim_start();
+            if rest.is_empty() {
+                found = Some(Setting::Value(String::new()));
+            } else if let Some(value) = rest.strip_prefix('=') {
+                found = Some(Setting::Value(value.trim().trim_matches('"').to_string()));
             }
-        } else if param.strip_prefix('!').map(str::trim) == Some("secure_path") {
-            found = Some(None);
+        } else if param.strip_prefix('!').map(str::trim) == Some(name) {
+            found = Some(Setting::Negated);
         }
     }
     found.map(|value| (rank, applies, value))
@@ -286,6 +314,32 @@ mod tests {
         assert_eq!(
             secure_path(&dir.join("sudoers"), &subject(&groups)),
             vec![Some("/a".to_string()), Some("/b".to_string())]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn flags_and_negation() {
+        let dir = with_files(
+            "flags",
+            &[(
+                "sudoers",
+                "Defaults ignore_dot_x\nDefaults:alice !ignore_dot\nDefaults runchroot=*\n",
+            )],
+        );
+        let groups = vec![];
+        let sudoers = dir.join("sudoers");
+        assert_eq!(
+            setting(&sudoers, &subject(&groups), "ignore_dot"),
+            vec![Setting::Negated]
+        );
+        assert_eq!(
+            setting(&sudoers, &subject(&groups), "runchroot"),
+            vec![Setting::Value("*".into())]
+        );
+        assert_eq!(
+            setting(&sudoers, &subject(&groups), "env_editor"),
+            vec![Setting::Default]
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

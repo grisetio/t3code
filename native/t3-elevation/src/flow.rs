@@ -7,7 +7,7 @@ use crate::keys::{self, EnrolledKey};
 use crate::payload::{self, Payload};
 use crate::rootsafe::{self, Policy};
 use crate::socket::{Connection, deadline_in};
-use crate::sudo_argv::{self, SearchPath};
+use crate::sudo_argv::{self, Flavor, Search};
 use crate::sys::{self, ChainEntry};
 use crate::verify::{self, Response};
 use crate::{MAX_LINE_BYTES, MAX_PAYLOAD_BYTES, json};
@@ -37,7 +37,9 @@ pub struct Invocation {
     pub pam_user: Option<String>,
     pub cwd: Option<Vec<u8>>,
     pub env_shell: Option<String>,
-    pub env_path: Option<String>,
+    /// Every `PATH=` value in sudo's environment, in order. sudo.ws and
+    /// sudo-rs pick different ones when there are several.
+    pub env_paths: Vec<Vec<u8>>,
 }
 
 /// Where the module looks and how strict it is. Tests swap these out.
@@ -63,7 +65,20 @@ impl Environment {
     }
 }
 
+/// sudo decides what to run from its own argv. If argv[0] isn't sudo's name,
+/// the argv read back may not be the one sudo parsed (an empty argv[0] once
+/// shifted the macOS parse), so the payload could describe another command.
+fn invoked_as_sudo(argv: &[Vec<u8>]) -> bool {
+    argv.first().is_some_and(|arg0| {
+        let name = arg0.rsplit(|b| *b == b'/').next().unwrap_or(arg0);
+        name == b"sudo" || name == b"sudoedit"
+    })
+}
+
 pub fn authenticate(invocation: &Invocation, environment: &Environment) -> Outcome {
+    if !invoked_as_sudo(&invocation.argv) {
+        return Outcome::Ignore;
+    }
     let argv_lossy: Vec<String> = invocation
         .argv
         .iter()
@@ -341,7 +356,9 @@ fn build_payload(
     getrandom::getrandom(&mut nonce).ok()?;
     let (gids, group_names) = sys::groups_of(user);
     let run_as_for_sudoers = match (&parsed.user, &parsed.group) {
-        (Some(target), _) => target.clone(),
+        (Some(target), _) => sudo_argv::numeric_id(target)
+            .and_then(sys::user_by_uid)
+            .map_or_else(|| target.clone(), |target| target.name),
         (None, Some(_)) => user.name.clone(),
         (None, None) => "root".to_string(),
     };
@@ -352,15 +369,24 @@ fn build_payload(
         host: &prepared.host_name,
         run_as: &run_as_for_sudoers,
     };
-    let caller_path = invocation.env_path.clone().unwrap_or_default();
-    let alternatives: Vec<String> = crate::sudoers::secure_path(&environment.sudoers, &subject)
-        .into_iter()
-        .map(|value| value.unwrap_or_else(|| caller_path.clone()))
-        .collect();
-    let search = if alternatives.len() == 1 {
-        SearchPath::Known(alternatives[0].clone())
-    } else {
-        SearchPath::Uncertain(alternatives)
+    let setting = |name| crate::sudoers::setting(&environment.sudoers, &subject, name);
+    let search = Search {
+        secure_path: crate::sudoers::secure_path(&environment.sudoers, &subject),
+        // sudo.ws is built with ignore_dot on by default (checked with `sudo -V`
+        // on macOS, Ubuntu, Fedora and Arch).
+        ignore_dot: setting("ignore_dot")
+            .into_iter()
+            .map(|value| value != crate::sudoers::Setting::Negated)
+            .collect(),
+        chroot: setting("runchroot")
+            .iter()
+            .any(|value| matches!(value, crate::sudoers::Setting::Value(root) if root != "*")),
+        env_paths: invocation
+            .env_paths
+            .iter()
+            .map(|path| String::from_utf8(path.clone()).ok())
+            .collect(),
+        flavors: Flavor::platform(),
     };
     let target_shell = target_login_shell(&run_as_for_sudoers);
     let caller_shell = invocation
@@ -487,7 +513,7 @@ mod tests {
                 pam_user: Some(self.user.clone()),
                 cwd: Some(self.dir.as_os_str().as_encoded_bytes().to_vec()),
                 env_shell: None,
-                env_path: Some("/usr/bin:/bin".into()),
+                env_paths: vec![b"/usr/bin:/bin".to_vec()],
             }
         }
 
@@ -579,6 +605,33 @@ mod tests {
                 &setup.environment
             ),
             Outcome::Fail
+        );
+    }
+
+    #[test]
+    fn argv_not_from_sudo_is_ignored() {
+        for argv in [
+            &["", "/tmp/evil", "-n", "/usr/bin/true"][..],
+            &["/tmp/evil", "-n", "true"],
+            &["sudo-rs", "-n", "true"],
+            &[],
+        ] {
+            let setup = setup("argv0");
+            assert_eq!(
+                setup.run(Mode::Approve, &setup.invocation(argv)).0,
+                Outcome::Ignore,
+                "{argv:?}"
+            );
+        }
+        let setup = setup("argv0ok");
+        assert_eq!(
+            setup
+                .run(
+                    Mode::Approve,
+                    &setup.invocation(&["/usr/bin/sudoedit", "/etc/hosts"])
+                )
+                .0,
+            Outcome::Approved
         );
     }
 
