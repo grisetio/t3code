@@ -667,4 +667,79 @@ mod tests {
         // `true` exists in both /usr/bin and /bin on Linux, only /usr/bin on macOS.
         let _ = both;
     }
+
+    /// Review finding (R2): an option sudo reads an argument for, or an
+    /// abbreviated long option, hides a later `-n`. The module then returns
+    /// IGNORE, pam_unix fails without a conversation and pam_faillock counts
+    /// it, which plain `sudo -n` never did before install.
+    #[test]
+    #[ignore = "review: -n after -D/-C/--chdir or as --non is missed; remove when fixed"]
+    fn non_interactive_after_options_with_arguments() {
+        for spelling in [
+            &["sudo", "-D", "/", "-n", "true"][..],
+            &["sudo", "-C", "3", "-n", "true"],
+            &["sudo", "--chdir", "/", "-n", "true"],
+            &["sudo", "--non", "true"],
+        ] {
+            assert!(parse(&argv(spelling)).non_interactive, "{spelling:?}");
+        }
+    }
+
+    /// Review finding (S3): sudo searches relative PATH entries against the
+    /// cwd when sudoers has no `secure_path` (macOS), but `search_one` skips
+    /// them, so the phone shows `/usr/bin/true` while sudo runs `./bin/true`.
+    #[test]
+    #[ignore = "review: relative PATH entries are skipped but sudo searches them; remove when fixed"]
+    fn relative_search_entries_are_not_skipped() {
+        let tmp = std::env::temp_dir().join(format!("t3e-argv-relpath-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("bin")).unwrap();
+        let planted = tmp.join("bin/true");
+        std::fs::write(&planted, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(
+            &planted,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let cwd = tmp.to_string_lossy().into_owned();
+        let shells = vec![];
+        let mut ctx = context(&cwd, &[], &shells);
+        ctx.search = SearchPath::Known("bin:/usr/bin:/bin".into());
+        let sudo = argv(&["sudo", "true"]);
+        let command = describe(&sudo, &parse(&sudo), &ctx).command;
+        std::fs::remove_dir_all(&tmp).unwrap();
+        let honest = match command.resolved_path.as_deref() {
+            None => true,
+            Some(path) => {
+                path == planted.to_str().unwrap()
+                    && command
+                        .warnings
+                        .contains(&Warning::new("user_writable_program"))
+            }
+        };
+        assert!(honest, "{command:?}");
+    }
+
+    /// Review finding (S3): an argument that is a symlink in a user-writable
+    /// directory, or doesn't exist there yet, gets no warning. Its owner can
+    /// point it elsewhere after approval; demonstrated with
+    /// `sudo python3 ~/tool.py` on Ubuntu 24.04.
+    #[test]
+    #[ignore = "review: replaceable arguments get no user_writable_argument warning; remove when fixed"]
+    fn replaceable_arguments_are_warned() {
+        let tmp = std::env::temp_dir().join(format!("t3e-argv-replace-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", tmp.join("tool.py")).unwrap();
+        let cwd = tmp.to_string_lossy().into_owned();
+        let shells = vec![];
+        let ctx = context(&cwd, &[], &shells);
+        let warnings = |arg: &str| {
+            let sudo = argv(&["sudo", "/bin/cat", arg]);
+            describe(&sudo, &parse(&sudo), &ctx).command.warnings
+        };
+        let symlinked = warnings("tool.py");
+        let missing = warnings("later.py");
+        std::fs::remove_dir_all(&tmp).unwrap();
+        let expected = vec![Warning::at("user_writable_argument", 1)];
+        assert_eq!((symlinked, missing), (expected.clone(), expected));
+    }
 }

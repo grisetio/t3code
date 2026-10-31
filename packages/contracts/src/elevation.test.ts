@@ -91,4 +91,23 @@ describe("elevation enrollment", () => {
     expect(withArgv(["/tmp/not-the-helper", ...argv.slice(1)])).toBeNull();
     expect(withArgv(argv.filter((_, index) => index !== 8 && index !== 9))).toBeNull();
   });
+
+  // Security review: any program named t3-elevation is treated as the root helper, so a
+  // user-writable copy (the server's T3_ELEVATION_HELPER) gets the "Add device" screen
+  // even though the module flags it and its owner can swap it after approval.
+  // Flip to `it` once the parser requires the installed, root-owned helper.
+  it.fails("treats a user-writable t3-elevation as a plain command", () => {
+    const enroll = vectors.payloads.find((candidate) => candidate.name === "enroll")!;
+    const payload = Result.getOrThrow(decodeElevationPayload(bytesOf(enroll.payload)));
+    const helper = "/home/alice/.cache/t3/t3-elevation";
+    const parsed = parseElevationEnrollCommand({
+      ...payload,
+      command: {
+        argv: [helper, ...payload.command.argv.slice(1)],
+        resolvedPath: helper,
+        warnings: [{ code: "user_writable_program" }],
+      },
+    });
+    expect(parsed).toBeNull();
+  });
 });
