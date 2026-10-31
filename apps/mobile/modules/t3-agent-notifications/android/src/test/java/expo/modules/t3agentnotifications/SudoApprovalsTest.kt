@@ -2,6 +2,7 @@ package expo.modules.t3agentnotifications
 
 import android.app.Activity
 import android.app.Application
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.ComponentName
@@ -19,10 +20,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26, 36], manifest = Config.NONE)
@@ -53,7 +56,23 @@ class SudoApprovalsTest {
   @After
   fun tearDown() {
     SudoApprovals.keyAliases = { emptyList() }
+    SudoApprovals.clock = { android.os.SystemClock.elapsedRealtime() }
+    SudoApprovals.consume()
   }
+
+  private var now = 1_000L
+
+  /** Taps a sudo push on the locked phone; returns the intent the app's activity receives. */
+  private fun tapWhileLocked(): Intent {
+    SudoApprovals.clock = { now }
+    shadowOf(context.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+    val tap = Intent(context, SudoApprovalActivity::class.java)
+      .putExtra(SudoApprovals.EXTRA_PATH, "/threads/env%201/thread")
+    val trampoline = Robolectric.buildActivity(SudoApprovalActivity::class.java, tap).create().get()
+    return shadowOf(trampoline).nextStartedActivity
+  }
+
+  private fun cover() = ShadowDialog.getLatestDialog()
 
   private fun push(alertId: String, path: String, kind: String? = "sudo") = buildMap {
     put("device_id", "device")
@@ -116,5 +135,82 @@ class SudoApprovalsTest {
     assertFalse(SudoApprovals.isSudoApproval(mapOf("alert_request_kind" to "approval")))
     assertFalse(SudoApprovals.isSudoApproval(emptyMap()))
     assertFalse(SudoApprovals.isSudoApproval(emptyMap()))
+  }
+
+  @Test
+  @Config(sdk = [36])
+  fun onlyTheLaunchedActivityShowsOverTheLockScreenBehindACover() {
+    val launch = tapWhileLocked()
+    assertEquals(SudoApprovals.Launch("/threads/env%201/thread", true), SudoApprovals.consume())
+
+    // Another activity starting meanwhile isn't the tapped launch.
+    val other = Robolectric.buildActivity(Activity::class.java).create().get()
+    assertFalse(SudoApprovals.overLockScreen())
+    assertNull(cover())
+
+    val app = Robolectric.buildActivity(Activity::class.java, launch).create().start().get()
+    assertTrue(SudoApprovals.overLockScreen())
+    assertTrue(shadowOf(app).showWhenLocked)
+    assertTrue(cover()!!.isShowing)
+
+    // Back on the cover returns to the lock screen.
+    cover()!!.cancel()
+    shadowOf(android.os.Looper.getMainLooper()).idle()
+    assertFalse(SudoApprovals.overLockScreen())
+    assertFalse(cover()!!.isShowing)
+    assertFalse(shadowOf(app).showWhenLocked)
+    assertFalse(shadowOf(other).showWhenLocked)
+  }
+
+  @Test
+  @Config(sdk = [36])
+  fun theArmIsSpentOnceAndOnlyBriefly() {
+    val launch = tapWhileLocked()
+    val first = Robolectric.buildActivity(Activity::class.java, launch).create().start()
+    assertTrue(SudoApprovals.overLockScreen())
+    first.stop()
+    assertFalse(SudoApprovals.overLockScreen())
+    assertFalse(cover()!!.isShowing)
+
+    // The same intent again, as a recreated activity would carry it.
+    Robolectric.buildActivity(Activity::class.java, launch).create()
+    assertFalse(SudoApprovals.overLockScreen())
+
+    val late = tapWhileLocked()
+    now += 10_001
+    Robolectric.buildActivity(Activity::class.java, late).create()
+    assertFalse(SudoApprovals.overLockScreen())
+  }
+
+  @Test
+  @Config(sdk = [36])
+  fun aRunningActivityTakesTheTapFromItsNewIntent() {
+    val running = Robolectric.buildActivity(Activity::class.java).create().get()
+    val launch = tapWhileLocked()
+    // A later tap replaces the earlier one, so its intent no longer matches.
+    val stale = Intent(launch)
+    val current = tapWhileLocked()
+    SudoApprovals.onNewIntent(running, stale)
+    assertFalse(SudoApprovals.overLockScreen())
+
+    SudoApprovals.onNewIntent(running, current)
+    assertTrue(SudoApprovals.overLockScreen())
+    SudoApprovals.end(running, leave = false)
+    assertFalse(SudoApprovals.overLockScreen())
+    assertFalse(cover()!!.isShowing)
+  }
+
+  @Test
+  @Config(sdk = [36])
+  fun anUnlockedTapArmsNothing() {
+    shadowOf(context.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(false)
+    val tap = Intent(context, SudoApprovalActivity::class.java)
+      .putExtra(SudoApprovals.EXTRA_PATH, "/threads/env%201/thread")
+    val trampoline = Robolectric.buildActivity(SudoApprovalActivity::class.java, tap).create().get()
+    val launch = shadowOf(trampoline).nextStartedActivity
+    assertFalse(launch.hasExtra(SudoApprovals.EXTRA_LOCK_TOKEN))
+    Robolectric.buildActivity(Activity::class.java, launch).create()
+    assertFalse(SudoApprovals.overLockScreen())
+    assertEquals(SudoApprovals.Launch("/threads/env%201/thread", false), SudoApprovals.consume())
   }
 }

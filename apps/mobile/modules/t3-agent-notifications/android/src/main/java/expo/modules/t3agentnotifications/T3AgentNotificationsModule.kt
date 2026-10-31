@@ -21,6 +21,11 @@ class T3AgentNotificationsModule : Module() {
 
     OnDestroy { SudoApprovals.onLaunch = null }
 
+    // An app already running gets a lock-screen tap here; a cold start reads it from its intent.
+    OnNewIntent { intent ->
+      appContext.currentActivity?.let { SudoApprovals.onNewIntent(it, intent) }
+    }
+
     Function("configure") {
         deviceId: String,
         userId: String,

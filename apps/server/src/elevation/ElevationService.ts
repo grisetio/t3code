@@ -365,7 +365,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
                       {
                         text: item.input,
                         explanation: item.description ?? reasonFor(item.nativeItemRef),
-                        running: RUNNING_ITEM_STATUSES.has(item.status),
+                        finishedAt: RUNNING_ITEM_STATUSES.has(item.status)
+                          ? null
+                          : DateTime.toEpochMillis(item.updatedAt),
                       },
                     ]
                   : [],
@@ -442,6 +444,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     if (!options.peerCredentialsSupported() && !options.plausiblePeer(decoded.value)) return;
     const attribution = attribute({
       hello: decoded.value,
+      now: DateTime.toEpochMillis(yield* DateTime.now),
       server: serverProcess(),
       liveRuns: yield* liveRuns,
       providerProcesses: providerProcesses.list(),
@@ -459,9 +462,18 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       ...(ownSudo === undefined ? {} : { ownSudo: true }),
     });
     if (ownSudo !== undefined) ownSudo.reached = true;
+    // Only checkouts the server already runs git in for this thread's checkpoints.
+    const changesRoots =
+      attribution.run === null
+        ? Effect.succeed([])
+        : projections.getCheckpointContext(attribution.run.threadId).pipe(
+            Effect.map(({ checkpointScopes }) => checkpointScopes.map((scope) => scope.cwd)),
+            Effect.orElseSucceed((): ReadonlyArray<string> => []),
+          );
     const changesFiber =
       ownSudo === undefined
-        ? yield* uncommittedChanges(decoded.value.cwd).pipe(
+        ? yield* changesRoots.pipe(
+            Effect.flatMap((roots) => uncommittedChanges(decoded.value.cwd, roots)),
             Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
             Effect.forkChild,
           )

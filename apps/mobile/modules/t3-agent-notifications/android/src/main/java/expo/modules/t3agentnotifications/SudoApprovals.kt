@@ -2,6 +2,7 @@ package expo.modules.t3agentnotifications
 
 import android.app.Activity
 import android.app.Application
+import android.app.Dialog
 import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -10,18 +11,23 @@ import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
+import android.view.ViewGroup
 import androidx.core.app.NotificationCompat
 import java.security.KeyStore
+import java.util.UUID
 import org.json.JSONObject
 
 /**
  * Opens a sudo approval push. It is declared `showWhenLocked`, which is what lets SystemUI open
  * it from the lock screen without asking to unlock first; it then hands the request to the app's
- * activity, which shows over the lock screen only for that request.
+ * activity, which shows over the lock screen only for that request, behind a cover.
  */
 class SudoApprovalActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -151,13 +157,22 @@ object SudoApprovals {
   /** Set by the module while JS is running, so a tap reaches an app already on screen. */
   @Volatile var onLaunch: ((Launch) -> Unit)? = null
 
-  /** The activity currently allowed over the lock screen, if any. */
-  @Volatile private var shownOverLock: Activity? = null
+  const val EXTRA_LOCK_TOKEN = "expo.modules.t3agentnotifications.SUDO_APPROVAL_LOCK_TOKEN"
 
-  /** When a lock-screen tap was handed to the app; the next activity to start takes it. */
-  @Volatile private var armedAt = 0L
+  /** A lock-screen tap handed to the app: only the activity its launch intent reaches takes it. */
+  private data class Armed(val token: String, val at: Long)
+
+  private var armed: Armed? = null
   private const val ARM_WINDOW_MS = 10_000L
-  private var callbacksRegistered = false
+
+  /** Overridden in tests. */
+  @Volatile var clock: () -> Long = { SystemClock.elapsedRealtime() }
+
+  /** The activity shown over the lock screen, and the cover that hides the app inside it. */
+  private class Shown(val activity: Activity, val cover: Dialog)
+
+  @Volatile private var shown: Shown? = null
+  private var callbacksRegistered: Application? = null
 
   fun consume(): Launch? = synchronized(this) { pending.also { pending = null } }
 
@@ -165,59 +180,85 @@ object SudoApprovals {
     val route = path?.takeIf { threadPath.matches(it) } ?: return
     val lockScreen = isLocked(trampoline) && Build.VERSION.SDK_INT >= 27
     val launch = Launch(route, lockScreen)
-    synchronized(this) { pending = launch }
+    val token = if (lockScreen) UUID.randomUUID().toString() else null
+    // A newer tap replaces an older arm, including with none.
+    synchronized(this) {
+      pending = launch
+      armed = token?.let { Armed(it, clock()) }
+    }
     registerCallbacks(trampoline.application)
-    if (lockScreen) armedAt = System.currentTimeMillis()
     val intent = trampoline.packageManager.getLaunchIntentForPackage(trampoline.packageName)
       ?: return
-    trampoline.startActivity(
-      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-    )
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    if (token != null) intent.putExtra(EXTRA_LOCK_TOKEN, token)
+    trampoline.startActivity(intent)
     onLaunch?.invoke(launch)
   }
 
   /**
-   * The app's activity is not `showWhenLocked` in its manifest, so it shows over the lock screen
-   * only for a request opened from there, and stops as soon as it leaves the screen.
+   * The app's activity is not `showWhenLocked` in its manifest. It shows over the lock screen
+   * only when it receives the launch a lock-screen tap armed, once and soon after the tap, and
+   * stops as soon as it leaves the screen. A cold start reads the token here; an activity that
+   * was already running gets it through [onNewIntent].
    */
   @Synchronized
   private fun registerCallbacks(application: Application) {
-    if (callbacksRegistered) return
-    callbacksRegistered = true
+    if (callbacksRegistered === application) return
+    callbacksRegistered = application
     application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
       override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) =
-        take(activity)
+        take(activity, activity.intent)
 
-      override fun onActivityStarted(activity: Activity) = take(activity)
+      override fun onActivityStarted(activity: Activity) = Unit
 
-      override fun onActivityResumed(activity: Activity) = take(activity)
+      override fun onActivityResumed(activity: Activity) = Unit
 
       override fun onActivityPaused(activity: Activity) = Unit
 
       override fun onActivityStopped(activity: Activity) {
-        if (activity === shownOverLock) end(activity, leave = false)
+        if (shown?.activity === activity) end(activity, leave = false)
       }
 
       override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
       override fun onActivityDestroyed(activity: Activity) {
-        if (activity === shownOverLock) shownOverLock = null
+        if (shown?.activity === activity) end(activity, leave = false)
       }
     })
   }
 
-  private fun take(activity: Activity) {
-    if (activity is SudoApprovalActivity || armedAt == 0L) return
-    val fresh = System.currentTimeMillis() - armedAt in 0..ARM_WINDOW_MS
-    armedAt = 0L
-    if (fresh && Build.VERSION.SDK_INT >= 27) {
-      activity.setShowWhenLocked(true)
-      shownOverLock = activity
+  /** From the module, for an activity that was already running when the tap arrived. */
+  fun onNewIntent(activity: Activity, intent: Intent) = take(activity, intent)
+
+  /** Spends the arm when [intent] is the launch it was made for; true if that came in time. */
+  private fun claim(intent: Intent?): Boolean = synchronized(this) {
+    val token = intent?.getStringExtra(EXTRA_LOCK_TOKEN)
+    val current = armed?.takeIf { token != null && it.token == token }
+    if (current != null) armed = null
+    current != null && clock() - current.at in 0..ARM_WINDOW_MS
+  }
+
+  /** Shows [activity] over the lock screen when [intent] is the armed launch. */
+  fun take(activity: Activity, intent: Intent?) {
+    if (activity is SudoApprovalActivity || Build.VERSION.SDK_INT < 27 || !claim(intent)) return
+    shown?.let { end(it.activity, leave = false) }
+    // The app's own screen (threads, composer) must never show over the lock screen, and JS
+    // can't render anything until the activity is visible. So an opaque window covers the
+    // activity and any dialog it already had open, from its first frame; the request's card
+    // opens as a newer window above it. Back on the cover returns to the lock screen.
+    val cover = Dialog(activity, android.R.style.Theme_DeviceDefault_NoActionBar).apply {
+      window?.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+      window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+      setCanceledOnTouchOutside(false)
+      setOnCancelListener { end(activity, leave = true) }
     }
+    shown = Shown(activity, cover)
+    activity.setShowWhenLocked(true)
+    cover.show()
   }
 
   /** Whether the app is showing over the lock screen for a request right now. */
-  fun overLockScreen(): Boolean = shownOverLock != null
+  fun overLockScreen(): Boolean = shown != null
 
   fun isLocked(context: Context): Boolean =
     context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
@@ -225,7 +266,12 @@ object SudoApprovals {
   /** Ends showing over the lock screen; [leave] returns to the lock screen if still locked. */
   fun end(activity: Activity, leave: Boolean) {
     if (Build.VERSION.SDK_INT >= 27) activity.setShowWhenLocked(false)
-    if (shownOverLock === activity) shownOverLock = null
+    val current = shown
+    if (current?.activity === activity) {
+      shown = null
+      current.cover.setOnCancelListener(null)
+      current.cover.dismiss()
+    }
     if (leave && isLocked(activity)) activity.moveTaskToBack(true)
   }
 

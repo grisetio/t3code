@@ -108,10 +108,12 @@ const reenrollAskedKey = (alias: string) =>
  */
 function useLockScreenReenrollPrompt(): void {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  // Over the lock screen only the request's card may show; ask once the phone is unlocked.
+  const lockScreen = useAtomValue(elevationLockScreenAtom);
   const navigation = useNavigation();
   const asked = useRef(false);
   useEffect(() => {
-    if (asked.current || !deviceApprovalSigner.isPresent()) return;
+    if (asked.current || lockScreen !== null || !deviceApprovalSigner.isPresent()) return;
     let cancelled = false;
     void (async () => {
       for (const [environmentId, presentation] of presentations) {
@@ -130,6 +132,7 @@ function useLockScreenReenrollPrompt(): void {
         if (cancelled || asked.current || !present || !unlockedOnly || alreadyAsked !== null) {
           continue;
         }
+        if (androidLockScreen.isShowingOver()) return;
         asked.current = true;
         await SecureStore.setItemAsync(storageKey, "1");
         Dialog.confirm({
@@ -149,7 +152,7 @@ function useLockScreenReenrollPrompt(): void {
     return () => {
       cancelled = true;
     };
-  }, [navigation, presentations]);
+  }, [lockScreen, navigation, presentations]);
 }
 
 /**
