@@ -5,12 +5,17 @@ use crate::MAX_SOCKET_PATH_BYTES;
 pub const DEFAULT_WINDOW_SECONDS: i64 = 100;
 pub const MIN_WINDOW_SECONDS: i64 = 10;
 pub const MAX_WINDOW_SECONDS: i64 = 300;
+/// Later sudos in an approved agent command that pass without the phone.
+/// Remote commands hold up to 11 sudos; 0 asks the phone for every sudo.
+pub const DEFAULT_SESSION_MAX_USES: u32 = 16;
+pub const MAX_SESSION_MAX_USES: u32 = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserConfig {
     pub enabled: bool,
     pub socket: String,
     pub approval_window_seconds: i64,
+    pub session_max_uses: u32,
 }
 
 /// None for anything the module must not act on: a version other than 1, a
@@ -31,10 +36,17 @@ pub fn parse(text: &str) -> Option<UserConfig> {
             .as_integer()?
             .clamp(MIN_WINDOW_SECONDS, MAX_WINDOW_SECONDS),
     };
+    let session_max_uses = match table.get("session_max_uses") {
+        None => DEFAULT_SESSION_MAX_USES,
+        Some(value) => value
+            .as_integer()?
+            .clamp(0, i64::from(MAX_SESSION_MAX_USES)) as u32,
+    };
     Some(UserConfig {
         enabled,
         socket,
         approval_window_seconds,
+        session_max_uses,
     })
 }
 
@@ -78,11 +90,20 @@ mod tests {
             parse("version = 1\nenabled = true\nsocket = \"/s\"\napproval_window_seconds = 1\n")
                 .unwrap();
         assert_eq!(short.approval_window_seconds, 10);
+        let defaults = parse("version = 1\nenabled = true\nsocket = \"/s\"\n").unwrap();
         assert_eq!(
-            parse("version = 1\nenabled = true\nsocket = \"/s\"\n")
-                .unwrap()
-                .approval_window_seconds,
-            100
+            (defaults.approval_window_seconds, defaults.session_max_uses),
+            (100, 16)
+        );
+        let uses = |value: &str| {
+            parse(&format!(
+                "version = 1\nenabled = true\nsocket = \"/s\"\nsession_max_uses = {value}\n"
+            ))
+            .map(|config| config.session_max_uses)
+        };
+        assert_eq!(
+            [uses("0"), uses("-3"), uses("500"), uses("\"x\"")],
+            [Some(0), Some(0), Some(64), None]
         );
     }
 
@@ -103,6 +124,7 @@ mod tests {
             enabled: true,
             socket: "/home/a \"q\"/elevation.sock".into(),
             approval_window_seconds: 100,
+            session_max_uses: DEFAULT_SESSION_MAX_USES,
         };
         assert_eq!(parse(&render(&config)), Some(config));
     }

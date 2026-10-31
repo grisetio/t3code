@@ -427,8 +427,13 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       send({ type: "hello_reply", v: 1, decision: "not_mine" });
       return;
     }
-    send({ type: "hello_reply", v: 1, decision: "mine" });
     const ownSudo = attribution.serverSudo as OwnSudo | undefined;
+    send({
+      type: "hello_reply",
+      v: 1,
+      decision: "mine",
+      ...(ownSudo === undefined ? {} : { ownSudo: true }),
+    });
     if (ownSudo !== undefined) ownSudo.reached = true;
     const finish = (outcome: string) => {
       if (ownSudo !== undefined) ownSudo.outcome = outcome;

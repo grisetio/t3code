@@ -1,7 +1,8 @@
 # Device approval
 
-When an agent that T3 started runs `sudo`, a phone approves that one command with
-a hardware-backed key. Four components share the formats below: the root-owned
+When an agent that T3 started runs `sudo`, a phone approves that command with
+a hardware-backed key, and the approval covers the other sudos of the same
+agent command (see [Session grants](#session-grants)). Four components share the formats below: the root-owned
 PAM module and `t3-elevation` helper (Rust), the T3 server (TypeScript), the
 Android signer (Kotlin), and the clients. Every format here is versioned; a
 change that an older peer would misread needs a new version number.
@@ -16,7 +17,11 @@ change that an older peer would misread needs a new version number.
   rendered. No component re-serializes the payload, so there is no
   canonicalization.
 - Thread attribution, the explanation, and every display field outside the
-  payload are UX only.
+  payload are UX only. That includes the agent's command line: when a payload
+  carries `session`, what the later sudos run is only as trustworthy as that
+  unsigned display.
+- A grant is root-owned module state. The server never sees the sudos it
+  approves.
 
 ## Encodings
 
@@ -31,7 +36,8 @@ change that an older peer would misread needs a new version number.
 ## Signed payload (v1)
 
 The module emits one compact JSON object, UTF-8, no BOM, no trailing newline,
-at most **16384 bytes**. Keys appear in this order, with no others:
+at most **16384 bytes**. Keys appear in this order, with no others (`session`
+only when present):
 
 | Field                   | Type                               | Meaning                                                                                                                                                            |
 | ----------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -48,6 +54,7 @@ at most **16384 bytes**. Keys appear in this order, with no others:
 | `cwd`                   | string                             | The caller's working directory.                                                                                                                                    |
 | `service`               | string                             | `PAM_SERVICE` (`sudo`, `sudo-i`).                                                                                                                                  |
 | `keyIds`                | string[]                           | keyIds enrolled for `user`, sorted.                                                                                                                                |
+| `session`               | `{ id, leaderStart, maxUses }`     | Optional. Present when approving also covers later sudos in this kernel session. See [Session grants](#session-grants).                                            |
 
 `command`:
 
@@ -68,25 +75,39 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   | ------------------------ | ------------------------------------------------------------------------------------------------------- |
   | `user_writable_program`  | `resolvedPath` is writable by the requesting user.                                                      |
   | `user_writable_argument` | `command.argv[arg]` is a path the user can change before it is used: one entry per argument. See below. |
-  | `shell`                  | `-s`, `-i`, or the program is a shell.                                                                  |
+  | `shell`                  | The program is a shell running a script file rather than a `-c` string.                                 |
   | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                                              |
   | `edit`                   | `-e` / sudoedit.                                                                                        |
   | `unresolved_program`     | The module can't tell which file sudo will run; `resolvedPath` is `null`.                               |
   | `user_environment`       | sudoers may pass the command a variable from sudo's environment outside a harmless set. See below.      |
-  | `user_writable_cwd`      | The user can replace `cwd` or an entry in it (not with `-i`, `-e`). Programs read config from there.    |
+  | `user_writable_cwd`      | The command reads its cwd and the user can replace `cwd` or an entry in it (not with `-i`, `-e`).       |
   | `dev_attestation`        | `command.argv[arg]` is `--allow-dev-attestation`: a debug build of the app may enroll.                  |
   | `test_attestation`       | `command.argv[arg]` is `--allow-test-attestation`: an emulator or unverified device may enroll.         |
 
+  A `-c` string is shown verbatim as `command.argv`, so `sudo sh -c "…"` gets
+  no `shell` warning; a shell that would read its code from stdin is declined
+  instead (see [Declines](#declines)).
+
   An argument gets `user_writable_argument` when it exists and the user can
   write it, replace it (a writable directory on the way), or change what it
-  points to (a symlink whose target is replaceable), or when it doesn't exist,
-  contains `/` or `.`, and the user can create it (its nearest existing
-  ancestor is replaceable). Missing bare words are skipped, so
-  `systemctl restart nginx` from a project directory stays clean. Option values
+  points to (a symlink whose target is replaceable), or when it doesn't exist
+  and the user can create it (its nearest existing ancestor is replaceable).
+  A missing argument counts only when it is absolute or starts with `./` or
+  `../`, or contains `/` or `.` for a program that reads files by name from
+  the cwd (an interpreter's script, a cwd reader below). Other missing words
+  are names, so `systemctl restart nginx.service` or `brew install
+  mongodb/brew/x` from a project directory stays clean. Option values
   are checked the same way: after the first `=` of `--name=value` and
   `name=value`, and from the first `/` of a short-option cluster (`-tf/x`,
   `-I./include`). Character devices such as `/dev/null` don't count as
   writable.
+
+  `user_writable_cwd` only applies to commands that read the cwd: build tools
+  and other programs that load config or code from it (`CWD_READERS` in
+  `native/t3-elevation/src/sudo_argv.rs`), `python` and `node` unless given a
+  script path, `nix` with a relative or implicit flake, `docker compose` and
+  `build`, and shell strings that run one of these or a relative path. A
+  writable cwd under `sudo systemctl …` changes nothing, so it isn't flagged.
 
   For `user_environment` the module evaluates `env_reset`, `env_keep` and
   `env_check` for the user, target and resolved program, starting from the
@@ -225,7 +246,7 @@ handled like "T3 down".
 | Direction   | Message                                                                                                                     |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
 | module → T3 | `{"type":"hello","v":1,"user","uid","service","host":{"name","machineId"},"argv":[...],"cwd","chain":[...]}`                |
-| T3 → module | `{"type":"hello_reply","v":1,"decision":"mine"\|"not_mine"}`                                                                |
+| T3 → module | `{"type":"hello_reply","v":1,"decision":"mine"\|"not_mine","ownSudo"?:true}`                                                |
 | module → T3 | `{"type":"request","payload":"<b64url payload bytes>"}`                                                                     |
 | T3 → module | `{"type":"response","decision":"approve","keyId","alg","signature","webauthn"?}` or `{"type":"response","decision":"deny"}` |
 | T3 → module | `{"type":"cancel","reason":"shutdown"\|"interrupted"}`                                                                      |
@@ -240,8 +261,12 @@ handled like "T3 down".
   attribution only.
 - `hello_reply` carries no thread or explanation; attribution stays inside the
   server. A server that doesn't speak the hello's `v` answers `not_mine`.
-- After `mine`, the module either sends `request`, or sends `result` with
-  `too_large` / `invalid_encoding` and closes.
+- `ownSudo: true` marks a sudo the server runs itself (its live test, helper
+  operations). The module then skips declines and never adds `session`. A
+  lying server can only use it to send a request to the phone.
+- After `mine`, the module either sends `request`; sends `result` with
+  `too_large` / `invalid_encoding` and closes; or declines by closing without a
+  request (the server records nothing).
 - The module sends one `result` after the single `response` it accepts, then
   closes. On `cancel` it closes without a result.
 
@@ -252,14 +277,79 @@ Timeouts:
 - Server: `request` within 5 s of `mine`, otherwise close. With no `result` by
   `expiresAt + 5 s` on its clock, mark the request `expired` and close.
 
-Outcomes map to PAM results as in the spec: approve → `PAM_SUCCESS`; every
-failure after `mine` → `PAM_CRED_INSUFFICIENT`; `not_mine`, "T3 down", and
+Outcomes map to PAM results as in the spec: approve, or a
+[session grant](#session-grants) → `PAM_SUCCESS`; every failure after `mine`
+→ `PAM_CRED_INSUFFICIENT`; `not_mine`, "T3 down", and
 unsafe config → `PAM_IGNORE`, or `PAM_CRED_INSUFFICIENT` when sudo's argv has
 `-n`. The module can't ask sudo how it parsed its argv, so it scans it with the
 option table, arity and long-option prefix rules of each sudo that may be
 running (sudo.ws, and sudo-rs on Linux). A sudo that would reject the argv
 can't be the caller; `-n` counts only when every other one sees it. Anything
 less certain stays `PAM_IGNORE`, so an interactive sudo never fails early.
+
+### Messages to the agent
+
+The module writes one line to fd 2 after a deny (`t3: the user denied this
+sudo…`), an expiry or a timeout (`t3: the user didn't approve in time…`, in
+`native/t3-elevation/src/decline.rs`), and for each decline. Lines start with
+`t3: `. sudo-rs drops PAM conversation messages without a terminal, and agents
+run sudo without one, so the module writes to the inherited stderr rather
+than through PAM. "T3 down", `not_mine` and unsafe config print nothing.
+
+### Declines
+
+After `mine`, and before any grant is used, the module turns some requests
+back with a hint instead of asking the phone: `-S` (a piped password would
+reach the command), targeting the caller's own user, probes that run nothing
+(`-v`, `-l`, `sudo true`), options it can't show (`unparsed_options`), bare
+`-s` / `-i`, an interpreter or shell reading its code from stdin, and a
+user-writable program when a system copy of the same name exists. The hints
+name the fix (`sudo env NAME=value`, `-c`, the system path). Declines apply
+only to sudo T3 claimed, so a person's own sudo behaves as before.
+
+## Session grants
+
+An agent command such as `sudo apt update && sudo apt install x` would
+otherwise ask once per sudo. When the phone approves a payload with
+`session`, the module records a grant, and later sudos pass without the phone
+when all of these hold:
+
+- the same kernel session (`getsid`), whose leader is alive with the same start
+  time (Linux: field 22 of `/proc/<pid>/stat`; macOS: `p_starttime` in
+  microseconds);
+- the same user, uid, `runAs` and `runAsGroup`, and the approving key is still
+  enrolled;
+- within the approval window, counted from the approval;
+- fewer than `maxUses` sudos so far (`session_max_uses`, default 16).
+
+The program is not part of the grant: the scope is the agent's command, as
+shown in the thread. Declines still apply inside it, and the helper
+(`t3-elevation`) always asks the phone, so an approval can't enroll a key.
+
+The module adds `session` only when the session can't carry later, unrelated
+commands, judged from root-readable kernel facts. The leader must be a shell
+(`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, …) started with a `-c` string,
+every process between sudo and the leader must be a shell, and the leader must
+have no controlling terminal. That excludes a provider process leading the
+session (Codex's app-server), interactive and stdin-fed shells, terminals, and
+`xargs sudo` or `timeout 5 sudo`. Those fall back to one approval per sudo.
+zsh and bash exec a `-c` string's last command, so the last sudo of
+`sudo a && sudo b` leads the session itself with the shell's pid and start
+time. It can use the grant an earlier sudo recorded but never records one.
+
+Residual risks: a `-c` string can itself loop over input (`while read l; do
+eval "$l"; done`), and background jobs it starts keep the session alive until
+the leader exits. A same-uid process that can ptrace the leader (Linux
+`kernel.yama.ptrace_scope` 0) can make it run more sudos within the cap and
+window. Both stay inside the approved command's session, window and cap.
+
+Grants live in `/run/t3-elevation` (Linux tmpfs) or `/var/db/t3-elevation`
+(macOS, where `/var/run` isn't root-only), one `<uid>-<sid>.json` per session.
+The directory is created 0700 and checked like the rest of the root-owned
+state; files are 0600, read without following symlinks, at most 4096 bytes,
+written to a temporary file and renamed under an exclusive lock on the
+directory. An unreadable, unsafe or malformed grant is no grant, and expired,
+spent or orphaned grants are removed on the next approval.
 
 ## Root-owned state
 
@@ -275,6 +365,7 @@ version = 1
 enabled = true
 socket = "/Users/kgriset/.t3/userdata/elevation.sock"
 approval_window_seconds = 100 # optional; default 100, clamped to 10..300
+session_max_uses = 16 # optional; default 16, clamped to 0..64; 0 asks for every sudo
 ```
 
 Unknown keys are ignored; `version` other than 1 or `enabled = false` means
