@@ -82,7 +82,38 @@ describe("decodeElevationRequestPayload", () => {
     );
     expect(decoded.view.enroll?.label).toBe("Pixel\\u{202E}");
     expect(decoded.view.enroll?.allowDevAttestation).toBe(true);
+    expect(decoded.view.warnings.map((warning) => warning.message)).toEqual([
+      "Accepts debug builds of the T3 app.",
+    ]);
     expect(Base64Url.encode(decoded.view.enroll!.publicKey)).toBe(NEW_DEVICE_SPKI);
+  });
+
+  it("names attestation shortcuts once, whether the module or the enroll argv flags them", () => {
+    const decoded = Result.getOrThrow(
+      decodeElevationRequestPayload(
+        encodePayload({
+          argv: [
+            "/usr/local/lib/t3-elevation/t3-elevation",
+            "enroll",
+            "--user",
+            "kgriset",
+            "--label",
+            "Pixel",
+            "--public-key",
+            NEW_DEVICE_SPKI,
+            "--challenge",
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+            "--allow-dev-attestation",
+          ],
+          resolvedPath: "/usr/local/lib/t3-elevation/t3-elevation",
+          warnings: [{ code: "dev_attestation" }, { code: "test_attestation" }],
+        }),
+      ),
+    );
+    expect(decoded.view.warnings.map((warning) => warning.message)).toEqual([
+      "Accepts debug builds of the T3 app.",
+      "Accepts emulators and test keys.",
+    ]);
   });
 
   it("refuses bytes that are not a strict payload", () => {

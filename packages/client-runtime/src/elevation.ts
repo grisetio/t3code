@@ -83,6 +83,10 @@ function warningMessage(warning: ElevationWarning, argv: readonly string[]): str
       return "sudo's options weren't understood; the full command is shown as given.";
     case "edit":
       return "Edits files as the target user.";
+    case "dev_attestation":
+      return "Accepts debug builds of the T3 app.";
+    case "test_attestation":
+      return "Accepts emulators and test keys.";
     default:
       return `Warning: ${escapeElevationDisplayText(warning.code)}`;
   }
@@ -91,6 +95,12 @@ function warningMessage(warning: ElevationWarning, argv: readonly string[]): str
 function elevationRequestViewFromPayload(payload: ElevationPayload): ElevationRequestView {
   const enroll = parseElevationEnrollCommand(payload);
   const publicKey = enroll === null ? null : decodeElevationBase64Url(enroll.publicKey);
+  // Flagged even when the module doesn't warn, as the enroll grammar requires.
+  const warnings: ReadonlyArray<ElevationWarning> =
+    enroll?.allowDevAttestation &&
+    !payload.command.warnings.some((warning) => warning.code === "dev_attestation")
+      ? [{ code: "dev_attestation" }, ...payload.command.warnings]
+      : payload.command.warnings;
   return {
     host: escapeElevationDisplayText(payload.host.name),
     user: escapeElevationDisplayText(payload.user),
@@ -103,7 +113,7 @@ function elevationRequestViewFromPayload(payload: ElevationPayload): ElevationRe
         ? null
         : escapeElevationDisplayText(payload.command.resolvedPath),
     cwd: escapeElevationDisplayText(payload.cwd),
-    warnings: payload.command.warnings.map((warning) => ({
+    warnings: warnings.map((warning) => ({
       code: warning.code,
       message: warningMessage(warning, payload.command.argv),
     })),

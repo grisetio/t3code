@@ -64,9 +64,6 @@ export function ElevationRequestDetails(props: {
           </Text>
         </View>
       ) : null}
-      {view.enroll?.allowDevAttestation ? (
-        <ElevationWarning message="Accepts development builds and emulators as devices." />
-      ) : null}
       {view.warnings.map((warning, index) => (
         <ElevationWarning key={`${warning.code}:${index}`} message={warning.message} />
       ))}
