@@ -293,6 +293,14 @@ Every subcommand prints one JSON object on stdout and exits 0 on success:
 `{ "ok": true, ... }`, or `{ "ok": false, "error": { "code": string, "message": string } }`
 with a non-zero exit. `status` runs unprivileged; the rest need root.
 
+Install copies the helper to `/usr/local/lib/t3-elevation/t3-elevation`. From
+then on the server runs only that copy as root (`enroll`, `revoke`,
+`uninstall`), and only while it and every folder above it are root-owned and
+not group- or world-writable; anything the user can write could be swapped
+between approval and sudo's exec. The first install has no such copy, so it
+runs a helper this OS account could have changed, the same trust as typing the
+sudo password into T3.
+
 | Command                                                                                           | Result                                                                                                                                                                                      |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `t3-elevation version`                                                                            | `{ ok, protocol: 1, version }`                                                                                                                                                              |
