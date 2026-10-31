@@ -339,6 +339,15 @@ or an operand that expands. Claude Code's wrapper (`… && eval '<cmd>' <
 read the same way. Sudos with their own warnings, declines, and the helper
 (`t3-elevation`) are not covered and ask the phone.
 
+A sudo that a live grant doesn't cover logs one `LOG_AUTHPRIV` line,
+`t3-elevation: grant miss: <category> uid=<uid> session=<sid>` (categories:
+`Miss` in `grant.rs`), never argv or paths. It exists to measure whether
+reading expansions the approved text shows (`f=/x; sudo cp "$f" /etc`) is
+worth building. Count them on macOS with `log show --last 7d --predicate
+'process == "sudo" AND eventMessage BEGINSWITH "t3-elevation: grant miss:"' |
+grep -o 'miss: [a-z-]*' | sort | uniq -c`, and on Linux with `journalctl
+--facility=authpriv -o cat | grep -o 'grant miss: [a-z-]*' | sort | uniq -c`.
+
 Residual risks: a same-uid process can run a covered call itself, once, inside
 the window, the session and the same cwd; relative arguments resolve against
 that cwd. A process that can ptrace or preload into the leader before the first

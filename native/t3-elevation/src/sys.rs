@@ -408,6 +408,34 @@ pub fn now() -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd"))]
+const AUTH_FACILITY: c_int = libc::LOG_AUTHPRIV;
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd")))]
+const AUTH_FACILITY: c_int = libc::LOG_AUTH;
+
+/// One syslog line for a sudo a live grant didn't cover. It carries only the
+/// category and ids, since admins read these logs. The ident is in the text,
+/// as Linux-PAM's `pam_syslog` does it: `openlog` would replace sudo's own.
+pub fn log_grant_miss(category: &str, uid: u32, session: i32) {
+    use std::io::Write as _;
+    let mut line = [0u8; 128];
+    let mut text = &mut line[..127];
+    if write!(
+        text,
+        "t3-elevation: grant miss: {category} uid={uid} session={session}"
+    )
+    .is_ok()
+    {
+        unsafe {
+            libc::syslog(
+                AUTH_FACILITY | libc::LOG_NOTICE,
+                c"%s".as_ptr(),
+                line.as_ptr().cast::<c_char>(),
+            );
+        }
+    }
+}
+
 pub fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
