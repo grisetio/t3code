@@ -1000,7 +1000,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         id: "live_test",
         ok: false,
         message: "This server doesn't receive approvals",
-        fixBy: "agent",
+        fixBy: "agent" as const,
       };
     }
     const own: OwnSudo = {
@@ -1025,7 +1025,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         message: succeeded
           ? "sudo -n succeeded without asking a device"
           : "sudo -n doesn't reach device approval",
-        fixBy: "agent",
+        fixBy: "agent" as const,
       };
     }
     // The user declined or let it expire; nothing is broken.
@@ -1038,7 +1038,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           id: "live_test",
           ok: false,
           message: "sudo -n failed after approval",
-          fixBy: "agent",
+          fixBy: "agent" as const,
         };
   }).pipe(Effect.withSpan("ElevationService.test"));
 

@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { countLines, parseNumstat, uncommittedChanges } from "./changes.ts";
@@ -39,8 +40,7 @@ describe("countLines", () => {
 describe("uncommittedChanges", () => {
   const read = (cwd: string) =>
     uncommittedChanges(cwd).pipe(
-      Effect.provide(ProcessRunner.layer),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
     );
 
   it.live(
