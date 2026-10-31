@@ -281,7 +281,15 @@ Any tool may produce this state; T3 verifies it whoever installed it.
   the decimal after `protocol=`; it never loads the library.
 - **sudoers** (any file under `/etc/sudoers.d`, validated with `visudo -cf`):
   `Defaults:<user> noninteractive_auth`, `Defaults:<user> !requiretty`,
-  `Defaults:<user> timestamp_timeout=0`.
+  `Defaults:<user> timestamp_timeout=0`, `Defaults:<user> always_set_home`,
+  `Defaults:<user> !env_editor`, and
+  `Defaults:<user> env_keep -= "HOME EDITOR VISUAL SUDO_EDITOR PATH KDEDIR QTDIR"`.
+  The payload can't show the environment, so an approved command must not
+  inherit variables that point root's code at the user's files: macOS keeps
+  HOME, the editors and PATH (it has no `secure_path`), Fedora keeps KDEDIR and
+  QTDIR. `!env_editor` also covers command-specific keeps such as Arch's
+  `Defaults!/usr/bin/visudo env_keep += "SUDO_EDITOR EDITOR VISUAL"`, which
+  sudo applies after user Defaults.
 - **Config** `users/<user>.toml` pointing at the owning server's socket.
 - **Keys dir** `keys/<user>/` exists, root-owned. External tools create it but
   never manage its contents; the helper writes keys.
