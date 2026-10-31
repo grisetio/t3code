@@ -1,8 +1,5 @@
-import {
-  ELEVATION_EXPLANATION_LABEL,
-  type ElevationRequestView,
-} from "@t3tools/client-runtime/elevation";
-import { elevationComparisonCode, escapeElevationDisplayText } from "@t3tools/contracts";
+import type { ElevationRequestView } from "@t3tools/client-runtime/elevation";
+import { elevationComparisonCode } from "@t3tools/contracts";
 import * as ExpoCrypto from "expo-crypto";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
@@ -10,11 +7,8 @@ import { View } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 
-type DetailsView = Pick<
-  ElevationRequestView,
-  "host" | "runAs" | "commandArgv" | "cwd" | "warnings"
-> &
-  Partial<Pick<ElevationRequestView, "user" | "runAsGroup" | "resolvedPath" | "enroll">>;
+type DetailsView = Pick<ElevationRequestView, "host" | "runAs" | "cwd" | "warnings"> &
+  Partial<Pick<ElevationRequestView, "user" | "runAsGroup" | "resolvedPath">>;
 
 /** The code a new phone shows for its key; both phones must show the same one. */
 export function useComparisonCode(publicKey: Uint8Array | null): string | null {
@@ -40,40 +34,24 @@ export function useComparisonCode(publicKey: Uint8Array | null): string | null {
 }
 
 /**
- * What a sudo request will do. Every string arrives escaped; the argv is shown
- * whole, one entry per line, never truncated.
+ * The technical side of a request, behind a resolved row's Details: module warnings, who it ran
+ * as, where, and which program. Every string arrives escaped.
  */
-export function ElevationRequestDetails(props: {
-  readonly view: DetailsView;
-  readonly explanation: string | null;
-}) {
+export function ElevationTechnicalDetails(props: { readonly view: DetailsView }) {
   const { view } = props;
-  const comparisonCode = useComparisonCode(view.enroll?.publicKey ?? null);
   return (
-    <View className="gap-3">
-      {view.enroll ? (
-        <View className="gap-1">
-          <Text className="font-t3-bold text-base text-foreground">
-            Add device {view.enroll.label}
-          </Text>
-          <Text selectable className="font-mono text-2xl tracking-widest text-foreground">
-            {comparisonCode ?? "…"}
-          </Text>
-          <Text className="text-sm text-foreground-muted">
-            Approve only if the new phone shows this same code.
-          </Text>
-        </View>
-      ) : null}
+    <View className="gap-2">
       {view.warnings.map((warning, index) => (
-        <ElevationWarning key={`${warning.code}:${index}`} message={warning.message} />
+        <View key={`${warning.code}:${index}`} className="flex-row items-start gap-2">
+          <SymbolView
+            name="exclamationmark.triangle"
+            size={13}
+            tintColorClassName="accent-icon"
+            type="monochrome"
+          />
+          <Text className="min-w-0 flex-1 text-sm text-foreground-muted">{warning.message}</Text>
+        </View>
       ))}
-      <View accessibilityLabel="Command" className="gap-0.5 rounded-xl bg-subtle px-3 py-2">
-        {view.commandArgv.map((arg, index) => (
-          <Text key={index} selectable className="font-mono text-sm text-foreground">
-            {arg}
-          </Text>
-        ))}
-      </View>
       <View className="gap-1">
         <DetailLine
           label="Runs as"
@@ -81,18 +59,10 @@ export function ElevationRequestDetails(props: {
             view.runAsGroup ? ` (group ${view.runAsGroup})` : ""
           }`}
         />
-        <DetailLine label="Host" value={view.host} />
+        <DetailLine label="Machine" value={view.host} />
         <DetailLine label="Directory" value={view.cwd} mono />
         {view.resolvedPath ? <DetailLine label="Program" value={view.resolvedPath} mono /> : null}
       </View>
-      {props.explanation ? (
-        <View className="gap-0.5">
-          <Text className="text-sm text-foreground-muted">{ELEVATION_EXPLANATION_LABEL}</Text>
-          <Text selectable className="text-sm text-foreground">
-            {escapeElevationDisplayText(props.explanation)}
-          </Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -111,20 +81,6 @@ function DetailLine(props: {
       >
         {props.value}
       </Text>
-    </View>
-  );
-}
-
-function ElevationWarning({ message }: { readonly message: string }) {
-  return (
-    <View className="flex-row items-start gap-2">
-      <SymbolView
-        name="exclamationmark.triangle"
-        size={15}
-        tintColorClassName="accent-danger-foreground"
-        type="monochrome"
-      />
-      <Text className="min-w-0 flex-1 text-sm text-danger-foreground">{message}</Text>
     </View>
   );
 }

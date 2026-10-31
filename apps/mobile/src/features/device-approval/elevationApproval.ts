@@ -1,8 +1,15 @@
 import type { DecodedElevationPayload } from "@t3tools/client-runtime/elevation";
+import {
+  elevationCommandDisplay,
+  elevationCommandOneLine,
+} from "@t3tools/client-runtime/elevation-command";
 import type { ElevationRequestId, ElevationRespondInput } from "@t3tools/contracts";
 import * as Base64Url from "effect/encoding/Base64Url";
 
 import type { DeviceApprovalKeyRecord } from "./deviceApprovalKeys";
+
+/** How long "✓ Approved" stays before the sheet, lock screen or inline card moves on. */
+export const ELEVATION_SETTLE_MS = 750;
 
 export type ElevationApprovalBlocker = "not_set_up" | "other_user" | "not_enrolled";
 
@@ -10,11 +17,7 @@ export interface ElevationSigningRequest {
   readonly alias: string;
   /** The decoded bytes, re-encoded: the signer signs exactly what was rendered. */
   readonly payloadB64url: string;
-  readonly prompt: {
-    readonly title: string;
-    readonly subtitle?: string;
-    readonly description: string;
-  };
+  readonly prompt: { readonly title: string; readonly description?: string };
   readonly respond: (signature: string) => ElevationRespondInput;
 }
 
@@ -42,11 +45,13 @@ export function prepareElevationSigning(input: {
     signing: {
       alias: key.alias,
       payloadB64url: Base64Url.encode(decoded.bytes),
-      prompt: {
-        title: view.enroll ? `Add device ${view.enroll.label}` : `Approve on ${input.machine}`,
-        ...(view.enroll || view.runAs === "root" ? {} : { subtitle: `Runs as ${view.runAs}` }),
-        description: view.commandArgv.join(" "),
-      },
+      // The same words as the card: its headline, and the command it shows.
+      prompt: view.enroll
+        ? { title: `Add device ${view.enroll.label}` }
+        : {
+            title: `Approve on ${input.machine}`,
+            description: elevationCommandOneLine(elevationCommandDisplay(decoded.payload)),
+          },
       respond: (signature) => ({
         requestId: input.requestId,
         decision: "approve",

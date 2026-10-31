@@ -1,16 +1,17 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  elevationDecodeFailureMessage,
+  ELEVATION_CANT_APPROVE_HERE,
+  elevationAgent,
   elevationFailureMessage,
+  elevationHeadline,
   type DecodedElevationPayload,
+  type ElevationAgent,
 } from "@t3tools/client-runtime/elevation";
 import {
   elevationCommandDisplay,
   elevationCommandMoreLabel,
-  elevationCoverageLabel,
   type ElevationCommandDisplay,
 } from "@t3tools/client-runtime/elevation-command";
-import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -49,7 +50,8 @@ import {
   deviceApprovalSignerErrorMessage,
 } from "./deviceApprovalSigner";
 import { elevationApprovalBlockerMessage, prepareElevationSigning } from "./elevationApproval";
-import { ElevationRequestDetails } from "./ElevationRequestDetails";
+import { rememberDeniedHere } from "./elevationApprovalTarget";
+import { useComparisonCode } from "./ElevationRequestDetails";
 
 /** A request this phone can't sign; the message says why. */
 class BlockedApproval extends Error {}
@@ -106,24 +108,23 @@ export function useElevationRequestContext(
   const thread = useThreadShell(threadId === null ? null : { environmentId, threadId });
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
-  const provider = configs
-    .get(environmentId)
-    ?.providers.find((candidate) => candidate.instanceId === thread?.modelSelection.instanceId);
   return {
-    agent:
-      provider === undefined
-        ? null
-        : {
-            driver: provider.driver,
-            iconUrl: provider.iconUrl,
-            name: resolveProviderInstanceDisplayName(provider),
-          },
+    agent: elevationAgent(thread, configs.get(environmentId)?.providers ?? []),
     machine: presentations.get(environmentId)?.entry.target.label ?? fallbackHost ?? "this machine",
     threadTitle: thread ? escapeElevationDisplayText(thread.title) : null,
   };
 }
 
 type ElevationRequestContext = ReturnType<typeof useElevationRequestContext>;
+
+function ElevationAgentMark(props: { readonly agent: ElevationAgent; readonly size: number }) {
+  return (
+    <View className="flex-row items-center gap-1.5">
+      <ProviderIcon provider={props.agent.driver} iconUrl={props.agent.iconUrl} size={props.size} />
+      <Text className="text-sm text-foreground-muted">{props.agent.name}</Text>
+    </View>
+  );
+}
 
 /** The agent's mark, then the machine; the thread title under it outside the open thread. */
 function ElevationRequestMeta(props: {
@@ -136,8 +137,7 @@ function ElevationRequestMeta(props: {
       <View className="flex-row items-center gap-1.5">
         {agent ? (
           <>
-            <ProviderIcon provider={agent.driver} iconUrl={agent.iconUrl} size={14} />
-            <Text className="text-sm text-foreground-muted">{agent.name}</Text>
+            <ElevationAgentMark agent={agent} size={14} />
             <Text className="text-sm text-foreground-muted">·</Text>
           </>
         ) : null}
@@ -154,32 +154,31 @@ function ElevationRequestMeta(props: {
   );
 }
 
-/** One quiet line; a long command collapses to its first line and the programs run as admin. */
+/** The command in a quiet box; a long one collapses to its first line and the programs run as admin. */
 function ElevationCommandLine(props: {
   readonly display: ElevationCommandDisplay;
+  /** No reason given, so the command is the headline. */
   readonly lead: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { display } = props;
   const more = elevationCommandMoreLabel(display);
   const textClass = props.lead
-    ? "font-mono text-base text-foreground"
-    : "font-mono text-sm text-foreground-muted";
+    ? "font-mono text-sm text-foreground"
+    : "font-mono text-xs text-foreground-secondary";
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Command"
       accessibilityState={{ expanded }}
       accessibilityHint={expanded ? "Collapses the command" : "Shows the whole command"}
-      className="gap-1"
+      className="gap-1 rounded-xl border border-border bg-subtle px-3 py-2"
       onPress={() => setExpanded((current) => !current)}
     >
       {expanded ? (
-        display.lines.map((line, index) => (
-          <Text key={index} selectable className={textClass}>
-            {line}
-          </Text>
-        ))
+        <Text selectable className={textClass}>
+          {display.lines.join("\n")}
+        </Text>
       ) : (
         <>
           <Text numberOfLines={2} className={textClass}>
@@ -218,6 +217,7 @@ function ElevationChangesPointer(props: {
       className="min-h-9 flex-row items-center gap-1.5"
       onPress={() => (props.openChanges ? props.openChanges(open) : open())}
     >
+      <SymbolView name="file.diff" size={14} tintColorClassName="accent-icon" />
       <Text className="text-sm text-foreground-muted">Uncommitted changes · {files}</Text>
       <Text className="text-sm tabular-nums text-adaptive-emerald-700-300">
         +{changes.additions}
@@ -238,10 +238,10 @@ interface ElevationApprovalRequest {
 }
 
 /**
- * The request card: the agent's reason as the headline, who and where under it, the command, and
- * Deny / Approve. Approve opens the fingerprint prompt; backing out of it denies, because the
- * user has already read the request. `hidden` is the lock screen with notification content
- * hidden: only who and where, and no Approve until the phone is unlocked.
+ * The request card: the headline, who and where under it, the command, and Deny / Approve.
+ * Approve opens the fingerprint prompt; backing out of it denies, because the user has already
+ * read the request. `hidden` is the lock screen with notification content hidden: the agent and
+ * machine only, and no Approve until the phone is unlocked.
  */
 export function ElevationApprovalCard(props: {
   readonly request: ElevationApprovalRequest;
@@ -250,6 +250,12 @@ export function ElevationApprovalCard(props: {
   readonly hidden?: { readonly onUnlock: () => void };
   /** Called once the answer reached the server. */
   readonly onAnswered?: (decision: "approve" | "deny") => void;
+  /**
+   * True once the fingerprint signed, false if the approval then failed to send. The request
+   * can leave the pending list before the answer returns, so the parent keeps the card up
+   * from here to show "✓ Approved".
+   */
+  readonly onApproving?: (active: boolean) => void;
   readonly openChanges?: (open: () => void) => void;
 }) {
   const { request } = props;
@@ -265,6 +271,7 @@ export function ElevationApprovalCard(props: {
   const enroll = decoded?.view.enroll ?? null;
 
   const deny = async () => {
+    rememberDeniedHere(request.requestId);
     if (await answer.run({ requestId: request.requestId, decision: "deny" })) {
       approvalHaptic("denied");
       props.onAnswered?.("deny");
@@ -274,6 +281,7 @@ export function ElevationApprovalCard(props: {
   const approve = async () => {
     if (decoded === null) return;
     let declined = false;
+    let signed = false;
     const sent = await answer.run(async () => {
       const prepared = prepareElevationSigning({
         requestId: request.requestId,
@@ -295,6 +303,8 @@ export function ElevationApprovalCard(props: {
         );
         approvalHaptic("approved");
         setApproved(true);
+        signed = true;
+        props.onApproving?.(true);
         return signing.respond(signature);
       } catch (cause) {
         declined = deviceApprovalSignerErrorCode(cause) === "declined";
@@ -303,7 +313,10 @@ export function ElevationApprovalCard(props: {
     });
     if (sent) {
       props.onAnswered?.("approve");
-    } else if (declined && !enroll) {
+      return;
+    }
+    if (signed) props.onApproving?.(false);
+    if (declined && !enroll) {
       // Adding a device keeps Cancel as a plain cancel, like setup.
       await deny();
     } else {
@@ -357,59 +370,45 @@ export function ElevationApprovalCard(props: {
   if (props.hidden) {
     return (
       <View className="gap-4">
-        <ElevationRequestMeta context={context} showThread={false} />
+        <View className="gap-1">
+          {context.agent ? <ElevationAgentMark agent={context.agent} size={14} /> : null}
+          <Text numberOfLines={2} className="font-t3-bold text-lg text-foreground">
+            {context.machine}
+          </Text>
+        </View>
         {errorLine}
         {actions}
       </View>
     );
   }
 
-  const reason =
-    request.explanation && request.explanation.trim() !== ""
-      ? escapeElevationDisplayText(request.explanation.trim())
-      : null;
+  const headline = elevationHeadline({
+    explanation: request.explanation,
+    decoded: request.decoded,
+  });
   const command = decoded === null ? null : elevationCommandDisplay(decoded.payload);
-  const coverage = command === null ? null : elevationCoverageLabel(command);
 
   return (
     <View className="gap-3">
+      {headline.command && command ? (
+        <ElevationCommandLine display={command} lead />
+      ) : (
+        <Text selectable className="font-t3-bold text-lg text-foreground">
+          {headline.text}
+        </Text>
+      )}
+      <ElevationRequestMeta context={context} showThread={!props.inline} />
       {decoded === null ? (
-        <Text className="text-sm text-danger-foreground">
-          {Result.isFailure(request.decoded)
-            ? elevationDecodeFailureMessage(request.decoded.failure)
-            : null}{" "}
+        <Text className="text-sm text-foreground-muted">
           Deny it, or approve it on another device.
         </Text>
       ) : enroll ? (
-        <ElevationRequestDetails view={decoded.view} explanation={request.explanation} />
+        <EnrollComparison publicKey={enroll.publicKey} />
       ) : (
         <>
-          {reason ? (
-            <Text selectable className="font-t3-bold text-lg text-foreground">
-              “{reason}”
-            </Text>
-          ) : command ? (
-            <ElevationCommandLine display={command} lead />
-          ) : null}
-          <ElevationRequestMeta context={context} showThread={!props.inline} />
-          {reason && command ? <ElevationCommandLine display={command} lead={false} /> : null}
-          {decoded.view.runAs === "root" ? null : (
-            <Text className="text-sm text-foreground-muted">Runs as {decoded.view.runAs}</Text>
+          {headline.command || command === null ? null : (
+            <ElevationCommandLine display={command} lead={false} />
           )}
-          {coverage ? <Text className="text-sm text-foreground-muted">{coverage}</Text> : null}
-          {decoded.view.warnings.map((warning, index) => (
-            <View key={`${warning.code}:${index}`} className="flex-row items-start gap-2">
-              <SymbolView
-                name="exclamationmark.triangle"
-                size={14}
-                tintColorClassName="accent-icon"
-                type="monochrome"
-              />
-              <Text className="min-w-0 flex-1 text-sm text-foreground-muted">
-                {warning.message}
-              </Text>
-            </View>
-          ))}
           <ElevationChangesPointer
             environmentId={request.environmentId}
             threadId={request.threadId}
@@ -421,10 +420,29 @@ export function ElevationApprovalCard(props: {
       {errorLine}
       {signerPresent ? null : (
         <Text className="text-sm text-foreground-muted">
-          Approving needs the T3 app on an Android phone with a fingerprint. You can still deny.
+          {ELEVATION_CANT_APPROVE_HERE} You can still deny.
         </Text>
       )}
       {actions}
+    </View>
+  );
+}
+
+/** Both phones show a code derived from the new key; matching codes mean it is the same key. */
+function EnrollComparison(props: { readonly publicKey: Uint8Array }) {
+  const code = useComparisonCode(props.publicKey);
+  return (
+    <View className="gap-1 rounded-xl bg-subtle px-3 py-3">
+      <Text
+        selectable
+        accessibilityLabel={code === null ? "Comparison code loading" : `Comparison code ${code}`}
+        className="font-mono text-2xl tracking-widest text-foreground"
+      >
+        {code ?? "…"}
+      </Text>
+      <Text className="text-sm text-foreground-muted">
+        Approve only if the new phone shows this same code.
+      </Text>
     </View>
   );
 }

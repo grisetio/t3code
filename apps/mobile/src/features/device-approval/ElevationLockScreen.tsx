@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import { useEffect, useRef, useState } from "react";
 import { BackHandler, Modal, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,14 +11,13 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
 import { androidLockScreen } from "../agent-awareness/androidNotifications";
 import { ElevationApprovalCard } from "./ElevationApprovalCard";
+import { ELEVATION_SETTLE_MS } from "./elevationApproval";
 import {
   elevationLockScreenAtom,
   openElevationApproval,
   pendingRequestForNotificationIntent,
 } from "./elevationApprovalTarget";
 
-// Matches the sheet: the approved state settles before the card goes away.
-const SETTLE_MS = 750;
 // The request normally arrives with the connection; past this it was answered or expired.
 const ARRIVAL_TIMEOUT_MS = 15_000;
 
@@ -47,8 +47,11 @@ function LockScreenRequest() {
     const timer = setTimeout(() => setWaitedOut(true), ARRIVAL_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, []);
-  const match =
+  const current =
     session === null ? null : pendingRequestForNotificationIntent(session.intent, pending, now);
+  // Approved here: "✓ Approved" stays even once the request has left the list.
+  const [held, setHeld] = useState<PendingElevationRequest | null>(null);
+  const match = held ?? current;
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -106,7 +109,11 @@ function LockScreenRequest() {
                 changes: match.request.changes,
               }}
               {...(session.hideContent ? { hidden: { onUnlock: () => void unlock() } } : {})}
-              onAnswered={() => setTimeout(leaveLockScreen, SETTLE_MS)}
+              onApproving={(active) => setHeld(active ? match : null)}
+              onAnswered={(decision) => {
+                if (decision === "approve") setTimeout(leaveLockScreen, ELEVATION_SETTLE_MS);
+                else leaveLockScreen();
+              }}
               openChanges={(open) => void unlock(open)}
             />
           ) : (

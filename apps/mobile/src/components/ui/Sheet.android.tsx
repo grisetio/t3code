@@ -23,7 +23,9 @@ export function Sheet(props: SheetProps) {
           header has one, so the content comes first and column-reverse draws it below. */}
       <View collapsable={false} className="absolute inset-0 flex-col-reverse bg-sheet">
         <View className="flex-1">{props.children}</View>
-        <AndroidSheetHeader title={props.title} onBack={() => setIsOpen(false)} />
+        {props.title === undefined ? null : (
+          <AndroidSheetHeader title={props.title} onBack={() => setIsOpen(false)} />
+        )}
       </View>
     </FormSheet>
   );
