@@ -371,7 +371,7 @@ pub fn describe(sudo_argv: &[String], parsed: &Parsed, context: &Context) -> Des
         }
     };
     if let Some(path) = &resolved_path
-        && program_writable(Path::new(path), context)
+        && replaceable(Path::new(path), context)
     {
         warnings.push(Warning::new("user_writable_program"));
     }
@@ -538,21 +538,44 @@ fn path_replaceable(path: &Path, context: &Context) -> bool {
     false
 }
 
-fn program_writable(path: &Path, context: &Context) -> bool {
-    path_replaceable(path, context)
-        || std::fs::canonicalize(path).is_ok_and(|canonical| path_replaceable(&canonical, context))
+/// The path, or the file a symlink there points at, can be changed by the
+/// user between approval and use.
+fn replaceable(path: &Path, context: &Context) -> bool {
+    if path_replaceable(path, context) {
+        return true;
+    }
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => path_replaceable(&canonical, context),
+        // A dangling symlink becomes whatever its target is created as.
+        Err(_) => std::fs::read_link(path).is_ok_and(|target| {
+            let parent = path.parent().unwrap_or(Path::new("/"));
+            creatable(&parent.join(target), context)
+        }),
+    }
 }
 
+/// A missing path can be created by whoever can write its nearest existing
+/// ancestor.
+fn creatable(path: &Path, context: &Context) -> bool {
+    path.ancestors()
+        .skip(1)
+        .find(|dir| std::fs::symlink_metadata(dir).is_ok())
+        .is_some_and(|dir| replaceable(dir, context))
+}
+
+/// Existing arguments are checked as paths whatever they look like. A missing
+/// one counts as a path only with a `/` or `.` in it: every word of
+/// `systemctl restart nginx` is "missing" in a writable cwd, and warning on
+/// all of them would teach people to skip warnings.
 fn argument_writable(arg: &str, context: &Context) -> bool {
     if arg.is_empty() || arg.starts_with('-') {
         return false;
     }
-    let path = if arg.starts_with('/') {
-        PathBuf::from(arg)
-    } else {
-        Path::new(context.cwd).join(arg)
-    };
-    std::fs::metadata(&path).is_ok_and(|meta| writable_by(&meta, context))
+    let path = Path::new(context.cwd).join(arg);
+    if std::fs::symlink_metadata(&path).is_ok() {
+        return replaceable(&path, context);
+    }
+    (arg.contains('/') || arg.contains('.')) && creatable(&path, context)
 }
 
 #[cfg(test)]
@@ -886,7 +909,6 @@ mod tests {
     /// point it elsewhere after approval; demonstrated with
     /// `sudo python3 ~/tool.py` on Ubuntu 24.04.
     #[test]
-    #[ignore = "review: replaceable arguments get no user_writable_argument warning; remove when fixed"]
     fn replaceable_arguments_are_warned() {
         let tmp = std::env::temp_dir().join(format!("t3e-argv-replace-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -903,5 +925,34 @@ mod tests {
         std::fs::remove_dir_all(&tmp).unwrap();
         let expected = vec![Warning::at("user_writable_argument", 1)];
         assert_eq!((symlinked, missing), (expected.clone(), expected));
+    }
+
+    #[test]
+    fn arguments_root_controls_are_not_warned() {
+        let tmp = std::env::temp_dir().join(format!("t3e-argv-rootargs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::os::unix::fs::symlink(tmp.join("not-yet.py"), tmp.join("dangling")).unwrap();
+        let cwd = tmp.to_string_lossy().into_owned();
+        let shells = vec![];
+        let ctx = context(&cwd, &[], &shells);
+        let sudo = argv(&[
+            "sudo",
+            "/bin/cat",
+            "/etc/hosts",
+            "/nonexistent-t3/x.py",
+            "restart",
+            "./later",
+            "dangling",
+        ]);
+        let warnings = describe(&sudo, &parse(&sudo), &ctx).command.warnings;
+        std::fs::remove_dir_all(&tmp).unwrap();
+        assert_eq!(
+            warnings,
+            vec![
+                Warning::at("user_writable_argument", 4),
+                Warning::at("user_writable_argument", 5)
+            ]
+        );
     }
 }

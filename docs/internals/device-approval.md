@@ -64,14 +64,21 @@ at most **16384 bytes**. Keys appear in this order, with no others:
 - `warnings`: objects `{ "code": string, "arg"?: int }`. `arg` indexes
   `command.argv`. Codes in v1:
 
-  | Code                     | When                                                                                |
-  | ------------------------ | ----------------------------------------------------------------------------------- |
-  | `user_writable_program`  | `resolvedPath` is writable by the requesting user.                                  |
-  | `user_writable_argument` | `command.argv[arg]` is an existing file the user can write. One entry per argument. |
-  | `shell`                  | `-s`, `-i`, or the program is a shell.                                              |
-  | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                          |
-  | `edit`                   | `-e` / sudoedit.                                                                    |
-  | `unresolved_program`     | The module can't tell which file sudo will run; `resolvedPath` is `null`.           |
+  | Code                     | When                                                                                                    |
+  | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+  | `user_writable_program`  | `resolvedPath` is writable by the requesting user.                                                      |
+  | `user_writable_argument` | `command.argv[arg]` is a path the user can change before it is used: one entry per argument. See below. |
+  | `shell`                  | `-s`, `-i`, or the program is a shell.                                                                  |
+  | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                                              |
+  | `edit`                   | `-e` / sudoedit.                                                                                        |
+  | `unresolved_program`     | The module can't tell which file sudo will run; `resolvedPath` is `null`.                               |
+
+  An argument gets `user_writable_argument` when it exists and the user can
+  write it, replace it (a writable directory on the way), or change what it
+  points to (a symlink whose target is replaceable), or when it doesn't exist,
+  contains `/` or `.`, and the user can create it (its nearest existing
+  ancestor is replaceable). Missing bare words are skipped, so
+  `systemctl restart nginx` from a project directory stays clean.
 
   Clients render an unknown code as a generic red warning showing the code. A
   warning only adds caution, so this is safe without a version bump.
