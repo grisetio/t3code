@@ -1,3 +1,4 @@
+import { ELEVATION_CANT_APPROVE_HERE } from "@t3tools/client-runtime/elevation";
 import { requireOptionalNativeModule } from "expo";
 import { Platform } from "react-native";
 
@@ -107,8 +108,7 @@ export function deviceApprovalSignerErrorCode(error: unknown): DeviceApprovalErr
 }
 
 const SIGNER_ERROR_MESSAGES: Record<DeviceApprovalErrorCode, string> = {
-  unavailable:
-    "This phone can't approve requests: it needs Android 11 or later with a fingerprint sensor.",
+  unavailable: ELEVATION_CANT_APPROVE_HERE,
   no_biometrics: "Add a fingerprint in Android settings first.",
   cancelled: "Cancelled.",
   declined: "Cancelled.",

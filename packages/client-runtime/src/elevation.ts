@@ -31,7 +31,7 @@ export const ELEVATION_APPROVE_ON_PHONE = "Approve on your phone";
 const ELEVATION_EXPIRED_TEXT = "Nobody approved in time";
 /** Every surface that can't sign says so in these words. */
 export const ELEVATION_CANT_APPROVE_HERE =
-  "Approving needs the T3 app on an Android phone with a fingerprint sensor.";
+  "Approving needs the T3 app on Android 11 or later with a fingerprint sensor.";
 /** pam_tid sits before the password in a nix-darwin or Apple sudo stack; no sudo option skips it. */
 export const ELEVATION_TOUCH_ID_HINT =
   "On a Mac that uses Touch ID for sudo, a Touch ID prompt may appear there first; Cancel continues with the password.";
