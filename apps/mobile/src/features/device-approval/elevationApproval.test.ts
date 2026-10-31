@@ -17,12 +17,11 @@ const key = { alias: "t3-elevation:env:kgriset", keyId: KEY_ID, user: "kgriset",
 
 describe("prepareElevationSigning", () => {
   it("signs the exact payload bytes and answers with the enrolled key", () => {
-    const prepared = prepareElevationSigning({ requestId, decoded, key });
+    const prepared = prepareElevationSigning({ requestId, decoded, key, machine: "Studio" });
     if (!prepared.ok) throw new Error(prepared.blocker);
     expect(Base64Url.decode(prepared.signing.payloadB64url)).toEqual(Result.succeed(payloadBytes));
     expect(prepared.signing.prompt).toEqual({
-      title: "Run as root",
-      subtitle: "mac\\u{202E}book",
+      title: "Approve on Studio",
       description: "rm -rf /tmp/x",
     });
     expect(prepared.signing.respond("c2ln")).toEqual({
@@ -35,7 +34,7 @@ describe("prepareElevationSigning", () => {
   });
 
   it("refuses to sign when the module would not accept this phone's key", () => {
-    expect(prepareElevationSigning({ requestId, decoded, key: null })).toEqual({
+    expect(prepareElevationSigning({ requestId, decoded, key: null, machine: "Studio" })).toEqual({
       ok: false,
       blocker: "not_set_up",
     });
@@ -44,9 +43,17 @@ describe("prepareElevationSigning", () => {
         requestId,
         decoded,
         key: { ...key, keyId: "v8uit0KoB7u3K1IvpGlMRg" },
+        machine: "Studio",
       }),
     ).toEqual({ ok: false, blocker: "not_enrolled" });
-    expect(prepareElevationSigning({ requestId, decoded, key: { ...key, user: "root" } })).toEqual({
+    expect(
+      prepareElevationSigning({
+        requestId,
+        decoded,
+        key: { ...key, user: "root" },
+        machine: "Studio",
+      }),
+    ).toEqual({
       ok: false,
       blocker: "other_user",
     });

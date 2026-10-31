@@ -3,34 +3,42 @@ import {
   elevationRequestFallbackView,
   elevationRequestStatusView,
 } from "@t3tools/client-runtime/elevation";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import { elevationCommandDisplay } from "@t3tools/client-runtime/elevation-command";
+import {
+  escapeElevationDisplayText,
+  type EnvironmentId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, View, type ColorValue } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
-import { Button } from "../../components/ui/Button";
-import { openElevationApproval } from "./elevationApprovalTarget";
-import { useElevationRespond } from "./ElevationApprovalHost";
-import { ElevationRequestDetails } from "./ElevationRequestDetails";
+import { approvalHaptic } from "./approvalHaptics";
+import { ElevationApprovalCard, useElevationRequestContext } from "./ElevationApprovalCard";
 
-const STATUS_SYMBOLS: Record<ReturnType<typeof elevationRequestStatusView>["kind"], AppSymbolName> =
-  {
-    pending: { ios: "lock", android: "lock" },
-    approved: "checkmark",
-    denied: "xmark",
-    expired: "clock",
-    cancelled: "minus",
-  };
+type ResolvedKind = "done" | "approved" | "denied" | "expired" | "cancelled";
+
+const STATUS: Record<ResolvedKind, { readonly label: string; readonly symbol: AppSymbolName }> = {
+  done: { label: "Done", symbol: "checkmark" },
+  approved: { label: "Approved", symbol: "checkmark" },
+  denied: { label: "Denied", symbol: "xmark" },
+  expired: { label: "Expired", symbol: "clock" },
+  cancelled: { label: "Cancelled", symbol: "minus" },
+};
+
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
   readonly iconColor: ColorValue;
+  /** The item's run is still going, so an approved command may not have finished yet. */
+  readonly runActive: boolean;
 }) {
   const { item, visibility } = props.projectedItem;
-  const [expanded, setExpanded] = useState(false);
   const payload = item.type === "elevation_request" ? item.payload : null;
   // Stable bytes keep the comparison code from recomputing on every render.
   const decoded = useMemo(
@@ -38,22 +46,109 @@ export function ElevationRequestCard(props: {
     [payload],
   );
   if (item.type !== "elevation_request") return null;
-  const status = elevationRequestStatusView(item);
-  const decodedView = decoded !== null && Result.isSuccess(decoded) ? decoded.success.view : null;
-  const view = decodedView ?? elevationRequestFallbackView(item);
 
-  if (status.kind === "pending" && visibility === "local") {
+  if (item.elevationStatus === "pending" && visibility === "local" && decoded !== null) {
     return (
-      <PendingElevationCard
-        environmentId={props.environmentId}
-        requestId={item.requestId}
-        title={
-          decodedView?.enroll ? `Add device ${decodedView.enroll.label}` : `sudo on ${view.host}`
-        }
-        command={view.commandArgv.join(" ")}
-      />
+      <View className="mb-3 rounded-[20px] border border-border bg-card-alt p-4">
+        <ElevationApprovalCard
+          inline
+          request={{
+            environmentId: props.environmentId,
+            requestId: item.requestId,
+            threadId: item.threadId,
+            decoded,
+            explanation: item.explanation,
+            agentCommand: item.agentCommand,
+            changes: item.changes,
+          }}
+        />
+      </View>
     );
   }
+  return (
+    <ResolvedElevationRow
+      environmentId={props.environmentId}
+      item={item}
+      decoded={decoded}
+      iconColor={props.iconColor}
+      runActive={props.runActive}
+    />
+  );
+}
+
+type ElevationItem = Extract<
+  OrchestrationV2ProjectedTurnItem["item"],
+  { readonly type: "elevation_request" }
+>;
+
+/** One line, tap for who asked, the whole command and how it ended. */
+function ResolvedElevationRow(props: {
+  readonly environmentId: EnvironmentId;
+  readonly item: ElevationItem;
+  readonly decoded: ReturnType<typeof decodeElevationRequestPayload> | null;
+  readonly iconColor: ColorValue;
+  readonly runActive: boolean;
+}) {
+  const { item } = props;
+  const [expanded, setExpanded] = useState(false);
+  const status = elevationRequestStatusView(item);
+  const kind: ResolvedKind | "pending" =
+    status.kind === "approved" && !props.runActive ? "done" : status.kind;
+  const view =
+    props.decoded !== null && Result.isSuccess(props.decoded)
+      ? props.decoded.success.view
+      : elevationRequestFallbackView(item);
+  const context = useElevationRequestContext(props.environmentId, item.threadId, view.host);
+  const display = elevationCommandDisplay({
+    commandArgv:
+      props.decoded !== null && Result.isSuccess(props.decoded)
+        ? props.decoded.success.payload.command.argv
+        : item.argv,
+    agentCommand: item.agentCommand,
+  });
+
+  // A light tick when an approved command finishes while its row is on screen.
+  const previousKind = useRef(kind);
+  useEffect(() => {
+    if (previousKind.current === "approved" && kind === "done") approvalHaptic("done");
+    previousKind.current = kind;
+  }, [kind]);
+
+  if (kind === "pending") {
+    // Pending on another client: the request is answered there or from the banner.
+    return (
+      <View className="mb-3 min-h-9 flex-row items-center gap-2 px-1">
+        <SymbolView
+          name={{ ios: "lock", android: "lock" }}
+          size={13}
+          tintColor={props.iconColor}
+          type="monochrome"
+        />
+        <Text className="flex-1 text-sm text-foreground-muted" numberOfLines={1}>
+          Waiting for approval · {display.lines.join(" ")}
+        </Text>
+      </View>
+    );
+  }
+
+  const time = timeFormat.format(DateTime.toDateUtc(item.completedAt ?? item.updatedAt));
+  const device =
+    item.resolvedBy === null
+      ? ""
+      : ` on ${escapeElevationDisplayText(item.resolvedBy.deviceLabel)}`;
+  const how = {
+    done: `Approved${device} · ${time} · finished`,
+    approved: `Approved${device} · ${time}`,
+    denied: `Denied${device} · ${time}`,
+    expired: `Nobody approved in time · ${time}`,
+    cancelled: `Cancelled · ${time}`,
+  }[kind];
+  const reason =
+    item.explanation && item.explanation.trim() !== ""
+      ? escapeElevationDisplayText(item.explanation.trim())
+      : null;
+  const agentName = context.agent?.name ?? "The agent";
+
   return (
     <View className="mb-3 px-1">
       <Pressable
@@ -63,67 +158,38 @@ export function ElevationRequestCard(props: {
         onPress={() => setExpanded((current) => !current)}
       >
         <SymbolView
-          name={STATUS_SYMBOLS[status.kind]}
+          name={STATUS[kind].symbol}
           size={13}
           tintColor={props.iconColor}
           type="monochrome"
         />
-        <Text className="flex-1 font-sans text-sm text-foreground-muted" numberOfLines={2}>
-          sudo {view.commandArgv.join(" ")} · {status.label}
+        <Text className="font-t3-medium text-sm text-foreground">{STATUS[kind].label}</Text>
+        <Text className="min-w-0 flex-1 font-mono text-sm text-foreground-muted" numberOfLines={1}>
+          {display.lines.map((line) => line.replace(/\\$/, "").trim()).join(" ")}
         </Text>
+        <SymbolView
+          name={expanded ? "chevron.up" : "chevron.down"}
+          size={12}
+          tintColor={props.iconColor}
+          type="monochrome"
+        />
       </Pressable>
       {expanded ? (
-        <View className="gap-2 pt-1 pb-2">
+        <View className="gap-1.5 pt-1 pb-2">
+          <Text className="text-sm text-foreground-muted">
+            {reason ? `${agentName}: “${reason}”` : agentName}
+          </Text>
+          {display.lines.map((line, index) => (
+            <Text key={index} selectable className="font-mono text-sm text-foreground">
+              {line}
+            </Text>
+          ))}
+          <Text className="text-xs text-foreground-muted">{how}</Text>
           {status.kind !== "pending" && status.detail ? (
             <Text className="text-xs text-foreground-muted">{status.detail}</Text>
           ) : null}
-          <ElevationRequestDetails view={view} explanation={item.explanation} />
         </View>
       ) : null}
-    </View>
-  );
-}
-
-/** The full request is reviewed in the sheet, which renders from the signed bytes. */
-function PendingElevationCard(props: {
-  readonly environmentId: EnvironmentId;
-  readonly requestId: Parameters<typeof openElevationApproval>[0]["requestId"];
-  readonly title: string;
-  readonly command: string;
-}) {
-  const answer = useElevationRespond(props.environmentId);
-  return (
-    <View className="mb-3 gap-3 rounded-[20px] border border-border bg-card-alt p-4">
-      <View className="gap-1">
-        <Text className="font-t3-bold text-base text-foreground">
-          The agent wants to run a command as root
-        </Text>
-        <Text className="font-mono text-sm text-foreground" numberOfLines={3}>
-          {props.command}
-        </Text>
-        <Text className="text-sm text-foreground-muted">{props.title}</Text>
-      </View>
-      {answer.error !== null ? (
-        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-          {answer.error}
-        </Text>
-      ) : null}
-      <Button
-        label="Review and approve"
-        tone="primary"
-        fullWidth
-        onPress={() =>
-          openElevationApproval({ environmentId: props.environmentId, requestId: props.requestId })
-        }
-      />
-      <View className="flex-row justify-end">
-        <Button
-          label="Deny"
-          tone="text"
-          disabled={!answer.canRespond || answer.pending}
-          onPress={() => void answer.run({ requestId: props.requestId, decision: "deny" })}
-        />
-      </View>
     </View>
   );
 }

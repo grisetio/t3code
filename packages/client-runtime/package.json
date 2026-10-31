@@ -55,6 +55,10 @@
       "types": "./src/elevation.ts",
       "default": "./src/elevation.ts"
     },
+    "./elevation-command": {
+      "types": "./src/elevationCommand.ts",
+      "default": "./src/elevationCommand.ts"
+    },
     "./secret-request": {
       "types": "./src/secretRequest.ts",
       "default": "./src/secretRequest.ts"

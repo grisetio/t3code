@@ -8,6 +8,8 @@ export type DeviceApprovalErrorCode =
   | "unavailable"
   | "no_biometrics"
   | "cancelled"
+  /** The user backed out of the prompt: its Cancel button or Back. */
+  | "declined"
   | "lockout"
   | "key_invalidated"
   | "not_found"
@@ -39,6 +41,8 @@ interface NativeDeviceApproval {
   ): Promise<{ readonly signature: string }>;
   deleteKey(alias: string): Promise<void>;
   hasKey(alias: string): Promise<boolean>;
+  /** False for keys from builds that required an unlocked phone; absent on older builds. */
+  signsWhileLocked?(alias: string): Promise<boolean>;
 }
 
 const native =
@@ -50,6 +54,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<DeviceApprovalErrorCode>([
   "unavailable",
   "no_biometrics",
   "cancelled",
+  "declined",
   "lockout",
   "key_invalidated",
   "not_found",
@@ -92,6 +97,9 @@ export const deviceApprovalSigner = {
   ) => call((module) => module.sign(alias, payloadB64url, prompt)),
   deleteKey: (alias: string) => call((module) => module.deleteKey(alias)),
   hasKey: (alias: string) => call((module) => module.hasKey(alias)),
+  /** Whether the key can sign from the lock screen; keys from earlier builds can't. */
+  signsWhileLocked: (alias: string) =>
+    call((module) => module.signsWhileLocked?.(alias) ?? Promise.resolve(true)),
 };
 
 export function deviceApprovalSignerErrorCode(error: unknown): DeviceApprovalErrorCode {
@@ -103,6 +111,7 @@ const SIGNER_ERROR_MESSAGES: Record<DeviceApprovalErrorCode, string> = {
     "This phone can't approve requests: it needs Android 11 or later with a fingerprint sensor.",
   no_biometrics: "Add a fingerprint in Android settings first.",
   cancelled: "Cancelled.",
+  declined: "Cancelled.",
   lockout: "Too many attempts. Unlock the phone with its PIN, then try again.",
   key_invalidated:
     "A fingerprint was added or removed on this phone, so its key no longer works. Set it up again in Settings → Device approval.",

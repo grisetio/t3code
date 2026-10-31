@@ -12,7 +12,7 @@ export interface ElevationSigningRequest {
   readonly payloadB64url: string;
   readonly prompt: {
     readonly title: string;
-    readonly subtitle: string;
+    readonly subtitle?: string;
     readonly description: string;
   };
   readonly respond: (signature: string) => ElevationRespondInput;
@@ -23,6 +23,8 @@ export function prepareElevationSigning(input: {
   readonly requestId: ElevationRequestId;
   readonly decoded: DecodedElevationPayload;
   readonly key: DeviceApprovalKeyRecord | null;
+  /** This phone's name for the machine. */
+  readonly machine: string;
 }):
   | { readonly ok: true; readonly signing: ElevationSigningRequest }
   | {
@@ -41,8 +43,8 @@ export function prepareElevationSigning(input: {
       alias: key.alias,
       payloadB64url: Base64Url.encode(decoded.bytes),
       prompt: {
-        title: view.enroll ? `Add device ${view.enroll.label}` : `Run as ${view.runAs}`,
-        subtitle: view.host,
+        title: view.enroll ? `Add device ${view.enroll.label}` : `Approve on ${input.machine}`,
+        ...(view.enroll || view.runAs === "root" ? {} : { subtitle: `Runs as ${view.runAs}` }),
         description: view.commandArgv.join(" "),
       },
       respond: (signature) => ({

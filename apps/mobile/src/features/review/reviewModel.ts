@@ -9,6 +9,8 @@ import * as Order from "effect/Order";
 export type ReviewSectionKind = "turn" | "working-tree" | "branch-range";
 
 const CHANGES_SECTION_ID = "git:branch-range";
+/** The checkout's uncommitted changes. */
+export const REVIEW_WORKING_TREE_SECTION_ID = "git:working-tree";
 const CHANGES_TITLE = "Changes";
 const UNCOMMITTED_SUBTITLE = "Staged, unstaged, and untracked files";
 

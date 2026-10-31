@@ -1377,6 +1377,14 @@ export type OrchestrationV2ElevationResolvedBy = typeof OrchestrationV2Elevation
  * Display fields mirror the payload for lists and history. A client that signs
  * renders from `payload` instead (docs/internals/device-approval.md).
  */
+/** Uncommitted changes in the checkout at the request's cwd when it arrived. */
+export const OrchestrationV2ElevationChanges = Schema.Struct({
+  files: NonNegativeInt,
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type OrchestrationV2ElevationChanges = typeof OrchestrationV2ElevationChanges.Type;
+
 const OrchestrationV2ElevationRequestFields = {
   type: Schema.Literal("elevation_request"),
   requestId: ElevationRequestId,
@@ -1389,6 +1397,10 @@ const OrchestrationV2ElevationRequestFields = {
   warnings: Schema.Array(ElevationWarning),
   /** From the agent's tool call; unverified. */
   explanation: Schema.NullOr(Schema.String),
+  /** The agent's shell command line from its tool call; unverified. */
+  agentCommand: Schema.optionalKey(Schema.String),
+  /** Absent when the checkout is clean or isn't a git repository. */
+  changes: Schema.optionalKey(OrchestrationV2ElevationChanges),
   /** The exact signed bytes, null when the module could not build them (see `failure`). */
   payload: Schema.NullOr(ElevationBase64Url),
   elevationStatus: OrchestrationV2ElevationRequestStatus,

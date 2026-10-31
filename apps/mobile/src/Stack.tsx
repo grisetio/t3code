@@ -65,6 +65,7 @@ import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSh
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { ElevationApprovalHost } from "./features/device-approval/ElevationApprovalHost";
+import { ElevationLockScreen } from "./features/device-approval/ElevationLockScreen";
 import { ElevationPendingBanner } from "./features/device-approval/ElevationPendingBanner";
 import { SettingsDeviceApprovalRouteScreen } from "./features/device-approval/SettingsDeviceApprovalRouteScreen";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
@@ -588,6 +589,7 @@ function RootStackLayout(props: {
                 <HardwareKeyboardCommandOverlay />
                 <ElevationPendingBanner pathname={workspaceLocation.pathname} />
                 <ElevationApprovalHost />
+                <ElevationLockScreen />
               </AdaptiveWorkspaceLayout>
             </AndroidWorkspaceTabsProvider>
           </WorkspaceConnectionStatusProvider>

@@ -70,11 +70,19 @@ object DeviceApprovalKeys {
     return keyStore().containsAlias(alias)
   }
 
-  fun delete(alias: String) {
+  fun delete(context: Context, alias: String) {
     requireAlias(alias)
     val store = keyStore()
     if (store.containsAlias(alias)) store.deleteEntry(alias)
+    LockScreenKeys.forget(context, alias)
   }
+
+  /**
+   * Keys from earlier builds required an unlocked device, so they can't sign from the lock screen.
+   * Keystore doesn't report that flag back, so keys made without it are recorded at creation.
+   */
+  fun signsWhileLocked(context: Context, alias: String): Boolean =
+    has(alias) && LockScreenKeys.isRecorded(context, alias)
 
   private fun requireChallenge(text: String): ByteArray =
     DeviceApprovalCodec.decodeBase64Url(text)
@@ -107,6 +115,7 @@ object DeviceApprovalKeys {
       store.deleteEntry(alias)
       throw ApprovalException(ApprovalError.UNAVAILABLE)
     }
+    LockScreenKeys.record(context, alias)
     val spki = chain[0].publicKey.encoded
     return mapOf(
       "keyId" to DeviceApprovalCodec.keyId(spki),
@@ -125,7 +134,8 @@ object DeviceApprovalKeys {
       .setUserAuthenticationRequired(true)
       .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
       .setInvalidatedByBiometricEnrollment(true)
-      .setUnlockedDeviceRequired(true)
+      // No `setUnlockedDeviceRequired`: approving from the lock screen needs the key while locked,
+      // and every signature still needs a fresh strong biometric.
       .setAttestationChallenge(challenge)
       .setIsStrongBoxBacked(strongBox)
       .build()
@@ -174,5 +184,26 @@ object DeviceApprovalKeys {
       throw ApprovalException(ApprovalError.KEY_INVALIDATED, e)
     }
     return signature
+  }
+}
+
+/** Aliases whose key was created without `setUnlockedDeviceRequired`. */
+object LockScreenKeys {
+  private const val STORE = "t3-device-approval"
+  private const val ALIASES = "lockScreenAliases"
+
+  private fun prefs(context: Context) = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+
+  private fun aliases(context: Context): Set<String> =
+    prefs(context).getStringSet(ALIASES, emptySet()).orEmpty()
+
+  fun isRecorded(context: Context, alias: String): Boolean = alias in aliases(context)
+
+  fun record(context: Context, alias: String) {
+    prefs(context).edit().putStringSet(ALIASES, aliases(context) + alias).commit()
+  }
+
+  fun forget(context: Context, alias: String) {
+    prefs(context).edit().putStringSet(ALIASES, aliases(context) - alias).commit()
   }
 }
