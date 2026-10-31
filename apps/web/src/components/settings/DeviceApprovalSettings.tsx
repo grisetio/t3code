@@ -147,7 +147,9 @@ function DeviceApprovalStatus(props: {
           description="Turning device approval off leaves them in place."
         />
       ) : null}
-      {installed ? <TurnOffRow environmentId={props.environmentId} /> : null}
+      {installed ? (
+        <TurnOffRow environmentId={props.environmentId} phoneFirst={status.devices.length > 0} />
+      ) : null}
     </>
   );
 }
@@ -270,6 +272,7 @@ function DeviceRow(props: {
       {confirming ? (
         <SudoConfirmForm
           actionLabel="Revoke"
+          phoneFirst
           onCancel={() => setConfirming(false)}
           run={(password) =>
             revoke({
@@ -283,7 +286,10 @@ function DeviceRow(props: {
   );
 }
 
-function TurnOffRow(props: { readonly environmentId: EnvironmentId }) {
+function TurnOffRow(props: {
+  readonly environmentId: EnvironmentId;
+  readonly phoneFirst: boolean;
+}) {
   const uninstall = useAtomCommand(elevation.uninstall, "turn off device approval");
   const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(props.environmentId));
   const [confirming, setConfirming] = useState(false);
@@ -307,6 +313,7 @@ function TurnOffRow(props: { readonly environmentId: EnvironmentId }) {
       {confirming ? (
         <SudoConfirmForm
           actionLabel="Turn off"
+          phoneFirst={props.phoneFirst}
           onCancel={() => setConfirming(false)}
           run={(password) =>
             uninstall({
@@ -322,15 +329,18 @@ function TurnOffRow(props: { readonly environmentId: EnvironmentId }) {
 
 /**
  * These changes run through sudo, so either a phone approves them or the
- * user gives the password here.
+ * user gives the password here. With a phone enrolled, the phone comes first:
+ * a password typed here passes through the server, which agents share.
  */
-function SudoConfirmForm(props: {
+export function SudoConfirmForm(props: {
   readonly actionLabel: string;
+  readonly phoneFirst: boolean;
   readonly onCancel: () => void;
   readonly run: (password: string | undefined) => Promise<AtomCommandResult<unknown, unknown>>;
 }) {
   const inputId = useId();
   const [password, setPassword] = useState("");
+  const [usePassword, setUsePassword] = useState(!props.phoneFirst);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -349,20 +359,26 @@ function SudoConfirmForm(props: {
   };
   return (
     <form className="flex flex-col gap-2" autoComplete="off" onSubmit={(e) => void onSubmit(e)}>
-      <label htmlFor={inputId} className="text-xs text-muted-foreground">
-        Approve on your phone, or enter the sudo password. The password goes to the server once and
-        is never stored.
-      </label>
+      {usePassword ? (
+        <label htmlFor={inputId} className="text-xs text-muted-foreground">
+          Approve on your phone, or enter the sudo password. The password goes through the T3 server
+          to sudo once and is never stored.
+        </label>
+      ) : (
+        <p className="text-xs text-muted-foreground">Approve on your phone.</p>
+      )}
       <div className="flex min-w-0 items-center gap-2">
-        <Input
-          id={inputId}
-          type="password"
-          autoComplete="off"
-          placeholder="sudo password (optional)"
-          value={password}
-          disabled={submitting}
-          onChange={(event) => setPassword(event.currentTarget.value)}
-        />
+        {usePassword ? (
+          <Input
+            id={inputId}
+            type="password"
+            autoComplete="off"
+            placeholder="sudo password (optional)"
+            value={password}
+            disabled={submitting}
+            onChange={(event) => setPassword(event.currentTarget.value)}
+          />
+        ) : null}
         <Button type="submit" size="sm" variant="destructive" disabled={submitting}>
           {submitting && password === "" ? "Waiting for your phone…" : props.actionLabel}
         </Button>
@@ -375,6 +391,17 @@ function SudoConfirmForm(props: {
         >
           Cancel
         </Button>
+        {usePassword ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="link"
+            disabled={submitting}
+            onClick={() => setUsePassword(true)}
+          >
+            Use the sudo password instead
+          </Button>
+        )}
       </div>
       {error ? (
         <p role="alert" className="text-xs text-destructive">

@@ -47,6 +47,10 @@ itself, **Remove this device** also deletes its key. If you lose a phone, revoke
 it from another device or with the password; the password keeps working for
 `sudo` in a terminal.
 
+Once a phone is set up, adding a phone, revoking, and turning off are approved
+on a phone by default. You can still use the sudo password instead; it passes
+through the T3 Code server on its way to `sudo`.
+
 **Turn off** restores the files T3 Code changed, and agent `sudo` asks for the
 password again. Parts set up outside T3 Code stay in place, and Settings says
 so.

@@ -157,6 +157,7 @@ function DeviceApprovalStatus(props: {
   const [testResult, setTestResult] = useState<ElevationCheck | null>(null);
   const [record, setRecord] = useKeyRecord(environmentId);
   const [password, setPassword] = useState("");
+  const [usePassword, setUsePassword] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [terminalCommand, setTerminalCommand] = useState<string | null>(null);
@@ -178,7 +179,9 @@ function DeviceApprovalStatus(props: {
     record && record.user === status.user
       ? status.devices.find((device) => device.keyId === record.keyId)
       : undefined;
-  const sudoPassword = password === "" ? undefined : password;
+  // With a phone enrolled, it approves setup changes; the password stays a fallback.
+  const showPassword = status.devices.length === 0 || usePassword;
+  const sudoPassword = !showPassword || password === "" ? undefined : password;
 
   /** Runs one setup change; the sudo password, if any, is used once and cleared. */
   const run = async (label: string, action: () => Promise<boolean>) => {
@@ -371,30 +374,44 @@ function DeviceApprovalStatus(props: {
         </View>
       ) : null}
 
-      <View className="gap-2">
-        <TextInput
-          accessibilityLabel="sudo password"
-          placeholder="sudo password (optional)"
-          value={password}
-          onChangeText={setPassword}
-          editable={busy === null}
-          secureTextEntry
-          autoCorrect={false}
-          autoCapitalize="none"
-          autoComplete="off"
-          textContentType="none"
-          importantForAutofill="no"
-        />
-        <Text className="text-xs text-foreground-muted">
-          {installed
-            ? "Changes are approved on an enrolled phone, or with this password."
-            : "Without it, setup gives you a command to paste into a terminal on this machine."}{" "}
-          The password goes to the server once and is never stored.
-          {installed
-            ? ""
-            : " Setup trusts this account: anything running as you, including an agent, could change what it installs, the same as typing your sudo password into T3."}
-        </Text>
-      </View>
+      {showPassword ? (
+        <View className="gap-2">
+          <TextInput
+            accessibilityLabel="sudo password"
+            placeholder="sudo password (optional)"
+            value={password}
+            onChangeText={setPassword}
+            editable={busy === null}
+            secureTextEntry
+            autoCorrect={false}
+            autoCapitalize="none"
+            autoComplete="off"
+            textContentType="none"
+            importantForAutofill="no"
+          />
+          <Text className="text-xs text-foreground-muted">
+            {installed
+              ? "Without it, changes are approved on an enrolled phone."
+              : "Without it, setup gives you a command to paste into a terminal on this machine."}{" "}
+            The password goes through the T3 server to sudo once and is never stored.
+            {installed
+              ? ""
+              : " Setup trusts this account: anything running as you, including an agent, could change what it installs, the same as typing your sudo password into T3."}
+          </Text>
+        </View>
+      ) : (
+        <View className="gap-1">
+          <Text className="text-xs text-foreground-muted">
+            Changes here are approved on an enrolled phone.
+          </Text>
+          <Button
+            label="Use the sudo password instead"
+            tone="text"
+            disabled={busy !== null}
+            onPress={() => setUsePassword(true)}
+          />
+        </View>
+      )}
 
       {busy === "enroll" && comparisonCode !== null ? (
         <View className="gap-1 rounded-2xl bg-grouped-card p-4">
