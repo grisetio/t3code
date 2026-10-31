@@ -86,6 +86,8 @@ function warningMessage(warning: ElevationWarning, argv: readonly string[]): str
       return "Edits files as the target user.";
     case "unresolved_program":
       return "Couldn't determine which program sudo will run.";
+    case "user_writable_cwd":
+      return "You can write to the working directory, so anything running as you could change what the command reads from it.";
     case "dev_attestation":
       return "Accepts debug builds of the T3 app.";
     case "test_attestation":

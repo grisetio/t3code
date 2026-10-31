@@ -173,6 +173,21 @@ describe("decodeElevationRequestPayload", () => {
     ]);
   });
 
+  it("names the writable working directory warning", () => {
+    const decoded = Result.getOrThrow(
+      decodeElevationRequestPayload(
+        encodePayload({
+          argv: ["git", "clean", "-fdx"],
+          resolvedPath: "/usr/bin/git",
+          warnings: [{ code: "user_writable_cwd" }],
+        }),
+      ),
+    );
+    expect(decoded.view.warnings.map((warning) => warning.message)).toEqual([
+      "You can write to the working directory, so anything running as you could change what the command reads from it.",
+    ]);
+  });
+
   it("refuses bytes that are not a strict payload", () => {
     expect(decodeElevationRequestPayload("not base64url!")).toEqual(Result.fail("invalid_json"));
     expect(

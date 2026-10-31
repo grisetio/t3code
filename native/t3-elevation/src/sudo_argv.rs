@@ -584,6 +584,9 @@ fn describe_command(sudo_argv: &[String], parsed: &Parsed, context: &Context) ->
     let (argv, resolved_path, shell, arg_checks) = match &parsed.mode {
         Mode::Unparsed => {
             warnings.push(Warning::new("unparsed_options"));
+            if cwd_writable(context) {
+                warnings.push(Warning::new("user_writable_cwd"));
+            }
             let raw = sudo_argv.get(1..).unwrap_or_default().to_vec();
             return Described {
                 run_as,
@@ -649,6 +652,10 @@ fn describe_command(sudo_argv: &[String], parsed: &Parsed, context: &Context) ->
                 warnings.push(Warning::at("user_writable_argument", index));
             }
         }
+    }
+    // `-i` starts in the target user's home instead.
+    if !matches!(parsed.mode, Mode::Login(_)) && cwd_writable(context) {
+        warnings.push(Warning::new("user_writable_cwd"));
     }
     if shell {
         warnings.push(Warning::new("shell"));
@@ -820,6 +827,13 @@ fn replaceable(path: &Path, context: &Context) -> bool {
             creatable(&parent.join(target), context)
         }),
     }
+}
+
+/// Programs read config, build files, hooks and modules from the cwd (git
+/// trusts a repository owned by `SUDO_UID`, make reads the Makefile, Python
+/// puts it on `sys.path`), so a cwd the user can change runs the user's code.
+fn cwd_writable(context: &Context) -> bool {
+    replaceable(Path::new(context.cwd), context)
 }
 
 /// A missing path can be created by whoever can write its nearest existing
@@ -1002,7 +1016,8 @@ mod tests {
             described.command.warnings,
             vec![
                 Warning::new("user_writable_program"),
-                Warning::at("user_writable_argument", 1)
+                Warning::at("user_writable_argument", 1),
+                Warning::new("user_writable_cwd"),
             ]
         );
 
@@ -1018,7 +1033,10 @@ mod tests {
             described.command.argv,
             argv(&["/bin/zsh", "-c", "echo a\\;b"])
         );
-        assert_eq!(described.command.warnings, vec![Warning::new("shell")]);
+        assert_eq!(
+            described.command.warnings,
+            vec![Warning::new("user_writable_cwd"), Warning::new("shell")]
+        );
 
         let sudo = argv(&["sudo", "-i"]);
         assert_eq!(
@@ -1028,7 +1046,10 @@ mod tests {
 
         let sudo = argv(&["sudo", "sh", "-c", "id"]);
         let described = describe(&sudo, &parse(&sudo), &ctx);
-        assert_eq!(described.command.warnings, vec![Warning::new("shell")]);
+        assert_eq!(
+            described.command.warnings,
+            vec![Warning::new("user_writable_cwd"), Warning::new("shell")]
+        );
 
         let sudo = argv(&["sudo", "-e", "/etc/hosts"]);
         let described = describe(&sudo, &parse(&sudo), &ctx);
@@ -1043,7 +1064,10 @@ mod tests {
         assert_eq!(described.command.argv, argv(&["-n", "--chroot=/x", "id"]));
         assert_eq!(
             described.command.warnings,
-            vec![Warning::new("unparsed_options")]
+            vec![
+                Warning::new("unparsed_options"),
+                Warning::new("user_writable_cwd")
+            ]
         );
 
         let sudo = argv(&["sudo", "definitely-not-a-program-t3"]);
@@ -1335,13 +1359,55 @@ mod tests {
         let ctx = context(&cwd, &[], &shells);
         let warnings = |arg: &str| {
             let sudo = argv(&["sudo", "/bin/cat", arg]);
-            describe(&sudo, &parse(&sudo), &ctx).command.warnings
+            argument_warnings(describe(&sudo, &parse(&sudo), &ctx).command.warnings)
         };
         let symlinked = warnings("tool.py");
         let missing = warnings("later.py");
         std::fs::remove_dir_all(&tmp).unwrap();
         let expected = vec![Warning::at("user_writable_argument", 1)];
         assert_eq!((symlinked, missing), (expected.clone(), expected));
+    }
+
+    fn argument_warnings(warnings: Vec<Warning>) -> Vec<Warning> {
+        warnings
+            .into_iter()
+            .filter(|warning| warning.code == "user_writable_argument")
+            .collect()
+    }
+
+    /// Review 2, G1: git trusts a repository owned by `SUDO_UID`, so
+    /// `sudo git clean -fdx` ran `core.fsmonitor` from the project's
+    /// `.git/config` as root, and `sudo make install` ran its Makefile, with
+    /// nothing in red. Anything a command reads from a cwd the user can write
+    /// is the user's code.
+    #[test]
+    fn writable_working_directories_are_warned() {
+        let tmp = std::env::temp_dir().join(format!("t3e-argv-cwd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("proj")).unwrap();
+        let shells = vec![];
+        let warned = |cwd: &Path, sudo: &[&str]| {
+            let cwd = cwd.to_string_lossy().into_owned();
+            let ctx = context(&cwd, &[], &shells);
+            let sudo = argv(sudo);
+            describe(&sudo, &parse(&sudo), &ctx)
+                .command
+                .warnings
+                .contains(&Warning::new("user_writable_cwd"))
+        };
+        let proj = tmp.join("proj");
+        let results = [
+            warned(&proj, &["sudo", "/usr/bin/true"]),
+            warned(&proj, &["sudo", "-s"]),
+            warned(&proj, &["sudo", "-E", "make"]),
+            // A login shell starts in the target's home.
+            warned(&proj, &["sudo", "-i"]),
+            // sudoedit runs the editor as the user.
+            warned(&proj, &["sudo", "-e", "/etc/hosts"]),
+            warned(Path::new("/"), &["sudo", "/usr/bin/true"]),
+        ];
+        std::fs::remove_dir_all(&tmp).unwrap();
+        assert_eq!(results, [true, true, true, false, false, false]);
     }
 
     #[test]
@@ -1362,7 +1428,7 @@ mod tests {
             "./later",
             "dangling",
         ]);
-        let warnings = describe(&sudo, &parse(&sudo), &ctx).command.warnings;
+        let warnings = argument_warnings(describe(&sudo, &parse(&sudo), &ctx).command.warnings);
         std::fs::remove_dir_all(&tmp).unwrap();
         assert_eq!(
             warnings,

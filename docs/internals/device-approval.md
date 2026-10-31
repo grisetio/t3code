@@ -72,6 +72,7 @@ at most **16384 bytes**. Keys appear in this order, with no others:
   | `unparsed_options`       | sudo's options were not understood; `command.argv` is raw.                                              |
   | `edit`                   | `-e` / sudoedit.                                                                                        |
   | `unresolved_program`     | The module can't tell which file sudo will run; `resolvedPath` is `null`.                               |
+  | `user_writable_cwd`      | The user can replace `cwd` or an entry in it (not with `-i`, `-e`). Programs read config from there.    |
   | `dev_attestation`        | `command.argv[arg]` is `--allow-dev-attestation`: a debug build of the app may enroll.                  |
   | `test_attestation`       | `command.argv[arg]` is `--allow-test-attestation`: an emulator or unverified device may enroll.         |
 
