@@ -52,6 +52,16 @@ describe("elevation display", () => {
   it.each(vectors.displayEscaping)("escapes $name", ({ input, expected }) => {
     expect(escapeElevationDisplayText(input)).toBe(expected);
   });
+
+  it("escapes every default-ignorable code point", () => {
+    const shownRaw: Array<string> = [];
+    for (let code = 0; code <= 0x10ffff; code++) {
+      const char = String.fromCodePoint(code);
+      if (!/\p{Default_Ignorable_Code_Point}/u.test(char)) continue;
+      if (escapeElevationDisplayText(char) === char) shownRaw.push(code.toString(16));
+    }
+    expect(shownRaw).toEqual([]);
+  });
 });
 
 describe("elevation enrollment", () => {

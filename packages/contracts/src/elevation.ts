@@ -113,9 +113,13 @@ export function decodeElevationBase64Url(text: string): Uint8Array | null {
   return Result.getOrNull(Base64Url.decode(text));
 }
 
-const DISPLAY_ESCAPED = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Zs}\\]/u;
+// The explicit ranges are the Default_Ignorable_Code_Point characters outside
+// Cf, plus U+2800 (braille blank). Spelled out because not every JS engine
+// clients run on knows that property.
+const DISPLAY_ESCAPED =
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Zs}\\\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u2060-\u206F\u2800\u3164\uFE00-\uFE0F\uFFA0\uFFF0-\uFFF8\u{E0000}-\u{E0FFF}]/u;
 
-/** Makes controls, bidi, zero-width and look-alike spaces visible. */
+/** Makes controls, bidi, zero-width, blank and look-alike characters visible. */
 export function escapeElevationDisplayText(text: string): string {
   let out = "";
   for (const char of text) {

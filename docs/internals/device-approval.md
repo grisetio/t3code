@@ -107,10 +107,12 @@ code point and leaves everything else unchanged:
 
 - `\` → `\\`; LF → `\n`; CR → `\r`; TAB → `\t`;
 - every other code point in general category Cc, Cf, Cs, Zl, Zp, or Zs except
-  U+0020 → `\u{HEX}`, uppercase hex without leading zeros (`\u{1B}`, `\u{202E}`).
+  U+0020, every `Default_Ignorable_Code_Point`, and U+2800 (braille blank) →
+  `\u{HEX}`, uppercase hex without leading zeros (`\u{1B}`, `\u{202E}`).
 
-That covers ANSI escapes, bidi controls, zero-width characters, line separators
-and look-alike spaces. Clients show the whole argv, one element per entry, and
+That covers ANSI escapes, bidi controls, zero-width characters, line separators,
+look-alike spaces, and blank letters such as U+3164 that make an argument look
+empty or two arguments look the same. Clients show the whole argv, one element per entry, and
 never truncate it silently.
 
 ## Enrollment and the comparison code
