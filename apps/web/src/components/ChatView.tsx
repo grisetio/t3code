@@ -3303,6 +3303,7 @@ export default function ChatView(props: ChatViewProps) {
                 onCiteAssistantText={citeAssistantTextStable}
                 {...(activeProject ? { onRunShellCommand: runShellCommandStable } : {})}
                 isWorking={isWorking}
+                activeTurnInProgress={isWorking || !latestRunSettled}
                 runlessWorkActive={runlessWorkStartedAt !== null}
                 isCompacting={isCompacting}
                 awaitingUser={

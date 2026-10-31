@@ -218,6 +218,8 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   isWorking: boolean;
+  /** Working, or the latest run has not settled; defaults to `isWorking`. */
+  activeTurnInProgress?: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
   worktreeSetup?: WorktreeSetupSnapshot | null;
@@ -326,6 +328,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
   isWorking,
+  activeTurnInProgress = isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
   worktreeSetup = null,
@@ -1062,6 +1065,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isWorking,
     isCompacting: compactionAwaitingRow,
     isRevertingCheckpoint,
+    activeTurnInProgress,
     backgroundWorktreeSetup,
     awaitingUser: awaitingUser !== null,
     isPreparingWorktree,

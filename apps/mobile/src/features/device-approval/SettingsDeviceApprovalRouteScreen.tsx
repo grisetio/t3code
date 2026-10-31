@@ -934,11 +934,10 @@ function KeySheetView(props: {
       let key = confirmedKey.current;
       if (key === null) {
         const created = await createPhoneKey(environmentId, props.user, props.record);
+        // Outside the try: the React Compiler cannot lower conditionals inside one.
+        const title = sheet.kind === "fix" ? "Fix device approval" : "Set up device approval";
         try {
-          await confirmPhoneKey(created, {
-            title: sheet.kind === "fix" ? "Fix device approval" : "Set up device approval",
-            subtitle: machine,
-          });
+          await confirmPhoneKey(created, { title, subtitle: machine });
         } catch (cause) {
           await discardPhoneKey(created.record.alias);
           throw cause;

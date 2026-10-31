@@ -308,7 +308,8 @@ export function ElevationApprovalCard(props: {
         approvalHaptic("approved");
         setApproved(true);
         signed = true;
-        props.onApproving?.(true);
+        // A plain `if`: the React Compiler cannot lower optional calls inside a try.
+        if (props.onApproving !== undefined) props.onApproving(true);
         return signing.respond(signature);
       } catch (cause) {
         declined = deviceApprovalSignerErrorCode(cause) === "declined";
