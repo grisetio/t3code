@@ -66,10 +66,10 @@ export function DeviceApprovalSetupFlow(props: {
     } catch (cause) {
       const code = deviceApprovalSignerErrorCode(cause);
       if (code !== "cancelled") setError(deviceApprovalSignerErrorMessage(code));
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
     }
+    // After the catch rather than in `finally`, which the React Compiler cannot lower.
+    inFlight.current = false;
+    setBusy(false);
   };
   const succeeded = (result: AtomCommandResult<unknown, unknown>) => {
     if (result._tag === "Success") return true;

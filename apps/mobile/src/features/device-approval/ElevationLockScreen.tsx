@@ -43,6 +43,7 @@ function LockScreenRequest() {
   const [now] = useState(() => Date.now());
   const shownRequest = useRef<string | null>(null);
   const [waitedOut, setWaitedOut] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- gives up waiting for the tapped request after a timer
   useEffect(() => {
     const timer = setTimeout(() => setWaitedOut(true), ARRIVAL_TIMEOUT_MS);
     return () => clearTimeout(timer);
@@ -50,6 +51,7 @@ function LockScreenRequest() {
   const match =
     session === null ? null : pendingRequestForNotificationIntent(session.intent, pending, now);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- handles Android's back button while shown over the lock screen
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       leaveLockScreen();
@@ -60,6 +62,7 @@ function LockScreenRequest() {
 
   // Answered on another device, or expired: nothing is left to show.
   const requestId = match !== null && match !== "expired" ? match.request.requestId : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- leaves the lock screen when its request is answered elsewhere or expires
   useEffect(() => {
     if (requestId !== null) shownRequest.current = requestId;
     else if (shownRequest.current !== null) leaveLockScreen();

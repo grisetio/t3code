@@ -1,21 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Stats worktree files and lays out a scratch index and object directory.
 /**
- * The "Uncommitted changes" pointer on a sudo request: what the checkout at
- * the request's cwd holds that isn't committed. Clients open the diff itself
- * through `review.getDiffPreview` with the same cwd.
- *
- * The cwd comes from whatever ran sudo and this server runs unsandboxed, so
- * git here must never start a program the checkout configures. Comparing
- * worktree content runs the `filter.<x>.clean` driver `.gitattributes` names
- * (`diff-index HEAD`, `diff-files --numstat`, `status`, even the stat check of
- * a racily clean entry), filter names can't be disabled by wildcard, and
- * `$GIT_DIR/info/attributes` outranks any attributes file we could pass. So
- * git only ever compares objects: a copy of the index, stamped with mtime 0 so
- * no entry counts as racy, lists stat-changed paths without reading them; the
- * worktree content of those paths is hashed with `--no-filters` into a scratch
- * object directory and staged into the copy; `diff-index --cached` then reads
- * HEAD and that copy from the object database alone. A filter that rewrites
- * line endings makes those files differ wholesale, which is fine for a count.
+ * The "Uncommitted changes" pointer on a sudo request; clients open the diff through
+ * `review.getDiffPreview`. The cwd comes from whatever ran sudo, so git here must never start a
+ * program the checkout configures, yet reading worktree content runs any `filter.<x>.clean`
+ * driver `.gitattributes` names, and no option or attributes file we pass can disable that.
  */
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -90,6 +78,10 @@ export const uncommittedChanges = Effect.fn("ElevationChanges.read")(
     if (!resolvedRoots.some((root) => root !== null && isWithin(root, resolvedCwd))) return null;
 
     const runner = yield* ProcessRunner.ProcessRunner;
+    // So git only compares objects: an index copy with mtime 0 (nothing racy) lists stat-changed
+    // paths unread, `hash-object --no-filters` stages their content into a scratch object store,
+    // and `diff-index --cached` reads HEAD and that copy. A filter rewriting line endings makes
+    // such files differ wholesale, which is fine for a count.
     const scratch = yield* Effect.acquireRelease(
       Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elevation-git-"))),
       (dir) => Effect.promise(() => NodeFSP.rm(dir, { recursive: true, force: true })),

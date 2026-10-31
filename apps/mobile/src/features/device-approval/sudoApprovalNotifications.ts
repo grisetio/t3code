@@ -33,6 +33,7 @@ function readOn(): boolean | null {
  */
 export function useSudoApprovalNotificationsOn(): boolean | null {
   const [on, setOn] = useState(readOn);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- re-reads the Android channel setting when the app returns to the foreground
   useEffect(() => {
     if (native === null) return;
     const subscription = AppState.addEventListener("change", (state) => {

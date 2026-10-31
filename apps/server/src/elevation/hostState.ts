@@ -372,11 +372,9 @@ export interface FixContext {
 }
 
 /**
- * T3 repairs a failing part only when it knows the cause, the repair is the
- * install it already runs, and the repair lasts: the part is missing, install
- * would put back exactly that path, nothing else owns the path, and T3 wrote
- * it in the first place. Everything else goes to an agent with the diagnosis.
- * The phone's key is always T3's to add back.
+ * T3 repairs a failing part only when the repair is its own install and lasts: the part is
+ * missing, install would put back exactly that path, nothing else owns it, and T3 wrote it.
+ * Everything else goes to an agent with the diagnosis. The phone's key is always T3's to add back.
  */
 export function withFixBy(check: HostCheck, context: FixContext): ElevationCheck {
   const { missingPath: _, ...wire } = check;

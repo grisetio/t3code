@@ -145,11 +145,7 @@ function useLockScreenReenrollPrompt(): void {
           message: `Set this phone up again for ${presentation.entry.target.label} so one fingerprint approves while the phone is locked.`,
           cancelText: "Not now",
           confirmText: "Set up again",
-          onConfirm: () =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsDeviceApproval" },
-            }),
+          onConfirm: () => navigation.navigate("SettingsDeviceApproval"),
         });
         return;
       }

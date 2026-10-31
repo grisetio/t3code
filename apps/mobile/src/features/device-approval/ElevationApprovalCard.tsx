@@ -69,16 +69,18 @@ function useElevationRespond(environmentId: EnvironmentId) {
     inFlight.current = true;
     setPending(true);
     setError(null);
-    try {
+    const send = async () => {
       const resolved = typeof input === "function" ? await input() : input;
       const result = await respond({ environmentId, input: resolved });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          setError(elevationFailureMessage(squashAtomCommandFailure(result), "Couldn't send."));
-        }
-        return false;
+      if (result._tag === "Success") return true;
+      if (!isAtomCommandInterrupted(result)) {
+        setError(elevationFailureMessage(squashAtomCommandFailure(result), "Couldn't send."));
       }
-      return true;
+      return false;
+    };
+    let sent = false;
+    try {
+      sent = await send();
     } catch (cause) {
       if (cause instanceof BlockedApproval) {
         setError(cause.message);
@@ -88,11 +90,11 @@ function useElevationRespond(environmentId: EnvironmentId) {
           setError(deviceApprovalSignerErrorMessage(code));
         }
       }
-      return false;
-    } finally {
-      inFlight.current = false;
-      setPending(false);
     }
+    // After the catch rather than in `finally`, which the React Compiler cannot lower.
+    inFlight.current = false;
+    setPending(false);
+    return sent;
   };
   return { canRespond, pending, error, run };
 }
@@ -176,6 +178,7 @@ function ElevationCommandLine(props: {
     >
       {expanded ? (
         display.lines.map((line, index) => (
+          // oxlint-disable-next-line react/no-array-index-key -- Command lines are positional and can repeat.
           <Text key={index} selectable className={textClass}>
             {line}
           </Text>
@@ -398,6 +401,7 @@ export function ElevationApprovalCard(props: {
           )}
           {coverage ? <Text className="text-sm text-foreground-muted">{coverage}</Text> : null}
           {decoded.view.warnings.map((warning, index) => (
+            // oxlint-disable-next-line react/no-array-index-key -- Warnings can repeat and have no local state.
             <View key={`${warning.code}:${index}`} className="flex-row items-start gap-2">
               <SymbolView
                 name="exclamationmark.triangle"

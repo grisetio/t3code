@@ -424,18 +424,12 @@ function DeviceApprovalDetails(props: {
   const run = async (label: string, action: () => Promise<AtomCommandResult<unknown, unknown>>) => {
     setBusy(label);
     setError(null);
-    try {
-      const result = await action();
-      if (result._tag === "Success") return true;
-      if (!isAtomCommandInterrupted(result)) {
-        setError(
-          elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong."),
-        );
-      }
-      return false;
-    } finally {
-      setBusy(null);
+    const result = await action().finally(() => setBusy(null));
+    if (result._tag === "Success") return true;
+    if (!isAtomCommandInterrupted(result)) {
+      setError(elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong."));
     }
+    return false;
   };
 
   // The last phone takes the whole setup with it, so agents' sudo goes back to the password.
@@ -602,8 +596,8 @@ function FixSheet(props: {
     setBusy(true);
     setError(null);
     const ran: string[] = [];
-    try {
-      const key = await createPhoneKey(environmentId, status.user);
+    const attempt = async (user: string) => {
+      const key = await createPhoneKey(environmentId, user);
       const result = plan.install
         ? await install({ environmentId, input: { password, device: key.device } })
         : await enroll({ environmentId, input: { device: key.device, password } });
@@ -638,14 +632,17 @@ function FixSheet(props: {
         if (revoked._tag === "Success") current = revoked.value;
       }
       props.onFinished(current, { keyId: key.record.keyId }, { ran, error: null });
+    };
+    try {
+      await attempt(status.user);
     } catch (cause) {
       const code = deviceApprovalSignerErrorCode(cause);
       if (code !== "cancelled") setError(deviceApprovalSignerErrorMessage(code));
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-      setPassword("");
     }
+    // After the catch rather than in `finally`, which the React Compiler cannot lower.
+    inFlight.current = false;
+    setBusy(false);
+    setPassword("");
   };
 
   return (

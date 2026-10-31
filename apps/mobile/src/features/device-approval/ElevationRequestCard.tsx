@@ -106,6 +106,7 @@ function ResolvedElevationRow(props: {
 
   // A light tick when an approved command finishes while its row is on screen.
   const previousKind = useRef(kind);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fires a haptic when this row's approved command finishes
   useEffect(() => {
     if (previousKind.current === "approved" && kind === "done") approvalHaptic("done");
     previousKind.current = kind;
@@ -177,6 +178,7 @@ function ResolvedElevationRow(props: {
             {reason ? `${agentName}: “${reason}”` : agentName}
           </Text>
           {display.lines.map((line, index) => (
+            // oxlint-disable-next-line react/no-array-index-key -- Command lines are positional and can repeat.
             <Text key={index} selectable className="font-mono text-sm text-foreground">
               {line}
             </Text>

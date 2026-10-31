@@ -1,12 +1,9 @@
 import { escapeElevationDisplayText, type ElevationPayload } from "@t3tools/contracts";
 
-// The command line an approval card shows, from the signed payload only. With `session.command`
-// the module signed the agent's command string and covers the other sudos written in it, so the
-// card shows that string and those sudos' programs. Without it, only the signed argv.
-//
-// The reader below is a port of native/t3-elevation/src/shell_words.rs, which decides what a grant
-// covers; packages/contracts/test-vectors/elevation-commands.json keeps the two in step. Change
-// both together.
+// The command line an approval card shows, from the signed payload only: with `session.command`,
+// the signed command string and the other sudos it covers; otherwise the signed argv.
+// Ports native/t3-elevation/src/shell_words.rs, which decides what a grant covers; change both
+// together (packages/contracts/test-vectors/elevation-commands.json keeps them in step).
 
 interface Word {
   readonly text: string;
