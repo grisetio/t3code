@@ -1385,14 +1385,6 @@ export type OrchestrationV2ElevationChanges = typeof OrchestrationV2ElevationCha
  * Display fields mirror the payload for lists and history. A client that signs
  * renders from `payload` instead (docs/internals/device-approval.md).
  */
-/** Uncommitted changes in the checkout at the request's cwd when it arrived. */
-export const OrchestrationV2ElevationChanges = Schema.Struct({
-  files: NonNegativeInt,
-  additions: NonNegativeInt,
-  deletions: NonNegativeInt,
-});
-export type OrchestrationV2ElevationChanges = typeof OrchestrationV2ElevationChanges.Type;
-
 const OrchestrationV2ElevationRequestFields = {
   type: Schema.Literal("elevation_request"),
   requestId: ElevationRequestId,
