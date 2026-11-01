@@ -1,48 +1,30 @@
 import { sha256 } from "@noble/hashes/sha2";
-import type { ElevationRequestView } from "@t3tools/client-runtime/elevation";
+import type { ElevationRequestFact, ElevationWarningView } from "@t3tools/client-runtime/elevation";
 import { elevationComparisonCode } from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 
-/**
- * The technical side of a request, behind a resolved row's Details: module warnings, who it ran
- * as, where, and which program. Every string arrives escaped.
- */
-export function ElevationTechnicalDetails(props: {
-  readonly view: Pick<ElevationRequestView, "host" | "runAs" | "cwd" | "warnings"> &
-    Partial<Pick<ElevationRequestView, "user" | "runAsGroup" | "resolvedPath">>;
+/** Module warnings, then Runs as and Directory where they differ from the default. */
+export function ElevationRequestFactLines(props: {
+  readonly facts: readonly ElevationRequestFact[];
+  readonly warnings: readonly ElevationWarningView[];
 }) {
-  const { view } = props;
   return (
-    <div className="flex min-w-0 flex-col gap-2 text-xs text-muted-foreground">
-      {view.warnings.length > 0 ? (
-        <ul className="flex flex-col gap-1">
-          {view.warnings.map((warning, index) => (
-            <li key={`${warning.code}:${index}`} className="flex min-w-0 items-start gap-1.5">
-              <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
-              <span className="min-w-0 break-words">{warning.message}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
-        <dt>Runs as</dt>
-        <dd className="break-all text-foreground">
-          {view.user ? `${view.user} → ` : ""}
-          {view.runAs}
-          {view.runAsGroup ? ` (group ${view.runAsGroup})` : ""}
-        </dd>
-        <dt>Machine</dt>
-        <dd className="break-all text-foreground">{view.host}</dd>
-        <dt>Directory</dt>
-        <dd className="break-all font-mono text-foreground">{view.cwd}</dd>
-        {view.resolvedPath ? (
-          <>
-            <dt>Program</dt>
-            <dd className="break-all font-mono text-foreground">{view.resolvedPath}</dd>
-          </>
-        ) : null}
-      </dl>
-    </div>
+    <>
+      {props.warnings.map((warning) => (
+        <p
+          key={`${warning.code}:${warning.message}`}
+          className="flex min-w-0 items-start gap-1.5 text-muted-foreground"
+        >
+          <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">{warning.message}</span>
+        </p>
+      ))}
+      {props.facts.map((fact) => (
+        <p key={fact.label} className="min-w-0 break-all text-muted-foreground">
+          {fact.label} <span className={fact.mono ? "font-mono" : undefined}>{fact.value}</span>
+        </p>
+      ))}
+    </>
   );
 }
 

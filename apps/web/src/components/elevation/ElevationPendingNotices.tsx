@@ -1,17 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
-import { ELEVATION_APPROVE_ON_PHONE, elevationHeadline } from "@t3tools/client-runtime/elevation";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { elevationHeadline } from "@t3tools/client-runtime/elevation";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import * as Result from "effect/Result";
 import { useEffect, useRef } from "react";
 
-import { readThreadShell } from "../../state/entities";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
-import { ElevationAgentIcon } from "./ElevationAgentMark";
+import { ElevationAgentIcon, useElevationAgent } from "./ElevationAgentMark";
 
 type ToastId = ReturnType<typeof toastManager.add>;
 
@@ -27,7 +24,6 @@ function requestKey(entry: PendingElevationRequest) {
  */
 export function ElevationPendingNotices() {
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
-  const { environments } = useEnvironments();
   const navigate = useNavigate();
   const openEnvironmentId = useParams({ strict: false, select: (params) => params.environmentId });
   const openThreadId = useParams({ strict: false, select: (params) => params.threadId });
@@ -53,23 +49,10 @@ export function ElevationPendingNotices() {
       const key = requestKey(entry);
       if (shown.current.has(key) || !live.has(key)) continue;
       const { threadId } = entry.request;
-      // The machine is this client's name for the environment, like the phone's.
-      const machine =
-        environments.find((environment) => environment.environmentId === entry.environmentId)
-          ?.label ?? (Result.isSuccess(entry.decoded) ? entry.decoded.success.view.host : "");
-      const threadTitle =
-        threadId === null
-          ? null
-          : (readThreadShell(scopeThreadRef(entry.environmentId, threadId))?.title ?? null);
       const id: ToastId = toastManager.add({
         type: "info",
-        title: elevationHeadline({
-          explanation: entry.request.explanation,
-          decoded: entry.decoded,
-        }).text,
-        description: [threadTitle, machine, ELEVATION_APPROVE_ON_PHONE]
-          .filter((part) => part !== null && part !== "")
-          .join(" · "),
+        title: <NoticeHeadline entry={entry} />,
+        description: <NoticeSource entry={entry} />,
         timeout: 0,
         onClose: () => {
           if (shown.current.get(key) === id) shown.current.set(key, null);
@@ -104,7 +87,7 @@ export function ElevationPendingNotices() {
       });
       shown.current.set(key, id);
     }
-  }, [environments, navigate, openEnvironmentId, openThreadId, pending, respond]);
+  }, [navigate, openEnvironmentId, openThreadId, pending, respond]);
 
   useEffect(() => {
     const notices = shown.current;
@@ -115,4 +98,27 @@ export function ElevationPendingNotices() {
   }, []);
 
   return null;
+}
+
+// Toasts are added outside render, so the agent's name resolves inside them.
+function NoticeHeadline(props: { readonly entry: PendingElevationRequest }) {
+  const { entry } = props;
+  const agent = useElevationAgent(entry.environmentId, entry.request.threadId);
+  return (
+    <span className="line-clamp-2">
+      {elevationHeadline({
+        explanation: entry.request.explanation,
+        decoded: entry.decoded,
+        agentName: agent?.name ?? null,
+      })}
+    </span>
+  );
+}
+
+/** "Claude · Killian's MacBook Pro": this client's name for the machine, not its hostname. */
+function NoticeSource(props: { readonly entry: PendingElevationRequest }) {
+  const { entry } = props;
+  const agent = useElevationAgent(entry.environmentId, entry.request.threadId);
+  const machine = useEnvironment(entry.environmentId)?.label ?? null;
+  return [agent?.name, machine].filter(Boolean).join(" · ");
 }
