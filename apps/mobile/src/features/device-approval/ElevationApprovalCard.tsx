@@ -188,14 +188,17 @@ function ElevationSeriesLine(props: {
   const now = useElevationNow(props.series.first.resolvedAt?.epochMilliseconds ?? null);
   const line = elevationSeriesLine(props.series, props.threadId, now);
   return (
-    <View className="flex-row items-center gap-1.5">
-      <SymbolView
-        name="arrow.clockwise"
-        size={12}
-        tintColorClassName="accent-icon"
-        type="monochrome"
-      />
-      <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
+    // Wraps rather than cuts: the end of the line is the part that says how the first one went.
+    <View className="flex-row items-start gap-1.5">
+      <View className="h-5 justify-center">
+        <SymbolView
+          name="arrow.clockwise"
+          size={12}
+          tintColorClassName="accent-icon"
+          type="monochrome"
+        />
+      </View>
+      <Text className="min-w-0 shrink text-sm text-foreground-muted">
         <Text className="font-t3-semibold text-sm text-foreground">{line.ordinal}</Text>
         {line.rest}
       </Text>
@@ -239,7 +242,7 @@ export function ElevationRequestFacts(props: {
   );
 }
 
-/** The short command on one quiet line; tap for the whole command and where it runs. */
+/** The short command in up to two quiet rows; tap for the whole command and where it runs. */
 function ElevationCommandLine(props: {
   readonly display: ElevationCommandDisplay;
   readonly facts: readonly ElevationRequestFact[];
@@ -257,7 +260,7 @@ function ElevationCommandLine(props: {
         className="min-h-9 flex-row items-center gap-1.5 self-start"
         onPress={() => setExpanded((current) => !current)}
       >
-        <Text numberOfLines={1} className="min-w-0 shrink font-mono text-sm text-foreground-muted">
+        <Text numberOfLines={2} className="min-w-0 shrink font-mono text-sm text-foreground-muted">
           {display.short}
         </Text>
         <SymbolView

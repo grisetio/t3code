@@ -61,9 +61,10 @@ function ElevationSeriesLine(props: {
   const now = useElevationNow(props.series.first.resolvedAt?.epochMilliseconds ?? null);
   const line = elevationSeriesLine(props.series, props.threadId, now);
   return (
-    <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <RotateCwIcon className="size-3 shrink-0" aria-hidden />
-      <span className="truncate">
+    // Wraps rather than cuts: the end of the line says how the first one went.
+    <p className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
+      <RotateCwIcon className="mt-0.5 size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
         <span className="font-medium text-foreground">{line.ordinal}</span>
         {line.rest}
       </span>
@@ -169,7 +170,7 @@ export function ElevationPendingCard(props: {
   );
 }
 
-/** The short command as one quiet line; opens to the full command and non-default facts. */
+/** The short command in up to two quiet rows; opens to the full command and non-default facts. */
 function CommandDisclosure(props: {
   readonly command: ElevationCommandDisplay;
   readonly facts: readonly ElevationRequestFact[];
@@ -179,7 +180,9 @@ function CommandDisclosure(props: {
   const [open, setOpen] = useState(false);
   const full = command.lines.join("\n");
   const expandable = full !== command.short || props.facts.length > 0 || props.warnings.length > 0;
-  const line = <code className="min-w-0 truncate font-mono">{command.short}</code>;
+  const line = (
+    <code className="line-clamp-2 min-w-0 font-mono wrap-anywhere">{command.short}</code>
+  );
   if (!expandable) {
     return (
       <p aria-label="Command" className="flex min-w-0 text-xs text-muted-foreground">
