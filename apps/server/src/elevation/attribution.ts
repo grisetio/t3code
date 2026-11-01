@@ -185,9 +185,9 @@ export function attribute(input: {
     if (process.threadId === null) break;
     const run = input.liveRuns.find((candidate) => candidate.threadId === process.threadId);
     if (run === undefined) return { type: "mine", run: null, explanation: null };
-    // A script between the call and sudo, re-quoted by the provider's own
-    // wrapper, defeats the text match. The thread's only running call is still
-    // the one that ran it; with several, guessing could show the wrong reason.
+    // A script between the call and sudo can hide the call's text from every
+    // level. The thread's only running call is still the one that ran it;
+    // with several, guessing could show the wrong reason.
     const running = run.commands.filter((command) => command.finishedAt === null);
     const only = running.length === 1 ? running[0] : undefined;
     return only === undefined
