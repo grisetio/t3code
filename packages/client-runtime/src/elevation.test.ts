@@ -12,6 +12,7 @@ import {
   elevationRequestSource,
   elevationSeriesLine,
   elevationRequestFacts,
+  elevationEndedLine,
   elevationResolvedSummary,
   elevationRequestFallbackView,
   elevationRequestStatusView,
@@ -251,9 +252,10 @@ describe("elevationRequestStatusView", () => {
       how: `Approved on this phone · ${time}`,
       detail: null,
     });
+    // The run ending doesn't change the status, only the detail.
     expect(elevationRequestStatusView(item, { finished: true })).toEqual({
-      kind: "done",
-      label: "Done",
+      kind: "approved",
+      label: "Approved",
       time,
       how: `Approved on Fold\\n · ${time} · finished`,
       detail: null,
@@ -323,13 +325,35 @@ describe("elevationHeadline", () => {
   });
 });
 
-describe("elevationResolvedSummary", () => {
-  it("names the reason, else the programs", () => {
-    const display = { programs: ["id", "ls"], short: "id, ls" };
-    expect(elevationResolvedSummary("Approved", " Restart audio ", display)).toBe(
-      "Approved · Restart audio",
+describe("elevationEndedLine", () => {
+  it("names the device that answered, this phone by its key", () => {
+    const resolvedBy = { deviceLabel: "Fixture key\n", keyId: "doBaY6aYDBgHVCShPzJ3LQ" };
+    expect(elevationEndedLine({ elevationStatus: "approved", resolvedBy }, null)).toEqual({
+      kind: "approved",
+      text: "Approved on Fixture key\\n",
+    });
+    expect(
+      elevationEndedLine({ elevationStatus: "denied", resolvedBy }, "doBaY6aYDBgHVCShPzJ3LQ"),
+    ).toEqual({ kind: "denied", text: "Denied on this phone" });
+    expect(elevationEndedLine({ elevationStatus: "denied", resolvedBy: null }, null).text).toBe(
+      "Denied",
     );
-    expect(elevationResolvedSummary("Denied", null, display)).toBe("Denied · id, ls");
+    expect(elevationEndedLine({ elevationStatus: "expired", resolvedBy: null }, null).text).toBe(
+      "Expired",
+    );
+  });
+});
+
+describe("elevationResolvedSummary", () => {
+  it("names the shortened command, so two requests for one program read apart", () => {
+    expect(
+      elevationResolvedSummary("Approved", { short: "python3 /home/…/deploy.py submit-system" }),
+    ).toBe("Approved · python3 /home/…/deploy.py submit-system");
+    expect(
+      elevationResolvedSummary("Approved", { short: "python3 /home/…/deploy.py status-system" }),
+    ).toBe("Approved · python3 /home/…/deploy.py status-system");
+    expect(elevationResolvedSummary("Denied", { short: "id, ls" })).toBe("Denied · id, ls");
+    expect(elevationResolvedSummary("Expired", { short: "" })).toBe("Expired");
   });
 });
 

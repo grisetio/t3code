@@ -4,6 +4,7 @@ import {
   elevationAgent,
   elevationAgoRefreshMs,
   elevationDecodeFailureMessage,
+  elevationEndedLine,
   elevationFailureMessage,
   elevationHeadline,
   elevationRequestFacts,
@@ -23,6 +24,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  type ElevationEndedRequest,
   type ElevationPayloadDecodeFailure,
   type ElevationRequestId,
   type ElevationRequestSeries,
@@ -39,7 +41,7 @@ import { Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
 import { ProviderIcon } from "../../components/ProviderIcon";
-import { SymbolView } from "../../components/ui/AppSymbol";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -188,14 +190,17 @@ function ElevationSeriesLine(props: {
   const now = useElevationNow(props.series.first.resolvedAt?.epochMilliseconds ?? null);
   const line = elevationSeriesLine(props.series, props.threadId, now);
   return (
-    <View className="flex-row items-center gap-1.5">
-      <SymbolView
-        name="arrow.clockwise"
-        size={12}
-        tintColorClassName="accent-icon"
-        type="monochrome"
-      />
-      <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
+    // Wraps rather than cuts: the end of the line is the part that says how the first one went.
+    <View className="flex-row items-start gap-1.5">
+      <View className="h-5 justify-center">
+        <SymbolView
+          name="arrow.clockwise"
+          size={12}
+          tintColorClassName="accent-icon"
+          type="monochrome"
+        />
+      </View>
+      <Text className="min-w-0 shrink text-sm text-foreground-muted">
         <Text className="font-t3-semibold text-sm text-foreground">{line.ordinal}</Text>
         {line.rest}
       </Text>
@@ -239,7 +244,7 @@ export function ElevationRequestFacts(props: {
   );
 }
 
-/** The short command on one quiet line; tap for the whole command and where it runs. */
+/** The short command in up to two quiet rows; tap for the whole command and where it runs. */
 function ElevationCommandLine(props: {
   readonly display: ElevationCommandDisplay;
   readonly facts: readonly ElevationRequestFact[];
@@ -257,7 +262,7 @@ function ElevationCommandLine(props: {
         className="min-h-9 flex-row items-center gap-1.5 self-start"
         onPress={() => setExpanded((current) => !current)}
       >
-        <Text numberOfLines={1} className="min-w-0 shrink font-mono text-sm text-foreground-muted">
+        <Text numberOfLines={2} className="min-w-0 shrink font-mono text-sm text-foreground-muted">
           {display.short}
         </Text>
         <SymbolView
@@ -332,6 +337,13 @@ interface ElevationApprovalRequest {
   readonly series?: ElevationRequestSeries | undefined;
 }
 
+const ENDED_SYMBOL: Record<ElevationEndedRequest["elevationStatus"], AppSymbolName> = {
+  approved: "checkmark",
+  denied: "xmark",
+  expired: "clock",
+  cancelled: "minus",
+};
+
 /**
  * The request card: the headline, who and where under it, the command, and Deny / Approve.
  * Approve opens the fingerprint prompt; backing out of it denies, because the user has already
@@ -351,6 +363,8 @@ export function ElevationApprovalCard(props: {
    * from here while it shows "✓ Approved".
    */
   readonly onApproving?: (active: boolean) => void;
+  /** How the request ended elsewhere, said in place of the buttons while the card settles. */
+  readonly ended?: Pick<ElevationEndedRequest, "elevationStatus" | "resolvedBy"> | null;
   readonly openChanges?: (open: () => void) => void;
 }) {
   const { request } = props;
@@ -428,17 +442,12 @@ export function ElevationApprovalCard(props: {
     }
   };
 
-  const actions = approved ? (
-    // Replaces the buttons at their height, so nothing moves until the card settles.
-    <View
-      accessibilityRole="text"
-      accessibilityLiveRegion="polite"
-      className="min-h-12 flex-row items-center justify-center gap-2"
-    >
-      <SymbolView name="checkmark" size={16} tintColorClassName="accent-foreground" />
-      <Text className="font-t3-medium text-base text-foreground">Approved</Text>
-    </View>
-  ) : (
+  const ended = approved
+    ? ({ kind: "approved", text: "Approved" } as const)
+    : props.ended
+      ? elevationEndedLine(props.ended, thisKeyId)
+      : null;
+  const buttons = (
     <View className="flex-row gap-2">
       <View className="flex-1">
         <Button
@@ -470,6 +479,35 @@ export function ElevationApprovalCard(props: {
         )}
       </View>
     </View>
+  );
+  const actions = ended ? (
+    // Over the buttons, kept at their size but unseen, so nothing moves until the card settles.
+    <View>
+      <View
+        className="opacity-0"
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
+        {buttons}
+      </View>
+      <View
+        accessibilityRole="text"
+        accessibilityLiveRegion="polite"
+        className="absolute inset-0 flex-row items-center justify-center gap-2"
+      >
+        <SymbolView
+          name={ENDED_SYMBOL[ended.kind]}
+          size={16}
+          tintColorClassName="accent-foreground"
+        />
+        <Text numberOfLines={1} className="min-w-0 shrink font-t3-medium text-base text-foreground">
+          {ended.text}
+        </Text>
+      </View>
+    </View>
+  ) : (
+    buttons
   );
 
   const errorLine =

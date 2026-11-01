@@ -269,6 +269,13 @@ export const ElevationRequestStatus = Schema.Literals([
 ]);
 export type ElevationRequestStatus = typeof ElevationRequestStatus.Type;
 
+export const ElevationResolvedBy = Schema.Struct({
+  deviceLabel: Schema.String,
+  /** The approving key, or the enrolled key a phone named when it denied. */
+  keyId: Schema.optionalKey(ElevationKeyId),
+});
+export type ElevationResolvedBy = typeof ElevationResolvedBy.Type;
+
 /**
  * This request is not the first of its turn, or, with no thread, of its machine within a few
  * minutes. A script's second sudo otherwise reads as the first one still waiting.
@@ -309,9 +316,23 @@ export const ElevationPendingRequest = Schema.Struct({
 });
 export type ElevationPendingRequest = typeof ElevationPendingRequest.Type;
 
+/** How a request that left the pending set ended. */
+export const ElevationEndedRequest = Schema.Struct({
+  requestId: ElevationRequestId,
+  elevationStatus: Schema.Literals(["approved", "denied", "expired", "cancelled"]),
+  /** The device that answered; null when none did or it didn't say. */
+  resolvedBy: Schema.NullOr(ElevationResolvedBy),
+});
+export type ElevationEndedRequest = typeof ElevationEndedRequest.Type;
+
 /** Each stream element is the complete current set. */
 export const ElevationPendingRequests = Schema.Struct({
   requests: Schema.Array(ElevationPendingRequest),
+  /**
+   * The last few requests that left the set, newest last, so a client still showing one can say
+   * how it ended. A request with no thread has no turn item to say it. Older servers omit it.
+   */
+  ended: Schema.optionalKey(Schema.Array(ElevationEndedRequest)),
 });
 export type ElevationPendingRequests = typeof ElevationPendingRequests.Type;
 

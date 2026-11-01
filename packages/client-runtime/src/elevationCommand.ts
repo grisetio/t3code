@@ -352,25 +352,41 @@ function basename(path: string): string {
 }
 
 /**
+ * Paths up to this many characters stay whole: about one row of the phone card. Config paths,
+ * where a middle directory is often the difference (`/etc/nginx/sites-available/app.conf`, 35,
+ * against `/etc/nginx/sites-enabled/app.conf`), fit. Checkout, home and store paths mostly don't,
+ * and their middle rarely tells two requests apart.
+ */
+const WHOLE_PATH_MAX = 40;
+
+/**
  * A long path argument with its middle elided, so the one-line form reaches the words that tell
  * two requests apart. The start stays, because it says where the command acts: `rm -rf
  * /usr/…/app` must not read as a relative `app`. Only words that are plainly paths shorten, and
- * only long ones: `/var/db/x` stays whole, and `system/x` (a launchd target) or `origin/main`
- * aren't paths. An option's or variable's value after `=` shortens the same way.
+ * only long ones: `system/x` (a launchd target) or `origin/main` aren't paths. An option's or
+ * variable's value after `=` shortens the same way.
  */
 function shortArg(arg: string): string {
   const assignment = /^(--?[^=]+=|[A-Za-z_][A-Za-z0-9_]*=)(.*)$/s.exec(arg);
   if (assignment !== null) return `${assignment[1]}${shortArg(assignment[2]!)}`;
   const prefix = /^(\/|\.{1,2}\/|~\/)/.exec(arg)?.[0];
-  if (prefix === undefined) return arg;
+  if (prefix === undefined || arg.length <= WHOLE_PATH_MAX) return arg;
   const components = arg
     .slice(prefix.length)
     .split("/")
     .filter((part) => part !== "");
   if (prefix === "/") {
-    return components.length >= 4 ? `/${components[0]}/…/${components.at(-1)}` : arg;
+    return components.length >= 3 ? `/${components[0]}/…/${components.at(-1)}` : arg;
   }
-  return components.length >= 3 ? `${prefix}…/${components.at(-1)}` : arg;
+  return components.length >= 2 ? `${prefix}…/${components.at(-1)}` : arg;
+}
+
+/** Each argument shortened, except where two different ones would read the same. */
+function shortArgs(args: readonly string[]): string[] {
+  const short = args.map(shortArg);
+  return short.map((text, index) =>
+    short.some((other, at) => other === text && args[at] !== args[index]) ? args[index]! : text,
+  );
 }
 
 /** Where a sudo's program sits in its args, and its target when that isn't root. */
@@ -427,7 +443,7 @@ function sudoShort(args: readonly (string | null)[]): string | null {
   if (target === null) return null;
   const rest = args.slice(target.index + 1);
   if (rest.some((arg) => arg === null)) return null;
-  return [basename(args[target.index]!), ...(rest as string[]).map(shortArg)].join(" ");
+  return [basename(args[target.index]!), ...shortArgs(rest as string[])].join(" ");
 }
 
 /** What the card's command line shows, all text escaped for display. */
@@ -466,7 +482,7 @@ export function elevationCommandDisplay(
   const found = sessionCommand === undefined ? null : elevationSudoCalls(sessionCommand);
   const argvShort = [
     argv[0] === undefined ? "" : basename(argv[0]),
-    ...argv.slice(1).map(shortArg),
+    ...shortArgs(argv.slice(1)),
   ].join(" ");
   let raw: readonly string[];
   let programs: string[];

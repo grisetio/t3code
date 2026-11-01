@@ -46,15 +46,15 @@ import {
 import { ELEVATION_SETTLE_MS } from "./elevationApproval";
 import { wasDeniedHere } from "./elevationApprovalTarget";
 
-const SYMBOL: Record<"done" | "approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
-  done: "checkmark",
+const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
   approved: "checkmark",
   denied: "xmark",
   expired: "clock",
   cancelled: "minus",
 };
 
-const COLLAPSE_MS = 240;
+/** How long a card takes to hand over to its row once its request leaves the pending set. */
+export const ELEVATION_CARD_COLLAPSE_MS = 240;
 const CARD_FADE_MS = 140;
 const ROW_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 
@@ -139,7 +139,7 @@ export function ElevationRequestCard(props: {
     const reduceMotion = ReduceMotion.System;
     cardOpacity.set(withTiming(0, { duration: CARD_FADE_MS, reduceMotion }));
     height.set(
-      withTiming(target, { duration: COLLAPSE_MS, reduceMotion }, (finished) => {
+      withTiming(target, { duration: ELEVATION_CARD_COLLAPSE_MS, reduceMotion }, (finished) => {
         if (finished) runOnJS(setCollapsing)(false);
       }),
     );
@@ -189,7 +189,7 @@ type ElevationItem = Extract<
 >;
 
 /**
- * A work-log row: "Approved · Restart audio". Tap for the reason, the whole command, how and when
+ * A work-log row: "✓ Approved  python3 /home/…/deploy.py --wait". Tap for the reason, the whole command, how and when
  * it ended, and where it ran when that isn't the default.
  */
 function ResolvedElevationRow(props: {
@@ -216,15 +216,17 @@ function ResolvedElevationRow(props: {
   );
 
   // A light tick when an approved command finishes while its row is on screen.
-  const previousKind = useRef(status.kind);
+  const wasRunning = useRef(props.runActive);
   useEffect(() => {
-    if (previousKind.current === "approved" && status.kind === "done") approvalHaptic("done");
-    previousKind.current = status.kind;
-  }, [status.kind]);
+    if (wasRunning.current && !props.runActive && status.kind === "approved") {
+      approvalHaptic("done");
+    }
+    wasRunning.current = props.runActive;
+  }, [props.runActive, status.kind]);
 
   // Pending on another client: the request is answered there or from the banner.
   const pending = status.kind === "pending";
-  const summary = elevationResolvedSummary(status.label, item.explanation, display);
+  const summary = elevationResolvedSummary(status.label, display);
   const headline = elevationHeadline({
     explanation: item.explanation,
     decoded: props.decoded ?? Result.fail("invalid"),
@@ -249,7 +251,12 @@ function ResolvedElevationRow(props: {
               type="monochrome"
             />
           </WorkLogIconSlot>
-          <WorkLogLabel>{summary}</WorkLogLabel>
+          <WorkLogLabel>
+            <Text className="text-foreground">{status.label}</Text>
+            {display.short === "" ? null : (
+              <Text className="font-mono text-xs">{`  ${display.short}`}</Text>
+            )}
+          </WorkLogLabel>
           <View className="h-4 w-4 shrink-0 items-center justify-center">
             {pending ? null : (
               <ThreadDisclosureChevron

@@ -5,6 +5,7 @@ import * as Result from "effect/Result";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { View, type LayoutChangeEvent } from "react-native";
 import Animated, {
+  Easing,
   FadeIn,
   ReduceMotion,
   runOnJS,
@@ -29,6 +30,7 @@ import {
   isClaimedElevationRequest,
 } from "./elevationApprovalTarget";
 
+const FADE_MS = 140;
 const LEAVE_MS = 240;
 const ENTER_MS = 220;
 const HIGHLIGHT_DELAY_MS = 250;
@@ -50,7 +52,10 @@ function mergeShown(
   return [...kept, ...added];
 }
 
-/** Eases its height and opacity to nothing once `present` turns false, then calls `onGone(id)`. */
+/**
+ * Once `present` turns false, fades out and then eases its height to nothing, so the rows below
+ * follow an empty space rather than a card cut off mid-line; then calls `onGone(id)`.
+ */
 function Leaving(props: {
   readonly id: string;
   readonly present: boolean;
@@ -59,21 +64,35 @@ function Leaving(props: {
   readonly children: ReactNode;
 }) {
   const height = useSharedValue(0);
+  const opacity = useSharedValue(1);
   const progress = useSharedValue(1);
   const { id, present, onGone } = props;
   useEffect(() => {
     if (present) {
+      opacity.set(1);
       progress.set(1);
       return;
     }
+    opacity.set(withTiming(0, { duration: FADE_MS, reduceMotion: ReduceMotion.System }));
     progress.set(
-      withTiming(0, { duration: LEAVE_MS, reduceMotion: ReduceMotion.System }, (finished) => {
-        if (finished) runOnJS(onGone)(id);
-      }),
+      withDelay(
+        FADE_MS,
+        withTiming(
+          0,
+          {
+            duration: LEAVE_MS,
+            easing: Easing.inOut(Easing.quad),
+            reduceMotion: ReduceMotion.System,
+          },
+          (finished) => {
+            if (finished) runOnJS(onGone)(id);
+          },
+        ),
+      ),
     );
-  }, [id, present, onGone, progress]);
+  }, [id, present, onGone, opacity, progress]);
   const style = useAnimatedStyle(() =>
-    progress.get() < 1 ? { height: height.get() * progress.get(), opacity: progress.get() } : {},
+    opacity.get() < 1 ? { height: height.get() * progress.get(), opacity: opacity.get() } : {},
   );
   const onLayout = (event: LayoutChangeEvent) => {
     if (present) height.set(event.nativeEvent.layout.height);
@@ -113,6 +132,16 @@ function Highlight(props: { readonly onDone: () => void }) {
       style={style}
     />
   );
+}
+
+/** Calls `onSettled(id)` once the card has said how its request ended for long enough to read. */
+function Settle(props: { readonly id: string; readonly onSettled: (id: string) => void }) {
+  const { id, onSettled } = props;
+  useEffect(() => {
+    const timer = setTimeout(() => onSettled(id), ELEVATION_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [id, onSettled]);
+  return null;
 }
 
 const clearHighlight = () => appAtomRegistry.set(elevationListHighlightAtom, null);
@@ -161,6 +190,7 @@ export function ThreadlessElevationRequests(props: {
   readonly onReveal?: () => void;
 }) {
   const all = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
+  const endedByEnvironment = useAtomValue(elevation.endedAcrossEnvironmentsAtom);
   const claim = useAtomValue(claimedElevationRequestAtom);
   const lockScreen = useAtomValue(elevationLockScreenAtom);
   const highlight = useAtomValue(elevationListHighlightAtom);
@@ -190,17 +220,30 @@ export function ThreadlessElevationRequests(props: {
       return next;
     });
 
+  // Ended elsewhere: the card says how ("✓ Approved on Pixel") for a moment, then leaves.
+  const [settled, setSettled] = useState<ReadonlySet<string>>(() => new Set());
+  const settle = useCallback(
+    (key: string) => setSettled((previous) => new Set(previous).add(key)),
+    [],
+  );
+  const endedOf = (entry: PendingElevationRequest) =>
+    currentKeys.has(keyOf(entry))
+      ? null
+      : (endedByEnvironment
+          .get(entry.environmentId)
+          ?.find((ended) => ended.requestId === entry.request.requestId) ?? null);
+
   const [shown, setShown] = useState<readonly PendingElevationRequest[]>(current);
   const merged = mergeShown(shown, current);
   if (merged !== shown) setShown(merged);
-  const forgetRequest = useCallback(
-    (key: string) => setShown((previous) => previous.filter((entry) => keyOf(entry) !== key)),
-    [],
-  );
+  const forget = useCallback((gone: (key: string) => boolean) => {
+    setShown((previous) => previous.filter((entry) => !gone(keyOf(entry))));
+    setSettled((previous) => new Set([...previous].filter((key) => !gone(key))));
+  }, []);
+  const forgetRequest = useCallback((key: string) => forget((other) => other === key), [forget]);
   const forgetMachine = useCallback(
-    (environmentId: string) =>
-      setShown((previous) => previous.filter((entry) => entry.environmentId !== environmentId)),
-    [],
+    (environmentId: string) => forget((key) => key.startsWith(`${environmentId}\u0000`)),
+    [forget],
   );
 
   const highlighted =
@@ -230,7 +273,9 @@ export function ThreadlessElevationRequests(props: {
     else group.push(entry);
   }
   const isPresent = (entry: PendingElevationRequest) =>
-    currentKeys.has(keyOf(entry)) || held.has(keyOf(entry));
+    currentKeys.has(keyOf(entry)) ||
+    held.has(keyOf(entry)) ||
+    (endedOf(entry) !== null && !settled.has(keyOf(entry)));
 
   return (
     <View>
@@ -251,6 +296,7 @@ export function ThreadlessElevationRequests(props: {
             />
             {entries.map((entry) => {
               const key = keyOf(entry);
+              const ended = endedOf(entry);
               const { request } = entry;
               return (
                 <Leaving
@@ -279,13 +325,21 @@ export function ThreadlessElevationRequests(props: {
                         series: request.series,
                       }}
                       inMachineSection
+                      ended={ended}
                       onApproving={(active) => hold(key, active)}
                       onAnswered={(decision) => {
                         if (decision === "approve") {
-                          setTimeout(() => hold(key, false), ELEVATION_SETTLE_MS);
+                          // Its "✓ Approved" was the settling moment; no second one.
+                          setTimeout(() => {
+                            settle(key);
+                            hold(key, false);
+                          }, ELEVATION_SETTLE_MS);
                         }
                       }}
                     />
+                    {ended !== null && !held.has(key) ? (
+                      <Settle id={key} onSettled={settle} />
+                    ) : null}
                     {onScreen && highlighted !== null && keyOf(highlighted) === key ? (
                       <Highlight onDone={clearHighlight} />
                     ) : null}

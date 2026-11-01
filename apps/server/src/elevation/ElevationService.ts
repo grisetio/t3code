@@ -25,6 +25,7 @@ import {
   TurnItemId,
   type ElevationCheck,
   type ElevationDevice,
+  type ElevationEndedRequest,
   type ElevationEnrollInput,
   ElevationEnrollmentDevice,
   type ElevationFailureReason,
@@ -121,6 +122,7 @@ const INSTALL_KEY_FILE_MAX_AGE_MS = 60 * 60 * 1000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const RUNNING_ITEM_STATUSES = new Set(["pending", "running", "waiting"]);
 const FINISHED_ITEM_STATUSES = new Set(["completed"]);
+const ENDED_KEPT = 8;
 // With no thread to bound a series, a machine's requests this close together read as one.
 const MACHINE_SERIES_WINDOW_MS = 5 * 60_000;
 
@@ -263,10 +265,19 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           ...entry.request,
           series: { ordinal: entry.series.ordinal, first: entry.series.of.first },
         };
+  // Enough for every card a phone could still be showing; older ones are long gone from screen.
+  const ended: ElevationEndedRequest[] = [];
+  /** The first word on how a request ended stands: an approval sent is what the user saw. */
+  const recordEnded = (request: ElevationEndedRequest) => {
+    if (ended.some((entry) => entry.requestId === request.requestId)) return;
+    ended.push(request);
+    if (ended.length > ENDED_KEPT) ended.shift();
+  };
   // Answered requests leave the set: the phone has nothing left to sign.
   const publish = Effect.suspend(() =>
     SubscriptionRef.set(pendingRef, {
       requests: [...pending.values()].filter((entry) => entry.answer === null).map(published),
+      ended: [...ended],
     }),
   );
   const series = new Map<string, RequestSeries>();
@@ -662,9 +673,11 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     const interrupted = Deferred.await(entry.interrupted).pipe(
       Effect.as<Outcome>({ elevationStatus: "cancelled" }),
     );
+    let endedStatus: Outcome["elevationStatus"] = "cancelled";
     const outcome = yield* Effect.raceAllFirst([waitForResult, expire, interrupted]).pipe(
       Effect.tap((ended) =>
         Effect.gen(function* () {
+          endedStatus = ended.elevationStatus;
           if (entry.series?.ordinal !== 1) return;
           entry.series.of.first = {
             elevationStatus: ended.elevationStatus,
@@ -686,7 +699,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           ),
         ),
       ),
-      Effect.ensuring(Effect.sync(() => pending.delete(requestId)).pipe(Effect.andThen(publish))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          pending.delete(requestId);
+          recordEnded({ requestId, elevationStatus: endedStatus, resolvedBy: null });
+        }).pipe(Effect.andThen(publish)),
+      ),
     );
     if (item !== null) {
       const resolvedBy =
@@ -1150,6 +1168,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       entry.answer = {
         resolvedBy: key === undefined ? null : { deviceLabel: key.label, keyId: key.keyId },
       };
+      recordEnded({ requestId: input.requestId, elevationStatus: "denied", ...entry.answer });
       entry.send({ type: "response", decision: "deny" });
       yield* publish;
       return;
@@ -1169,6 +1188,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     entry.answer = {
       resolvedBy: { deviceLabel: key?.label ?? response.keyId, keyId: response.keyId },
     };
+    recordEnded({ requestId: input.requestId, elevationStatus: "approved", ...entry.answer });
     entry.send({ type: "response", decision: "approve", ...response });
     yield* publish;
     yield* markUsed(response.keyId);
@@ -1179,6 +1199,11 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       // An approval already sent can't be taken back; its sudo is running.
       if (entry.runId !== runId || entry.answer !== null) continue;
       entry.answer = { resolvedBy: null };
+      recordEnded({
+        requestId: entry.request.requestId,
+        elevationStatus: "cancelled",
+        resolvedBy: null,
+      });
       entry.send({ type: "cancel", reason: "interrupted" });
       yield* Deferred.succeed(entry.interrupted, undefined);
     }

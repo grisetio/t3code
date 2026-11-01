@@ -137,13 +137,15 @@ import {
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
-import type {
-  PendingApproval,
-  PendingUserInput,
-  PendingUserInputDraftAnswer,
-  ThreadFeedEntry,
-  ThreadFeedLatestRun,
+import {
+  isElevationRequestActivityGroup,
+  type PendingApproval,
+  type PendingUserInput,
+  type PendingUserInputDraftAnswer,
+  type ThreadFeedEntry,
+  type ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
+import { ELEVATION_CARD_COLLAPSE_MS } from "../device-approval/ElevationRequestCard";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ComposerFeedback } from "./ComposerFeedback";
@@ -1041,6 +1043,32 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     // checks follow state again so a user who scrolled up stays put.
     scheduleOverlayRepin(230);
   }, [scheduleOverlayRepin, selectedThreadKey, showFloatingStatus]);
+  // An approval card arriving, or handing over to its row, changes the end of the thread while
+  // a row animation may have LegendList skipping its own end maintenance, which left the card
+  // under the working pill. Re-pin once the handover is done; the repin checks follow state.
+  const pendingElevationKey = selectedThreadFeed
+    .filter(
+      (entry) =>
+        entry.type === "activity-group" &&
+        isElevationRequestActivityGroup(entry) &&
+        entry.activities[0]!.projectedItem.item.type === "elevation_request" &&
+        entry.activities[0]!.projectedItem.item.elevationStatus === "pending",
+    )
+    .map((entry) => entry.id)
+    .join(" ");
+  const previousPendingElevationRef = useRef({
+    threadKey: selectedThreadKey,
+    key: pendingElevationKey,
+  });
+  useEffect(() => {
+    const previous = previousPendingElevationRef.current;
+    previousPendingElevationRef.current = {
+      threadKey: selectedThreadKey,
+      key: pendingElevationKey,
+    };
+    if (previous.threadKey !== selectedThreadKey || previous.key === pendingElevationKey) return;
+    scheduleOverlayRepin(ELEVATION_CARD_COLLAPSE_MS + 60);
+  }, [pendingElevationKey, scheduleOverlayRepin, selectedThreadKey]);
   const handleToggleUserInputCollapsed = () => {
     if (activeUserInputRequestId === null) {
       return;

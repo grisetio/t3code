@@ -4,6 +4,7 @@ import {
   elevationAgoRefreshMs,
   elevationRequestSource,
   elevationSeriesLine,
+  type ElevationEndedView,
   type ElevationRequestFact,
   type ElevationWarningView,
 } from "@t3tools/client-runtime/elevation";
@@ -16,7 +17,16 @@ import type {
   EnvironmentId,
   ThreadId,
 } from "@t3tools/contracts";
-import { ChevronRightIcon, FileDiffIcon, RotateCwIcon, SmartphoneIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  ClockIcon,
+  FileDiffIcon,
+  MinusIcon,
+  RotateCwIcon,
+  SmartphoneIcon,
+  XIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -61,9 +71,10 @@ function ElevationSeriesLine(props: {
   const now = useElevationNow(props.series.first.resolvedAt?.epochMilliseconds ?? null);
   const line = elevationSeriesLine(props.series, props.threadId, now);
   return (
-    <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <RotateCwIcon className="size-3 shrink-0" aria-hidden />
-      <span className="truncate">
+    // Wraps rather than cuts: the end of the line says how the first one went.
+    <p className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
+      <RotateCwIcon className="mt-0.5 size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
         <span className="font-medium text-foreground">{line.ordinal}</span>
         {line.rest}
       </span>
@@ -93,6 +104,8 @@ export function ElevationPendingCard(props: {
   readonly raisedByT3?: boolean | undefined;
   /** Under a header that names the machine, which the card then leaves out. */
   readonly inMachineSection?: boolean;
+  /** How the request ended, said in place of Deny while the card settles. */
+  readonly ended?: ElevationEndedView | null;
   readonly dataItemType?: string;
 }) {
   const { agent } = props;
@@ -143,33 +156,60 @@ export function ElevationPendingCard(props: {
           changes={props.changes}
         />
       ) : null}
-      {deny.error ? (
-        <p role="alert" className="text-xs text-destructive">
-          {deny.error}
-        </p>
-      ) : null}
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <SmartphoneIcon className="size-3.5 shrink-0" aria-hidden />
-          {ELEVATION_APPROVE_ON_PHONE}
-        </p>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost-muted"
-          disabled={!canRespond || deny.pending}
-          onClick={() =>
-            void deny.run({ environmentId: props.environmentId, requestId: props.requestId })
-          }
-        >
-          Deny
-        </Button>
-      </div>
+      {props.ended ? (
+        <EndedLine ended={props.ended} />
+      ) : (
+        <>
+          {deny.error ? (
+            <p role="alert" className="text-xs text-destructive">
+              {deny.error}
+            </p>
+          ) : null}
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              <SmartphoneIcon className="size-3.5 shrink-0" aria-hidden />
+              {ELEVATION_APPROVE_ON_PHONE}
+            </p>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost-muted"
+              disabled={!canRespond || deny.pending}
+              onClick={() =>
+                void deny.run({ environmentId: props.environmentId, requestId: props.requestId })
+              }
+            >
+              Deny
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-/** The short command as one quiet line; opens to the full command and non-default facts. */
+const ENDED_ICONS = {
+  approved: CheckIcon,
+  denied: XIcon,
+  expired: ClockIcon,
+  cancelled: MinusIcon,
+} as const;
+
+/** Sits at the Deny row's height, so the card doesn't move until it leaves. */
+function EndedLine(props: { readonly ended: ElevationEndedView }) {
+  const Icon = ENDED_ICONS[props.ended.kind];
+  return (
+    <p
+      role="status"
+      className="flex min-h-7 min-w-0 items-center gap-1.5 text-xs text-foreground sm:min-h-6"
+    >
+      <Icon className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{props.ended.text}</span>
+    </p>
+  );
+}
+
+/** The short command in up to two quiet rows; opens to the full command and non-default facts. */
 function CommandDisclosure(props: {
   readonly command: ElevationCommandDisplay;
   readonly facts: readonly ElevationRequestFact[];
@@ -179,7 +219,9 @@ function CommandDisclosure(props: {
   const [open, setOpen] = useState(false);
   const full = command.lines.join("\n");
   const expandable = full !== command.short || props.facts.length > 0 || props.warnings.length > 0;
-  const line = <code className="min-w-0 truncate font-mono">{command.short}</code>;
+  const line = (
+    <code className="line-clamp-2 min-w-0 font-mono wrap-anywhere">{command.short}</code>
+  );
   if (!expandable) {
     return (
       <p aria-label="Command" className="flex min-w-0 text-xs text-muted-foreground">
