@@ -24,7 +24,9 @@ pub enum Outcome {
     /// PAM_IGNORE: not ours; sudo continues as if the module weren't there.
     Ignore,
     /// PAM_CRED_INSUFFICIENT: ends the stack without reaching password
-    /// modules or lockout counters.
+    /// modules or lockout counters. sudo.ws and sudo-rs both fail at once on
+    /// it; PAM_AUTH_ERR, PAM_MAXTRIES and the like make them retry and
+    /// report incorrect password attempts.
     Fail,
 }
 
@@ -48,7 +50,7 @@ impl From<Outcome> for Decision {
 fn fail_with(notice: impl Into<String>) -> Decision {
     Decision {
         outcome: Outcome::Fail,
-        notice: Some(notice.into()),
+        notice: Some(notice.into() + decline::SUDO_LINES_FOLLOW),
     }
 }
 
@@ -594,7 +596,7 @@ fn exchange(
             send_result(&mut connection, "expired");
             return Exchange::Decided(fail_with(decline::EXPIRED));
         }
-        Err(_) => return Exchange::Decided(Outcome::Fail.into()),
+        Err(_) => return Exchange::Decided(fail_with(decline::WITHDRAWN)),
     };
     let Some(message) = message else {
         return Exchange::Decided(Outcome::Fail.into());
@@ -651,7 +653,8 @@ fn exchange(
                 }
             }
         }
-        // `cancel`, unknown types and decisions: close without a result.
+        (Some("cancel"), _) => Exchange::Decided(fail_with(decline::WITHDRAWN)),
+        // Unknown types and decisions: close without a result.
         _ => Exchange::Decided(Outcome::Fail.into()),
     }
 }
@@ -1198,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn deny_and_expiry_tell_the_agent_on_stderr() {
+    fn deny_expiry_and_cancel_tell_the_agent_on_stderr() {
         let setup = setup();
         let (decision, _) = setup.run_decision(Mode::Deny, &setup.invocation(&["sudo", "id"]));
         assert_eq!(decision, fail_with(decline::DENIED));
@@ -1207,7 +1210,13 @@ mod tests {
         let (decision, _) = setup.run_decision(Mode::Expire, &setup.invocation(&["sudo", "id"]));
         assert_eq!(decision, fail_with(decline::EXPIRED));
         let (decision, _) = setup.run_decision(Mode::Close, &setup.invocation(&["sudo", "id"]));
-        assert_eq!(decision, Outcome::Fail.into());
+        assert_eq!(decision, fail_with(decline::WITHDRAWN));
+        let (decision, _) = setup.run_decision(Mode::Cancel, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(decision, fail_with(decline::WITHDRAWN));
+        // sudo's own lines follow every one of them.
+        assert!(decision.notice.unwrap().ends_with(
+            "sudo's own error lines below are expected; don't retry with a password."
+        ));
     }
 
     #[test]

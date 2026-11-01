@@ -290,11 +290,20 @@ less certain stays `PAM_IGNORE`, so an interactive sudo never fails early.
 ### Messages to the agent
 
 The module writes one line to fd 2 after a deny (`t3: the user denied this
-sudo…`), an expiry or a timeout (`t3: the user didn't approve in time…`, in
-`native/t3-elevation/src/decline.rs`), and for each decline. Lines start with
-`t3: `. sudo-rs drops PAM conversation messages without a terminal, and agents
-run sudo without one, so the module writes to the inherited stderr rather
-than through PAM. "T3 down", `not_mine` and unsafe config print nothing.
+sudo…`), an expiry or a timeout (`t3: the user didn't approve in time…`), a
+cancel or a server that goes away mid-request (`t3: T3 withdrew this
+request…`), and for each decline (all in
+`native/t3-elevation/src/decline.rs`). Lines start with `t3: `. sudo-rs drops
+PAM conversation messages without a terminal, and agents run sudo without one,
+so the module writes to the inherited stderr rather than through PAM. "T3
+down", `not_mine` and unsafe config print nothing.
+
+sudo prints its own lines after every failure, and no PAM code silences them:
+sudo.ws (macOS and Linux) prints `PAM authentication error: …` and `a password
+is required`, sudo-rs `PAM error: …`. The codes that would change the text
+(`PAM_AUTH_ERR`, `PAM_MAXTRIES` and the like) make both retry and report
+incorrect password attempts instead, so failures stay `PAM_CRED_INSUFFICIENT`
+and each line ends by telling the agent sudo's lines are expected.
 
 ### Declines
 

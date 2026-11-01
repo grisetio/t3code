@@ -88,6 +88,21 @@ fn write_stderr(line: &str) {
     }
 }
 
+/// A failure must end sudo at once. sudo.ws retries on PAM_AUTH_ERR,
+/// PAM_AUTHINFO_UNAVAIL, PAM_MAXTRIES and PAM_PERM_DENIED, then reports
+/// incorrect password attempts; sudo-rs does the same on PAM_AUTH_ERR and
+/// PAM_CONV_ERR and reports attempts on PAM_MAXTRIES. Any other code is
+/// fatal in both, printed as `PAM authentication error: <text>` or
+/// `PAM error: <text>`, and PAM_CRED_INSUFFICIENT's text is the least
+/// misleading of them.
+fn pam_code(outcome: Outcome) -> c_int {
+    match outcome {
+        Outcome::Approved => pam::PAM_SUCCESS,
+        Outcome::Ignore => pam::PAM_IGNORE,
+        Outcome::Fail => pam::PAM_CRED_INSUFFICIENT,
+    }
+}
+
 unsafe fn authenticate(
     pamh: *mut pam::pam_handle,
     argc: c_int,
@@ -124,11 +139,7 @@ unsafe fn authenticate(
     if let Some(notice) = &decision.notice {
         write_stderr(notice);
     }
-    let code = match decision.outcome {
-        Outcome::Approved => pam::PAM_SUCCESS,
-        Outcome::Ignore => pam::PAM_IGNORE,
-        Outcome::Fail => pam::PAM_CRED_INSUFFICIENT,
-    };
+    let code = pam_code(decision.outcome);
     unsafe { store_result(pamh, code) };
     code
 }
@@ -159,4 +170,24 @@ pub unsafe extern "C" fn pam_sm_setcred(
     _argv: *const *const c_char,
 ) -> c_int {
     pam::PAM_IGNORE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_is_a_code_neither_sudo_retries() {
+        let retried = [
+            pam::PAM_AUTH_ERR,
+            pam::PAM_AUTHINFO_UNAVAIL,
+            pam::PAM_MAXTRIES,
+            pam::PAM_PERM_DENIED,
+            pam::PAM_CONV_ERR,
+        ];
+        assert_eq!(pam_code(Outcome::Fail), pam::PAM_CRED_INSUFFICIENT);
+        assert!(!retried.contains(&pam_code(Outcome::Fail)));
+        assert_eq!(pam_code(Outcome::Ignore), pam::PAM_IGNORE);
+        assert_eq!(pam_code(Outcome::Approved), pam::PAM_SUCCESS);
+    }
 }
