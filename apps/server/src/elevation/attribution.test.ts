@@ -311,6 +311,53 @@ describe("attribute", () => {
     ).toEqual({ type: "mine", run: a, explanation: null });
   });
 
+  it("gives a sudo deep in a script the reason of the thread's one running call", () => {
+    // `just` ran `python3 deploy.py`, which ran sudo. No level below the
+    // wrapper holds the call's text, and here the wrapper's argv is unreadable.
+    const hello = {
+      argv: ["sudo", "darwin-rebuild", "switch", "--flake", ".#macbook"],
+      chain: [
+        entry(230, ["python3", "deploy.py", "--host", "macbook"]),
+        entry(220, ["sh", "-cu", "python3 deploy.py --host macbook"]),
+        entry(210, ["just", "darwin-macbook"]),
+        entry(200, null),
+        entry(150, ["claude"]),
+        serverEntry,
+      ],
+    };
+    const call = {
+      text: "just darwin-macbook 2>&1 | tail -30",
+      explanation: "Apply the macbook configuration",
+    };
+    const attributeWith = (commands: Parameters<typeof run>[1]) => {
+      const a = run("a", commands);
+      return {
+        a,
+        result: attribute({
+          hello,
+          server,
+          now,
+          liveRuns: [run("b", [{ text: "pnpm dev", explanation: "Start the dev server" }]), a],
+          providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+          serverSudos: [],
+        }),
+      };
+    };
+    const one = attributeWith([
+      call,
+      { text: "git status", explanation: "Check the tree", finishedAt: now - 60_000 },
+    ]);
+    expect(one.result).toEqual({
+      type: "mine",
+      run: one.a,
+      explanation: "Apply the macbook configuration",
+      command: call.text,
+    });
+    // Two running calls: either could have reached sudo.
+    const two = attributeWith([call, { text: "pnpm dev", explanation: "Start the dev server" }]);
+    expect(two.result).toEqual({ type: "mine", run: two.a, explanation: null });
+  });
+
   it("ignores a registered pid whose start time no longer matches", () => {
     expect(
       attribute({
