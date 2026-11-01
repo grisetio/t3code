@@ -99,7 +99,6 @@ function LockScreenRequest() {
         <View className="gap-4 rounded-[20px] border border-border bg-card-alt p-4">
           {match !== null && match !== "expired" ? (
             <ElevationApprovalCard
-              inline={false}
               request={{
                 environmentId: match.environmentId,
                 requestId: match.request.requestId,
