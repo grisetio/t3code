@@ -447,23 +447,7 @@ export function ElevationApprovalCard(props: {
     : props.ended
       ? elevationEndedLine(props.ended, thisKeyId)
       : null;
-  const actions = ended ? (
-    // Replaces the buttons at their height, so nothing moves until the card settles.
-    <View
-      accessibilityRole="text"
-      accessibilityLiveRegion="polite"
-      className="min-h-12 flex-row items-center justify-center gap-2"
-    >
-      <SymbolView
-        name={ENDED_SYMBOL[ended.kind]}
-        size={16}
-        tintColorClassName="accent-foreground"
-      />
-      <Text numberOfLines={1} className="min-w-0 shrink font-t3-medium text-base text-foreground">
-        {ended.text}
-      </Text>
-    </View>
-  ) : (
+  const buttons = (
     <View className="flex-row gap-2">
       <View className="flex-1">
         <Button
@@ -495,6 +479,35 @@ export function ElevationApprovalCard(props: {
         )}
       </View>
     </View>
+  );
+  const actions = ended ? (
+    // Over the buttons, kept at their size but unseen, so nothing moves until the card settles.
+    <View>
+      <View
+        className="opacity-0"
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
+        {buttons}
+      </View>
+      <View
+        accessibilityRole="text"
+        accessibilityLiveRegion="polite"
+        className="absolute inset-0 flex-row items-center justify-center gap-2"
+      >
+        <SymbolView
+          name={ENDED_SYMBOL[ended.kind]}
+          size={16}
+          tintColorClassName="accent-foreground"
+        />
+        <Text numberOfLines={1} className="min-w-0 shrink font-t3-medium text-base text-foreground">
+          {ended.text}
+        </Text>
+      </View>
+    </View>
+  ) : (
+    buttons
   );
 
   const errorLine =
