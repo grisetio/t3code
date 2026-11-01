@@ -17,12 +17,20 @@ const key = { alias: "t3-elevation:env:kgriset", keyId: KEY_ID, user: "kgriset",
 
 describe("prepareElevationSigning", () => {
   it("signs the exact payload bytes and answers with the enrolled key", () => {
-    const prepared = prepareElevationSigning({ requestId, decoded, key, machine: "Studio" });
+    const prepared = prepareElevationSigning({
+      requestId,
+      decoded,
+      key,
+      machine: "Studio",
+      headline: "“Clear the cache”",
+    });
     if (!prepared.ok) throw new Error(prepared.blocker);
     expect(Base64Url.decode(prepared.signing.payloadB64url)).toEqual(Result.succeed(payloadBytes));
+    // The prompt repeats the card's headline, never the command, and backing out denies.
     expect(prepared.signing.prompt).toEqual({
       title: "Approve on Studio",
-      description: "rm -rf /tmp/x",
+      subtitle: "“Clear the cache”",
+      negative: "Deny",
     });
     expect(prepared.signing.respond("c2ln")).toEqual({
       requestId,
@@ -34,7 +42,15 @@ describe("prepareElevationSigning", () => {
   });
 
   it("refuses to sign when the module would not accept this phone's key", () => {
-    expect(prepareElevationSigning({ requestId, decoded, key: null, machine: "Studio" })).toEqual({
+    expect(
+      prepareElevationSigning({
+        requestId,
+        decoded,
+        key: null,
+        machine: "Studio",
+        headline: "“Clear the cache”",
+      }),
+    ).toEqual({
       ok: false,
       blocker: "not_set_up",
     });
@@ -44,6 +60,7 @@ describe("prepareElevationSigning", () => {
         decoded,
         key: { ...key, keyId: "v8uit0KoB7u3K1IvpGlMRg" },
         machine: "Studio",
+        headline: "“Clear the cache”",
       }),
     ).toEqual({ ok: false, blocker: "not_enrolled" });
     expect(
@@ -52,6 +69,7 @@ describe("prepareElevationSigning", () => {
         decoded,
         key: { ...key, user: "root" },
         machine: "Studio",
+        headline: "“Clear the cache”",
       }),
     ).toEqual({
       ok: false,

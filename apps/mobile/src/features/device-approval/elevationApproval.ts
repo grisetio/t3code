@@ -1,15 +1,12 @@
 import type { DecodedElevationPayload } from "@t3tools/client-runtime/elevation";
-import {
-  elevationCommandDisplay,
-  elevationCommandOneLine,
-} from "@t3tools/client-runtime/elevation-command";
 import type { ElevationRequestId, ElevationRespondInput } from "@t3tools/contracts";
 import * as Base64Url from "effect/encoding/Base64Url";
 
 import type { DeviceApprovalKeyRecord } from "./deviceApprovalKeys";
+import type { DeviceApprovalPrompt } from "./deviceApprovalSigner";
 
-/** How long "✓ Approved" stays before the sheet, lock screen or inline card moves on. */
-export const ELEVATION_SETTLE_MS = 750;
+/** How long "✓ Approved" stays before the lock screen or inline card moves on. */
+export const ELEVATION_SETTLE_MS = 700;
 
 export type ElevationApprovalBlocker = "not_set_up" | "other_user" | "not_enrolled";
 
@@ -17,7 +14,7 @@ export interface ElevationSigningRequest {
   readonly alias: string;
   /** The decoded bytes, re-encoded: the signer signs exactly what was rendered. */
   readonly payloadB64url: string;
-  readonly prompt: { readonly title: string; readonly description?: string };
+  readonly prompt: DeviceApprovalPrompt;
   readonly respond: (signature: string) => ElevationRespondInput;
 }
 
@@ -28,6 +25,8 @@ export function prepareElevationSigning(input: {
   readonly key: DeviceApprovalKeyRecord | null;
   /** This phone's name for the machine. */
   readonly machine: string;
+  /** The card's headline: the user read it, and the command, just before touching Approve. */
+  readonly headline: string;
 }):
   | { readonly ok: true; readonly signing: ElevationSigningRequest }
   | {
@@ -45,13 +44,11 @@ export function prepareElevationSigning(input: {
     signing: {
       alias: key.alias,
       payloadB64url: Base64Url.encode(decoded.bytes),
-      // The same words as the card: its headline, and the command it shows.
+      // Backing out denies, so the button says so. Adding a device keeps a plain Cancel, like
+      // setup. No command: the card in front of the prompt already showed it.
       prompt: view.enroll
         ? { title: `Add device ${view.enroll.label}` }
-        : {
-            title: `Approve on ${input.machine}`,
-            description: elevationCommandOneLine(elevationCommandDisplay(decoded.payload)),
-          },
+        : { title: `Approve on ${input.machine}`, subtitle: input.headline, negative: "Deny" },
       respond: (signature) => ({
         requestId: input.requestId,
         decision: "approve",
