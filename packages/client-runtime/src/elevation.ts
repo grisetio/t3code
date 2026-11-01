@@ -176,7 +176,7 @@ export function decodeElevationRequestPayload(
 }
 
 /** The agent's reason, trimmed and escaped, or null when it gave none. */
-export function elevationReason(explanation: string | null | undefined): string | null {
+function elevationReason(explanation: string | null | undefined): string | null {
   const trimmed = explanation?.trim() ?? "";
   return trimmed === "" ? null : escapeElevationDisplayText(trimmed);
 }
