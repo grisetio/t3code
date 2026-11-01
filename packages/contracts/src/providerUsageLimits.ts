@@ -97,13 +97,14 @@ export const UsageLimitSourceAccount = Schema.Struct({
 export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
 
 /**
- * The published state of one configured `usageLimitSources` entry. A source
- * that could not be read keeps `error` beside an empty account list rather
- * than vanishing, so the user can see it is configured but failing.
+ * The published state of one configured `usageLimitSources` entry, or of the
+ * usage-only Codex account read (`kind: "codex"`). A source that could not be
+ * read keeps `error` beside an empty account list rather than vanishing, so
+ * the user can see it is configured but failing.
  */
 export const UsageLimitSourceSnapshot = Schema.Struct({
   id: UsageLimitSourceId,
-  kind: Schema.Literal("cliproxy"),
+  kind: Schema.Literals(["cliproxy", "codex"]),
   label: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
   accounts: ForwardCompatibleArray(UsageLimitSourceAccount),
