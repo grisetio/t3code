@@ -349,11 +349,9 @@ function basename(path: string): string {
 }
 
 /**
- * A long path argument with its middle elided, so the one-line form reaches the words that tell
- * two requests apart. The start stays, because it says where the command acts: `rm -rf
- * /usr/…/app` must not read as a relative `app`. Only words that are plainly paths shorten, and
- * only long ones: `/var/db/x` stays whole, and `system/x` (a launchd target) or `origin/main`
- * aren't paths. An option's or variable's value after `=` shortens the same way.
+ * A long path argument with its middle elided. The start stays, because it says where the command
+ * acts: `rm -rf /usr/…/app` must not read as a relative `app`. Only deep words starting `/`, `./`,
+ * `../` or `~/` shorten (not `system/x` or `origin/main`), as does a value after `=`.
  */
 function shortArg(arg: string): string {
   const assignment = /^(--?[^=]+=|[A-Za-z_][A-Za-z0-9_]*=)(.*)$/s.exec(arg);

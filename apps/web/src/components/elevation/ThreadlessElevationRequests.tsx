@@ -33,6 +33,7 @@ export function ThreadlessElevationRequests(props: { readonly onScreen: boolean 
   const highlight = useElevationSidebarStore((state) => state.highlight);
   const clearHighlight = useElevationSidebarStore((state) => state.clearHighlight);
   const { onScreen } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers this list as on screen in the sidebar store while mounted, so notices leave its requests to it
   useEffect(() => {
     setListOnScreen(onScreen);
     return () => setListOnScreen(false);
@@ -45,6 +46,7 @@ export function ThreadlessElevationRequests(props: { readonly onScreen: boolean 
         entry.environmentId === highlight.environmentId &&
         entry.request.requestId === highlight.requestId,
     );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops a highlight in the sidebar store once its request was answered before the list showed
   useEffect(() => {
     if (onScreen && highlightGone) clearHighlight();
   }, [onScreen, highlightGone, clearHighlight]);
@@ -102,6 +104,7 @@ function ThreadlessRequestCard(props: {
     highlight.environmentId === environmentId &&
     highlight.requestId === request.requestId;
   const ref = useRef<HTMLDivElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the highlighted card into view and clears the highlight on a timer
   useEffect(() => {
     if (!highlighted) return;
     ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });

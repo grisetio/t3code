@@ -46,12 +46,9 @@ const BANNER_EXITING = new Keyframe({
   .reduceMotion(ReduceMotion.System);
 
 /**
- * Pending sudo requests from every connected environment, so a request is
- * seen even when another environment or screen is in front. Hidden while its
- * own thread, which shows the request inline, is on screen, and for requests
- * no thread claims while a threads list, which holds them, is. Once dismissed,
- * the thread list's Approval tag is what's left of it. An answered request's
- * banner leaves; the next one arrives as a banner of its own.
+ * Pending sudo requests from every connected environment. Hidden while its own thread is on
+ * screen, and for requests no thread claims while a threads list, which holds them, is. Once
+ * dismissed, the thread list's Approval tag is what's left of it.
  */
 export function ElevationPendingBanner(props: { readonly pathname: string }) {
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);

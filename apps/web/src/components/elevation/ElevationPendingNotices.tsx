@@ -20,11 +20,9 @@ function requestKey(entry: PendingElevationRequest) {
 }
 
 /**
- * One persistent notice per pending sudo request on any connected
- * environment, so a request is seen whichever thread or machine is open. It
- * closes when the request resolves anywhere, and stays away while the
- * request's own thread is open, where the card already shows it, or, for a
- * request no thread claims, while the sidebar that lists those is open.
+ * One persistent notice per pending sudo request on any connected environment. It closes when
+ * the request resolves anywhere, and stays away while the request's own thread is open, or, for
+ * a request no thread claims, while the sidebar that lists those is open.
  */
 export function ElevationPendingNotices() {
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);

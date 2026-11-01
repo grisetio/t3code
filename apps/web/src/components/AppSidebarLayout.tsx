@@ -407,6 +407,7 @@ function ElevationSidebarReveal() {
   const { isMobile, setOpen, setOpenMobile } = useSidebar();
   const navigate = useNavigate();
   const onModalPage = useLocation({ select: (location) => isAppModalPage(location.pathname) });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the sidebar and leaves a modal page when a notice reveals a request no thread claims
   useEffect(() => {
     if (highlight === null) return;
     if (onModalPage) void navigate({ to: "/" });

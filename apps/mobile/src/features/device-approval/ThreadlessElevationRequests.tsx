@@ -61,6 +61,7 @@ function Leaving(props: {
   const height = useSharedValue(0);
   const progress = useSharedValue(1);
   const { id, present, onGone } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- runs the Reanimated leave animation when the request is no longer pending
   useEffect(() => {
     if (present) {
       progress.set(1);
@@ -95,6 +96,7 @@ function Leaving(props: {
 function Highlight(props: { readonly onDone: () => void }) {
   const opacity = useSharedValue(1);
   const { onDone } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- runs the Reanimated highlight fade once on mount
   useEffect(() => {
     opacity.set(
       withDelay(
@@ -173,6 +175,7 @@ export function ThreadlessElevationRequests(props: {
   const currentKeys = new Set(current.map(keyOf));
 
   const { onScreen, onReveal } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- counts this list in the on-screen registry atom while it is visible
   useEffect(() => {
     if (!onScreen) return;
     appAtomRegistry.update(elevationListsOnScreenAtom, (count) => count + 1);
@@ -212,6 +215,7 @@ export function ThreadlessElevationRequests(props: {
             entry.request.requestId === highlight.requestId,
         ) ?? null);
   const revealed = useRef<typeof highlight>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the list to the request opened from the banner once, or drops a highlight whose request is gone
   useEffect(() => {
     if (!onScreen || highlight === null) return;
     if (highlighted === null) clearHighlight();

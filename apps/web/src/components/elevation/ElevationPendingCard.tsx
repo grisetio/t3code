@@ -45,6 +45,7 @@ export function DisclosureChevron(props: { readonly open: boolean }) {
 /** The current time, kept fresh enough for an "ago" measured from `since`. */
 function useElevationNow(since: number | null): number {
   const [now, setNow] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a timer that refreshes the "ago" text
   useEffect(() => {
     if (since === null) return;
     const timer = setTimeout(() => setNow(Date.now()), elevationAgoRefreshMs(since, now));
