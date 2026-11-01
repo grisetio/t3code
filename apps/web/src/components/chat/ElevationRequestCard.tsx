@@ -34,7 +34,6 @@ import { WorkLogDetails, WorkLogRow } from "./WorkLog";
 const STATUS_ICONS = {
   pending: ShieldIcon,
   approved: CheckIcon,
-  done: CheckIcon,
   denied: XIcon,
   expired: ClockIcon,
   cancelled: MinusIcon,
@@ -123,7 +122,8 @@ export function ElevationRequestCard(props: {
       <ElevationRequestRow
         item={item}
         icon={STATUS_ICONS[status.kind]}
-        summary={elevationResolvedSummary(status.label, item.explanation, command)}
+        label={status.label}
+        summary={elevationResolvedSummary(status.label, command)}
         headline={headline}
         command={command}
         how={status.kind === "pending" ? null : status.how}
@@ -139,6 +139,7 @@ export function ElevationRequestCard(props: {
 function ElevationRequestRow(props: {
   readonly item: ElevationRequestItem;
   readonly icon: (typeof STATUS_ICONS)[keyof typeof STATUS_ICONS];
+  readonly label: string;
   readonly summary: string;
   readonly headline: string;
   readonly command: ElevationCommandDisplay;
@@ -165,7 +166,14 @@ function ElevationRequestRow(props: {
         }
       }}
       icon={<Icon className="size-4 shrink-0 text-icon-muted" aria-hidden />}
-      label={props.summary}
+      label={
+        <>
+          <span className="text-foreground">{props.label}</span>
+          {props.command.short === "" ? null : (
+            <span className="ms-2 font-mono text-xs">{props.command.short}</span>
+          )}
+        </>
+      }
       trailing={<DisclosureChevron open={expanded} />}
     >
       {expanded ? (

@@ -251,9 +251,10 @@ describe("elevationRequestStatusView", () => {
       how: `Approved on this phone · ${time}`,
       detail: null,
     });
+    // The run ending doesn't change the status, only the detail.
     expect(elevationRequestStatusView(item, { finished: true })).toEqual({
-      kind: "done",
-      label: "Done",
+      kind: "approved",
+      label: "Approved",
       time,
       how: `Approved on Fold\\n · ${time} · finished`,
       detail: null,
@@ -324,12 +325,15 @@ describe("elevationHeadline", () => {
 });
 
 describe("elevationResolvedSummary", () => {
-  it("names the reason, else the programs", () => {
-    const display = { programs: ["id", "ls"], short: "id, ls" };
-    expect(elevationResolvedSummary("Approved", " Restart audio ", display)).toBe(
-      "Approved · Restart audio",
-    );
-    expect(elevationResolvedSummary("Denied", null, display)).toBe("Denied · id, ls");
+  it("names the shortened command, so two requests for one program read apart", () => {
+    expect(
+      elevationResolvedSummary("Approved", { short: "python3 /home/…/deploy.py submit-system" }),
+    ).toBe("Approved · python3 /home/…/deploy.py submit-system");
+    expect(
+      elevationResolvedSummary("Approved", { short: "python3 /home/…/deploy.py status-system" }),
+    ).toBe("Approved · python3 /home/…/deploy.py status-system");
+    expect(elevationResolvedSummary("Denied", { short: "id, ls" })).toBe("Denied · id, ls");
+    expect(elevationResolvedSummary("Expired", { short: "" })).toBe("Expired");
   });
 });
 

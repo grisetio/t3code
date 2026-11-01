@@ -202,16 +202,16 @@ export function elevationHeadline(input: {
   return `${input.agentName === null ? "An agent" : escapeElevationDisplayText(input.agentName)} wants admin access`;
 }
 
-/** "Approved · Restart audio": a resolved row's one line, the reason or else the programs. */
+/**
+ * "Approved · python3 /home/…/deploy.py --wait": a resolved row's one line, for its accessible
+ * name. The command, not the reason, because two requests with the same reason or program must
+ * still read apart; the reason stays in the expanded detail.
+ */
 export function elevationResolvedSummary(
   label: string,
-  explanation: string | null,
-  display: Pick<ElevationCommandDisplay, "programs" | "short">,
+  display: Pick<ElevationCommandDisplay, "short">,
 ): string {
-  const subject =
-    elevationReason(explanation) ??
-    (display.programs.length > 0 ? display.programs.join(", ") : display.short);
-  return subject === "" ? label : `${label} · ${subject}`;
+  return display.short === "" ? label : `${label} · ${display.short}`;
 }
 
 export interface ElevationRequestFact {
@@ -400,8 +400,8 @@ const ELEVATION_FAILURE_MESSAGES: Record<OrchestrationV2ElevationRequestFailure,
 export type ElevationRequestStatusView =
   | { readonly kind: "pending"; readonly label: string }
   | {
-      readonly kind: "approved" | "done" | "denied" | "expired" | "cancelled";
-      /** "Approved", "Done", "Denied", "Expired" or "Cancelled". */
+      readonly kind: "approved" | "denied" | "expired" | "cancelled";
+      /** "Approved", "Denied", "Expired" or "Cancelled". */
       readonly label: string;
       /** When it ended, for the collapsed row: "1:18 PM". */
       readonly time: string;
@@ -440,21 +440,14 @@ export function elevationRequestStatusView(
         : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
   switch (item.elevationStatus) {
     case "approved":
-      return options.finished
-        ? {
-            kind: "done",
-            label: "Done",
-            time,
-            how: `Approved${approvedOn} · ${time} · finished`,
-            detail,
-          }
-        : {
-            kind: "approved",
-            label: "Approved",
-            time,
-            how: `Approved${approvedOn} · ${time}`,
-            detail,
-          };
+      // "Approved" stays the status after the run ends; only the detail says it finished.
+      return {
+        kind: "approved",
+        label: "Approved",
+        time,
+        how: `Approved${approvedOn} · ${time}${options.finished ? " · finished" : ""}`,
+        detail,
+      };
     case "denied":
       return {
         kind: "denied",
