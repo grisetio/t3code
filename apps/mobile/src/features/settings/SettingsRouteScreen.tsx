@@ -94,6 +94,7 @@ function ConfiguredSettingsRouteScreen() {
             valuePosition="trailing"
             target="SettingsEnvironments"
           />
+          <DeviceApprovalSettingsRow />
           <SettingsRow icon="bell.badge" label="Notifications" target="SettingsNotifications" />
         </SettingsSection>
 
@@ -127,6 +128,7 @@ function LocalSettingsRouteScreen() {
             valuePosition="trailing"
             target="SettingsEnvironments"
           />
+          <DeviceApprovalSettingsRow />
         </SettingsSection>
 
         <SettingsIndexSections />
@@ -135,13 +137,25 @@ function LocalSettingsRouteScreen() {
   );
 }
 
+function DeviceApprovalSettingsRow() {
+  const { environments } = useEnvironments();
+  if (
+    !environments.some((environment) => environmentSupportsDeviceApproval(environment.serverConfig))
+  ) {
+    return null;
+  }
+  return (
+    <SettingsRow
+      icon={{ ios: "touchid", android: "fingerprint" }}
+      label="Device approval"
+      target="SettingsDeviceApproval"
+    />
+  );
+}
+
 function SettingsIndexSections() {
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const noServerTargets = selectedTargets.length === 0;
-  const { environments } = useEnvironments();
-  const hasDeviceApproval = environments.some((environment) =>
-    environmentSupportsDeviceApproval(environment.serverConfig),
-  );
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const scopedProjectMembers =
     selectedProject?.members
@@ -218,9 +232,6 @@ function SettingsIndexSections() {
           target="SettingsEnvironmentMaintenance"
           disabled={noServerTargets}
         />
-        {hasDeviceApproval ? (
-          <SettingsRow icon="iphone" label="Device approval" target="SettingsDeviceApproval" />
-        ) : null}
       </SettingsSection>
 
       <SettingsSection title="App">
