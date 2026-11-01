@@ -2,17 +2,16 @@ import { useAtomValue } from "@effect/atom-react";
 import { elevationHeadline, elevationNoticeText } from "@t3tools/client-runtime/elevation";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import * as Result from "effect/Result";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import Animated, { Keyframe, ReduceMotion } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { AppText as Text } from "../../components/ui/AppText";
 import { GlassSurface } from "../../components/ui/GlassSurface";
 import { IconButton } from "../../components/ui/IconButton";
 import { MOBILE_MOTION, MOBILE_SHAPE } from "../../lib/designTokens";
-import { APP_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { elevation } from "../../state/elevation";
 import {
   encodeThreadDeepLink,
@@ -45,6 +44,8 @@ const BANNER_EXITING = new Keyframe({
   .duration(MOBILE_MOTION.exit)
   .reduceMotion(ReduceMotion.System);
 
+const BANNER_GAP = 8;
+
 /**
  * Pending sudo requests from every connected environment, so a request is
  * seen even when another environment or screen is in front. Hidden while its
@@ -52,8 +53,16 @@ const BANNER_EXITING = new Keyframe({
  * no thread claims while a threads list, which holds them, is. Once dismissed,
  * the thread list's Approval tag is what's left of it. An answered request's
  * banner leaves; the next one arrives as a banner of its own.
+ *
+ * The banner waits until it's answered, so it takes its own room at the top
+ * instead of covering the screen's header and first rows: the screen below
+ * moves down and lays out as if the status bar were the banner's. The room
+ * goes once the banner's exit has played.
  */
-export function ElevationPendingBanner(props: { readonly pathname: string }) {
+export function ElevationPendingBanner(props: {
+  readonly pathname: string;
+  readonly children: ReactNode;
+}) {
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
   const target = useAtomValue(elevationApprovalTargetAtom);
   const lockScreen = useAtomValue(elevationLockScreenAtom);
@@ -80,29 +89,40 @@ export function ElevationPendingBanner(props: { readonly pathname: string }) {
   if (shown.id !== shownId) {
     setShown({ id: shownId, replacing: shown.id !== null && shownId !== null });
   }
-  // Stays mounted, so a banner's exit can play after the last request leaves.
+  // The slot's height, which holds while a leaving banner plays its exit.
+  const [bannerHeight, setBannerHeight] = useState(0);
+  const reserved = bannerHeight > 0 ? insets.top + bannerHeight + BANNER_GAP : 0;
   return (
-    <View
-      className="absolute inset-x-3 z-[100]"
-      style={{ top: insets.top + APP_BAR_HEIGHT + 8 }}
-      pointerEvents="box-none"
-    >
-      {first === undefined ? null : (
-        <Animated.View
-          key={first.request.requestId}
-          entering={shown.replacing ? BANNER_ENTERING_NEXT : BANNER_ENTERING}
-          // A leaving banner keeps its frame while the next one lays out in its place.
-          exiting={BANNER_EXITING}
-        >
-          <BannerContent
-            entry={first}
-            more={visible.length - 1}
-            onDismiss={() =>
-              setDismissed((current) => new Set(current).add(first.request.requestId))
-            }
-          />
-        </Animated.View>
-      )}
+    <View className="flex-1 bg-header">
+      <View style={{ flex: 1, paddingTop: reserved }}>
+        <SafeAreaInsetsContext value={reserved > 0 ? { ...insets, top: 0 } : insets}>
+          {props.children}
+        </SafeAreaInsetsContext>
+      </View>
+      {/* Stays mounted, so a banner's exit can play after the last request leaves. */}
+      <View
+        className="absolute inset-x-3 z-[100]"
+        style={{ top: insets.top + BANNER_GAP / 2 }}
+        pointerEvents="box-none"
+        onLayout={(event) => setBannerHeight(Math.round(event.nativeEvent.layout.height))}
+      >
+        {first === undefined ? null : (
+          <Animated.View
+            key={first.request.requestId}
+            entering={shown.replacing ? BANNER_ENTERING_NEXT : BANNER_ENTERING}
+            // A leaving banner keeps its frame while the next one lays out in its place.
+            exiting={BANNER_EXITING}
+          >
+            <BannerContent
+              entry={first}
+              more={visible.length - 1}
+              onDismiss={() =>
+                setDismissed((current) => new Set(current).add(first.request.requestId))
+              }
+            />
+          </Animated.View>
+        )}
+      </View>
     </View>
   );
 }
