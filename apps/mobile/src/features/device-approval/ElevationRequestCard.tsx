@@ -53,7 +53,8 @@ const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolN
   cancelled: "minus",
 };
 
-const COLLAPSE_MS = 240;
+/** How long a card takes to hand over to its row once its request leaves the pending set. */
+export const ELEVATION_CARD_COLLAPSE_MS = 240;
 const CARD_FADE_MS = 140;
 const ROW_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 
@@ -138,7 +139,7 @@ export function ElevationRequestCard(props: {
     const reduceMotion = ReduceMotion.System;
     cardOpacity.set(withTiming(0, { duration: CARD_FADE_MS, reduceMotion }));
     height.set(
-      withTiming(target, { duration: COLLAPSE_MS, reduceMotion }, (finished) => {
+      withTiming(target, { duration: ELEVATION_CARD_COLLAPSE_MS, reduceMotion }, (finished) => {
         if (finished) runOnJS(setCollapsing)(false);
       }),
     );
