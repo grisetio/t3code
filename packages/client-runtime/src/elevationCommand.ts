@@ -352,18 +352,25 @@ function basename(path: string): string {
 }
 
 /**
- * A long path argument by its last component, so the one-line form reaches the words that tell
- * two requests apart. Only words that are plainly paths, with three or more components:
- * `system/x` (a launchd target) and `origin/main` aren't paths, and `/etc` or `/var/db` stay
- * whole so `rm -rf /etc` never reads as a relative `etc`. An option's or variable's value
- * after `=` shortens the same way.
+ * A long path argument with its middle elided, so the one-line form reaches the words that tell
+ * two requests apart. The start stays, because it says where the command acts: `rm -rf
+ * /usr/…/app` must not read as a relative `app`. Only words that are plainly paths shorten, and
+ * only long ones: `/var/db/x` stays whole, and `system/x` (a launchd target) or `origin/main`
+ * aren't paths. An option's or variable's value after `=` shortens the same way.
  */
 function shortArg(arg: string): string {
   const assignment = /^(--?[^=]+=|[A-Za-z_][A-Za-z0-9_]*=)(.*)$/s.exec(arg);
   if (assignment !== null) return `${assignment[1]}${shortArg(assignment[2]!)}`;
-  if (!/^(\/|\.{1,2}\/|~\/)/.test(arg)) return arg;
-  const components = arg.split("/").filter((part) => part !== "" && part !== "~");
-  return components.length >= 3 ? components.at(-1)! : arg;
+  const prefix = /^(\/|\.{1,2}\/|~\/)/.exec(arg)?.[0];
+  if (prefix === undefined) return arg;
+  const components = arg
+    .slice(prefix.length)
+    .split("/")
+    .filter((part) => part !== "");
+  if (prefix === "/") {
+    return components.length >= 4 ? `/${components[0]}/…/${components.at(-1)}` : arg;
+  }
+  return components.length >= 3 ? `${prefix}…/${components.at(-1)}` : arg;
 }
 
 /** Where a sudo's program sits in its args, and its target when that isn't root. */
@@ -428,8 +435,8 @@ export interface ElevationCommandDisplay {
   /** Every line of the command as written. */
   readonly lines: readonly string[];
   /**
-   * The quiet one-line form: the program by name and its arguments, long paths by their last
-   * component ("python3 deploy.py --wait"), or the programs when the command runs several sudos
+   * The quiet one-line form: the program by name and its arguments, long paths with their middle
+   * elided ("python3 /Users/…/deploy.py --wait"), or the programs when the command runs several sudos
    * ("id, ls"). Never sudo itself.
    */
   readonly short: string;
