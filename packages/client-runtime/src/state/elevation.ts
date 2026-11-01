@@ -2,15 +2,19 @@ import {
   WS_METHODS,
   type ElevationPayloadDecodeFailure,
   type ElevationPendingRequest,
+  type ElevationPendingRequests,
   type EnvironmentId,
   type ServerConfig,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import type * as EnvironmentRegistry from "../connection/registry.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { decodeElevationRequestPayload, type DecodedElevationPayload } from "../elevation.ts";
 import {
   createEnvironmentRpcCommand,
@@ -66,6 +70,25 @@ export function collectPendingElevationRequests(
   return next.length === 0 ? EMPTY_PENDING : next;
 }
 
+const NO_PENDING: ElevationPendingRequests = { requests: [] };
+
+/**
+ * The server's list while the environment has a session, and none while it doesn't. The server
+ * holds pending requests in memory and sends the whole list first on every subscribe, so a request
+ * seen before a disconnect (answered elsewhere, expired, or lost to a server restart) never
+ * outlives the connection: the next session's first list replaces it.
+ */
+export function followPendingElevationRequests<E, R>(
+  sessions: Stream.Stream<Option.Option<unknown>>,
+  requests: Stream.Stream<ElevationPendingRequests, E, R>,
+): Stream.Stream<ElevationPendingRequests, E, R> {
+  return sessions.pipe(
+    Stream.map(Option.isSome),
+    Stream.changes,
+    Stream.switchMap((connected) => (connected ? requests : Stream.succeed(NO_PENDING))),
+  );
+}
+
 export function createElevationAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
   options: {
@@ -75,6 +98,12 @@ export function createElevationAtoms<R, E>(
   const pendingRequests = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
     label: "environment-data:elevation:pending",
     tag: WS_METHODS.elevationSubscribe,
+    transform: (requests) =>
+      Stream.unwrap(
+        Effect.map(EnvironmentSupervisor.EnvironmentSupervisor, (supervisor) =>
+          followPendingElevationRequests(SubscriptionRef.changes(supervisor.session), requests),
+        ),
+      ),
   });
 
   let previousPending = EMPTY_PENDING;
