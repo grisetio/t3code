@@ -4,6 +4,7 @@ import {
   elevationAgent,
   elevationAgoRefreshMs,
   elevationDecodeFailureMessage,
+  elevationEndedLine,
   elevationFailureMessage,
   elevationHeadline,
   elevationRequestFacts,
@@ -23,6 +24,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  type ElevationEndedRequest,
   type ElevationPayloadDecodeFailure,
   type ElevationRequestId,
   type ElevationRequestSeries,
@@ -39,7 +41,7 @@ import { Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
 import { ProviderIcon } from "../../components/ProviderIcon";
-import { SymbolView } from "../../components/ui/AppSymbol";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -335,6 +337,13 @@ interface ElevationApprovalRequest {
   readonly series?: ElevationRequestSeries | undefined;
 }
 
+const ENDED_SYMBOL: Record<ElevationEndedRequest["elevationStatus"], AppSymbolName> = {
+  approved: "checkmark",
+  denied: "xmark",
+  expired: "clock",
+  cancelled: "minus",
+};
+
 /**
  * The request card: the headline, who and where under it, the command, and Deny / Approve.
  * Approve opens the fingerprint prompt; backing out of it denies, because the user has already
@@ -354,6 +363,8 @@ export function ElevationApprovalCard(props: {
    * from here while it shows "✓ Approved".
    */
   readonly onApproving?: (active: boolean) => void;
+  /** How the request ended elsewhere, said in place of the buttons while the card settles. */
+  readonly ended?: Pick<ElevationEndedRequest, "elevationStatus" | "resolvedBy"> | null;
   readonly openChanges?: (open: () => void) => void;
 }) {
   const { request } = props;
@@ -431,15 +442,26 @@ export function ElevationApprovalCard(props: {
     }
   };
 
-  const actions = approved ? (
+  const ended = approved
+    ? ({ kind: "approved", text: "Approved" } as const)
+    : props.ended
+      ? elevationEndedLine(props.ended, thisKeyId)
+      : null;
+  const actions = ended ? (
     // Replaces the buttons at their height, so nothing moves until the card settles.
     <View
       accessibilityRole="text"
       accessibilityLiveRegion="polite"
       className="min-h-12 flex-row items-center justify-center gap-2"
     >
-      <SymbolView name="checkmark" size={16} tintColorClassName="accent-foreground" />
-      <Text className="font-t3-medium text-base text-foreground">Approved</Text>
+      <SymbolView
+        name={ENDED_SYMBOL[ended.kind]}
+        size={16}
+        tintColorClassName="accent-foreground"
+      />
+      <Text numberOfLines={1} className="min-w-0 shrink font-t3-medium text-base text-foreground">
+        {ended.text}
+      </Text>
     </View>
   ) : (
     <View className="flex-row gap-2">
