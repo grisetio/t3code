@@ -23,17 +23,26 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { ElevationDevice, ElevationStatus, EnvironmentId } from "@t3tools/contracts";
+import {
+  resolveEnvironmentMachineKind,
+  type ElevationCheck,
+  type ElevationStatus,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useResolveClassNames } from "uniwind";
 
+import { ENVIRONMENT_MACHINE_SYMBOLS } from "../../components/EnvironmentMachineSymbol";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
-import { SymbolView } from "../../components/ui/AppSymbol";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { ListActionRow } from "../../components/ui/ListActionRow";
+import { ListRowLayout } from "../../components/ui/ListRowLayout";
+import { RowPressable } from "../../components/ui/RowPressable";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { Sheet } from "../../components/ui/Sheet";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -41,6 +50,7 @@ import { elevation } from "../../state/elevation";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { SettingsRow } from "../settings/components/SettingsRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { approvalHaptic } from "./approvalHaptics";
@@ -60,6 +70,7 @@ import {
 import { DeviceApprovalSetupFlow } from "./DeviceApprovalSetupFlow";
 import { prepareElevationSigning } from "./elevationApproval";
 import { claimedElevationRequestAtom } from "./elevationApprovalTarget";
+import { formatDeviceUse } from "./settings-device-dates";
 import {
   openSudoApprovalNotificationSettings,
   useSudoApprovalNotificationsOn,
@@ -69,9 +80,10 @@ import { useDeviceApprovalAgentHandoff } from "./useDeviceApprovalAgentHandoff";
 const STATE_LABELS = { on: "On", needs_fixing: "Needs fixing", off: "Off" } as const;
 // Long enough to read "T3 couldn't fix this one" before the thread opens.
 const HANDOFF_NOTICE_MS = 1400;
-// "✓ Removed" stays this long before the sheet closes.
+// "✓ Removed" stays this long before the row goes.
 const REMOVED_MS = 600;
 const FINGERPRINT = { ios: "touchid", android: "fingerprint" } as const;
+const REKEY_SHEET = { kind: "rekey" } as const;
 
 interface SetupTarget {
   readonly environmentId: EnvironmentId;
@@ -111,7 +123,7 @@ export function SettingsDeviceApprovalRouteScreen() {
           contentInsetAdjustmentBehavior="automatic"
           showsVerticalScrollIndicator={false}
           className="flex-1"
-          contentContainerClassName="gap-6 px-5 pt-4"
+          contentContainerClassName="gap-4 px-5 pt-4"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
           {supported.length === 0 ? (
@@ -126,6 +138,11 @@ export function SettingsDeviceApprovalRouteScreen() {
                   environmentId={environment.environmentId}
                   // The phone's own name for the machine, never the server's.
                   machine={environment.label}
+                  icon={
+                    ENVIRONMENT_MACHINE_SYMBOLS[
+                      resolveEnvironmentMachineKind(environment.serverConfig)
+                    ]
+                  }
                   onSetUp={setSetup}
                   onState={reportState}
                 />
@@ -147,10 +164,10 @@ function NotificationsRow() {
   if (on === null) return null;
   return (
     <SettingsSection>
-      <ListActionRow
+      <SettingsRow
+        icon="bell.badge"
         label="Notifications"
-        description={on ? undefined : "Requests show only in the app"}
-        detail={on ? "On" : "Off"}
+        value={on ? "On" : "Off · Requests show only in the app"}
         onPress={() => void openSudoApprovalNotificationSettings()}
       />
     </SettingsSection>
@@ -175,6 +192,7 @@ function useKeyRecord(environmentId: EnvironmentId) {
 function EnvironmentDeviceApproval(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  readonly icon: AppSymbolName;
   readonly onSetUp: (target: SetupTarget) => void;
   readonly onState: (environmentId: EnvironmentId, state: DeviceApprovalState) => void;
 }) {
@@ -184,15 +202,14 @@ function EnvironmentDeviceApproval(props: {
   if (status.data === null) {
     return (
       <SettingsSection>
-        <View className="gap-2 p-4">
-          <Text className="text-base text-foreground">{props.machine}</Text>
-          <Text className="text-sm text-foreground-muted">
-            {status.error ?? "Checking this machine…"}
-          </Text>
-          {status.error === null ? null : (
-            <Button label="Retry" tone="secondary" onPress={status.refresh} />
-          )}
-        </View>
+        <ListRowLayout
+          icon={props.icon}
+          label={props.machine}
+          description={status.error ?? "Checking this machine…"}
+        />
+        {status.error === null ? null : (
+          <ListActionRow icon="arrow.clockwise" label="Retry" onPress={status.refresh} />
+        )}
       </SettingsSection>
     );
   }
@@ -200,6 +217,7 @@ function EnvironmentDeviceApproval(props: {
     <DeviceApprovalGroup
       environmentId={props.environmentId}
       machine={props.machine}
+      icon={props.icon}
       status={status.data}
       onSetUp={props.onSetUp}
       onState={props.onState}
@@ -211,11 +229,12 @@ type Phase = "idle" | "checking" | "handoff";
 
 type KeySheet =
   | { readonly kind: "fix"; readonly plan: Extract<DeviceApprovalFixPlan, { kind: "repair" }> }
-  | { readonly kind: "rekey" };
+  | typeof REKEY_SHEET;
 
 function DeviceApprovalGroup(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  readonly icon: AppSymbolName;
   readonly status: ElevationStatus;
   readonly onSetUp: (target: SetupTarget) => void;
   readonly onState: (environmentId: EnvironmentId, state: DeviceApprovalState) => void;
@@ -224,12 +243,18 @@ function DeviceApprovalGroup(props: {
   const [record, setRecord] = useKeyRecord(environmentId);
   const [phase, setPhase] = useState<Phase>("idle");
   const [keySheet, setKeySheet] = useState<KeySheet | null>(null);
-  const [removing, setRemoving] = useState(false);
   const [turningOff, setTurningOff] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // "Used today" only needs the day, so the time the page opened is enough.
+  const [now] = useState(Date.now);
   const handoff = useDeviceApprovalAgentHandoff();
+  const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
   const canInstall = useAtomValue(elevation.install.permissionAtom(environmentId));
   const canEnroll = useAtomValue(elevation.enroll.permissionAtom(environmentId));
+  const canRevoke = useAtomValue(elevation.revoke.permissionAtom(environmentId));
+  const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(environmentId));
   const rekeyRequested = useAtomValue(deviceApprovalRekeyAtom) === environmentId;
   const signerPresent = deviceApprovalSigner.isPresent();
 
@@ -240,25 +265,47 @@ function DeviceApprovalGroup(props: {
   const canRepair = signerPresent && status.user !== undefined && canInstall && canEnroll;
   const turnOff = deviceApprovalTurnOff(status);
 
+  const forgetThisPhone = async () => {
+    if (phoneRecord !== null) await discardPhoneKey(phoneRecord.alias);
+    await deviceApprovalKeys.remove(environmentId);
+    setRecord(null);
+  };
+
+  const removal = useRemoveThisPhone({
+    environmentId,
+    machine,
+    record: phoneRecord,
+    onRemoved: () => {
+      setDetailsOpen(false);
+      void forgetThisPhone();
+    },
+  });
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports this machine's state to the screen's header row
   useEffect(() => onState(environmentId, state), [environmentId, onState, state]);
 
   // "Set up again" from the lock-screen prompt lands here and goes straight to the fingerprint.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes the one-shot rekey request from the lock-screen prompt
+  // The request stays in its atom while the sheet is open, so the sheet is derived from it.
+  const rekeyOpen = rekeyRequested && phoneRecord !== null && canRepair;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops a lock-screen rekey request this phone can't act on once its key record is known
   useEffect(() => {
-    if (!rekeyRequested || record === undefined) return;
-    clearDeviceApprovalRekey();
-    // oxlint-disable-next-line react/set-state-in-effect -- Opens the rekey sheet once the request and this phone's key record are both known.
-    if (phoneRecord !== null && canRepair) setKeySheet({ kind: "rekey" });
-  }, [rekeyRequested, record, phoneRecord, canRepair]);
+    if (rekeyRequested && record !== undefined && !rekeyOpen) clearDeviceApprovalRekey();
+  }, [rekeyRequested, record, rekeyOpen]);
+  // Leaving the page drops the request, so the sheet doesn't reopen on a later visit.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops the pending rekey request when the page unmounts
+  useEffect(() => clearDeviceApprovalRekey, []);
+  const sheet = keySheet ?? (rekeyOpen ? REKEY_SHEET : null);
+  const closeSheet = () => {
+    setKeySheet(null);
+    if (rekeyRequested) clearDeviceApprovalRekey();
+  };
 
   if (!status.supported) {
     return (
-      <SettingsSection>
-        <HeaderRow machine={machine} trail="Off" warn={false} />
-        <Body
-          text={status.unsupportedReason ?? "Agents' sudo keeps asking for the password here."}
-        />
+      <SettingsSection
+        footer={status.unsupportedReason ?? "Agents' sudo keeps asking for the password here."}
+      >
+        <MachineRow icon={props.icon} machine={machine} trail="Off" />
       </SettingsSection>
     );
   }
@@ -289,29 +336,47 @@ function DeviceApprovalGroup(props: {
     }
   };
 
-  const startTurnOff = () => {
-    if (turnOff === "uninstall") return setTurningOff(true);
-    Dialog.confirm({
-      title: "Turn off device approval?",
-      message: `Its setup on ${machine} comes from config outside T3, so an agent removes it there.`,
-      confirmText: "Continue",
-      onConfirm: () =>
-        void handoff({
-          purpose: "turn_off",
-          environmentId,
-          machine,
-          status,
-          failing: [],
-          repair: null,
-        }),
-    });
-  };
+  const startTurnOff = () =>
+    turnOff === "uninstall"
+      ? Dialog.confirm({
+          title: "Turn off device approval?",
+          message: `Agents' sudo on ${machine} will ask for the password again, and every phone stops approving there.`,
+          confirmText: "Turn off",
+          destructive: true,
+          onConfirm: () => setTurningOff(true),
+        })
+      : Dialog.confirm({
+          title: "Turn off device approval?",
+          message: `Its setup on ${machine} comes from config outside T3, so an agent removes it there.`,
+          confirmText: "Ask an agent",
+          destructive: true,
+          onConfirm: () =>
+            void handoff({
+              purpose: "turn_off",
+              environmentId,
+              machine,
+              status,
+              failing: [],
+              repair: null,
+            }),
+        });
 
-  const forgetThisPhone = async () => {
-    if (phoneRecord !== null) await discardPhoneKey(phoneRecord.alias);
-    await deviceApprovalKeys.remove(environmentId);
-    setRecord(null);
-  };
+  const revokeOther = (keyId: string, label: string) =>
+    Dialog.confirm({
+      title: `Remove ${label}?`,
+      message: `It will no longer approve sudo on ${machine}.`,
+      confirmText: "Remove",
+      destructive: true,
+      onConfirm: () =>
+        void (async () => {
+          setBusy(keyId);
+          setError(null);
+          const result = await revoke({ environmentId, input: { keyId } }).finally(() =>
+            setBusy(null),
+          );
+          if (result._tag !== "Success") setError(failureText(result));
+        })(),
+    });
 
   /** After T3's repair: done if the checks pass, otherwise an agent takes it with the diagnosis. */
   const afterRepair = (
@@ -349,89 +414,157 @@ function DeviceApprovalGroup(props: {
   };
 
   const offLine = `Approve agents' sudo on ${machine} with this phone.`;
+  const canSetUp = signerPresent && status.user !== undefined;
+  const addThisPhone = state === "on" && thisDevice === undefined && canSetUp;
+  const footer =
+    state === "off"
+      ? canSetUp
+        ? offLine
+        : offReason(signerPresent)
+      : addThisPhone
+        ? offLine
+        : state === "on" && thisDevice !== undefined
+          ? `Agents' sudo on ${machine} waits for your fingerprint on this phone.`
+          : undefined;
+  const description =
+    phase === "checking"
+      ? "Checking…"
+      : phase === "handoff"
+        ? "T3 couldn't fix this one, so an agent will."
+        : state === "needs_fixing"
+          ? "Agents' sudo will ask for the password"
+          : undefined;
+  const checks = status.checks.filter((check) => !(check.id === "devices" && check.ok));
+  // Removing runs the root-owned helper; without it the helper check in Details says why.
+  const canRemove =
+    status.helperInstalled && thisDevice !== undefined && phoneRecord !== null && signerPresent;
+  const devices = [...status.devices].sort(
+    (a, b) => Number(b.keyId === thisDevice?.keyId) - Number(a.keyId === thisDevice?.keyId),
+  );
 
   return (
     <>
-      <SettingsSection>
-        <HeaderRow machine={machine} trail={STATE_LABELS[state]} warn={state === "needs_fixing"} />
-        {state === "off" ? (
-          signerPresent && status.user !== undefined ? (
-            <Body
-              text={offLine}
-              action={{ label: "Set up", disabled: !canInstall, onPress: setUp }}
+      <SettingsSection footer={footer}>
+        <MachineRow
+          icon={props.icon}
+          machine={machine}
+          trail={STATE_LABELS[state]}
+          description={description}
+          warn={state === "needs_fixing"}
+        />
+        {phase !== "idle" ? null : state === "off" ? (
+          canSetUp ? (
+            <ListActionRow
+              icon={FINGERPRINT}
+              label="Set up"
+              disabled={!canInstall}
+              onPress={setUp}
             />
-          ) : (
-            <Body text={offReason(signerPresent)} />
-          )
-        ) : phase === "checking" ? (
-          <Body text="Checking…" />
-        ) : phase === "handoff" ? (
-          <Body text="T3 couldn't fix this one, so an agent will." />
+          ) : null
         ) : state === "needs_fixing" ? (
-          <Body
-            text="Agents' sudo will ask for the password"
-            action={{ label: "Fix", onPress: fix }}
-          />
-        ) : thisDevice === undefined && signerPresent && status.user !== undefined ? (
-          <Body
-            text={offLine}
-            action={{ label: "Add this phone", disabled: !canEnroll, onPress: setUp }}
-          />
+          <ListActionRow icon="hammer" label="Fix" onPress={fix} />
+        ) : addThisPhone ? (
+          <ListActionRow icon="plus" label="Add this phone" disabled={!canEnroll} onPress={setUp} />
         ) : null}
         {state === "off" ? null : (
           <>
-            <DetailsToggle open={detailsOpen} onPress={() => setDetailsOpen((open) => !open)} />
+            <DetailsRow open={detailsOpen} onPress={() => setDetailsOpen((open) => !open)} />
             {detailsOpen ? (
-              <DeviceApprovalDetails
-                environmentId={environmentId}
-                machine={machine}
-                status={status}
-                thisDevice={thisDevice}
-                canRemove={phoneRecord !== null && signerPresent}
-                turnOff={turnOff}
-                onRemove={() => setRemoving(true)}
-                onTurnOff={startTurnOff}
+              <View className="pb-2">
+                {checks.map((check) => (
+                  <CheckLine key={check.id} check={check} />
+                ))}
+              </View>
+            ) : null}
+            {turnOff !== null ? (
+              <ListActionRow
+                icon="slash.circle"
+                label="Turn off"
+                tone="danger"
+                disabled={turnOff === "uninstall" && !canUninstall}
+                onPress={startTurnOff}
               />
             ) : null}
           </>
         )}
       </SettingsSection>
-      {keySheet !== null && status.user !== undefined ? (
+      {state === "off" || devices.length === 0 ? null : (
+        <SettingsSection title="Phones">
+          {devices.map((device) =>
+            device.keyId === thisDevice?.keyId ? (
+              <ListRowLayout
+                key={device.keyId}
+                icon="iphone"
+                label="This phone"
+                description={formatDeviceUse(device, now)}
+              />
+            ) : status.helperInstalled ? (
+              <ListActionRow
+                key={device.keyId}
+                icon="iphone"
+                label={device.label}
+                description={formatDeviceUse(device, now)}
+                disabled={!canRevoke || busy !== null}
+                loading={busy === device.keyId}
+                onPress={() => revokeOther(device.keyId, device.label)}
+              />
+            ) : (
+              <ListRowLayout
+                key={device.keyId}
+                icon="iphone"
+                label={device.label}
+                description={formatDeviceUse(device, now)}
+              />
+            ),
+          )}
+          {canRemove ? (
+            removal.phase === "removed" ? (
+              <ListRowLayout icon="checkmark" label="Removed" />
+            ) : (
+              <ListActionRow
+                icon="trash"
+                label="Remove this phone"
+                tone="danger"
+                disabled={!canRevoke || busy !== null}
+                loading={removal.phase === "waiting" && !removal.needsPassword}
+                onPress={removal.confirm}
+              />
+            )
+          ) : null}
+        </SettingsSection>
+      )}
+      {(error ?? removal.error) !== null && !removal.needsPassword ? (
+        <Text accessibilityRole="alert" className="px-4 text-sm text-danger-foreground">
+          {error ?? removal.error}
+        </Text>
+      ) : null}
+      {sheet !== null && status.user !== undefined ? (
         <KeySheetView
           environmentId={environmentId}
           machine={machine}
           user={status.user}
           status={status}
           record={phoneRecord}
-          sheet={keySheet}
-          onClose={() => setKeySheet(null)}
+          sheet={sheet}
+          onClose={closeSheet}
           onStarted={() => {
-            setKeySheet(null);
+            closeSheet();
             setDetailsOpen(false);
             setPhase("checking");
           }}
           onRecord={setRecord}
           onFinished={(current, nextPhone, repair) =>
-            afterRepair(
-              current,
-              nextPhone,
-              repair,
-              keySheet.kind === "fix" && keySheet.plan.agentAfter,
-            )
+            afterRepair(current, nextPhone, repair, sheet.kind === "fix" && sheet.plan.agentAfter)
           }
         />
       ) : null}
-      {removing && phoneRecord !== null && thisDevice !== undefined ? (
-        <RemovePhoneSheet
-          environmentId={environmentId}
+      {removal.needsPassword && phoneRecord !== null ? (
+        <RemovePasswordSheet
           machine={machine}
-          record={phoneRecord}
-          onClose={() => setRemoving(false)}
-          onRemoved={() => {
-            setRemoving(false);
-            setDetailsOpen(false);
-            void forgetThisPhone();
-          }}
+          busy={removal.phase === "waiting"}
+          error={removal.error}
+          onClose={removal.dismissPassword}
+          onSubmit={removal.removeWithPassword}
         />
       ) : null}
       {turningOff ? (
@@ -455,192 +588,94 @@ const offReason = (signerPresent: boolean) =>
     ? "Update T3 on this machine to set up device approval from here."
     : ELEVATION_CANT_APPROVE_HERE;
 
-function HeaderRow(props: {
+function MachineRow(props: {
+  readonly icon: AppSymbolName;
   readonly machine: string;
   readonly trail: string;
-  readonly warn: boolean;
+  readonly description?: string;
+  readonly warn?: boolean;
 }) {
   return (
-    <View className="min-h-14 flex-row items-center gap-3 px-4 py-3">
-      <Text textRole="body" className="min-w-0 flex-1 text-foreground" numberOfLines={1}>
-        {props.machine}
-      </Text>
-      <Text
-        textRole="body"
-        className={props.warn ? "text-warning-foreground" : "text-foreground-muted"}
-      >
-        {props.trail}
-      </Text>
-    </View>
+    <ListRowLayout
+      icon={props.icon}
+      label={props.machine}
+      description={props.description}
+      detail={props.trail}
+      accessory={
+        props.warn ? (
+          <SymbolView
+            name="exclamationmark.triangle"
+            size={18}
+            tintColorClassName="accent-warning-foreground"
+            type="monochrome"
+          />
+        ) : undefined
+      }
+    />
   );
 }
 
-function Body(props: {
-  readonly text: string;
-  readonly action?: {
-    readonly label: string;
-    readonly disabled?: boolean;
-    readonly onPress: () => void;
-  };
-}) {
+function DetailsRow(props: { readonly open: boolean; readonly onPress: () => void }) {
+  const rippleStyle = useResolveClassNames("bg-subtle-strong");
   return (
-    <View className="flex-row items-center gap-3 px-4 pb-3">
-      <Text className="min-w-0 flex-1 text-sm text-foreground-muted">{props.text}</Text>
-      {props.action ? (
-        <Button
-          label={props.action.label}
-          tone="primary"
-          disabled={props.action.disabled}
-          onPress={props.action.onPress}
-        />
-      ) : null}
-    </View>
+    <RowPressable
+      accessibilityRole="button"
+      accessibilityLabel="Details"
+      accessibilityState={{ expanded: props.open }}
+      onPress={props.onPress}
+      android_ripple={{ color: rippleStyle.backgroundColor }}
+      unstable_pressDelay={Platform.OS === "android" ? 50 : undefined}
+      className="bg-grouped-card"
+    >
+      <ListRowLayout
+        icon="info.circle"
+        label="Details"
+        accessory={
+          <SymbolView
+            name={props.open ? "chevron.up" : "chevron.down"}
+            size={16}
+            tintColorClassName="accent-chevron"
+            type="monochrome"
+            weight="semibold"
+          />
+        }
+      />
+    </RowPressable>
   );
 }
 
-function DetailsToggle(props: { readonly open: boolean; readonly onPress: () => void }) {
+/** One line per check; a tap shows the whole sentence when its path doesn't fit. */
+function CheckLine(props: { readonly check: ElevationCheck }) {
+  const { check } = props;
+  const [full, setFull] = useState(false);
+  const owner = check.ok ? null : deviceApprovalCheckOwner(check);
+  const text = owner === null ? check.message : `${check.message} · ${owner}`;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ expanded: props.open }}
-      onPress={props.onPress}
-      className="min-h-12 flex-row items-center gap-3 border-t border-border px-4 py-3"
+      accessibilityLabel={check.ok ? text : `Failing: ${text}`}
+      accessibilityState={{ expanded: full }}
+      onPress={() => setFull((value) => !value)}
+      className="flex-row items-start gap-3 px-4 py-1.5"
     >
-      <Text textRole="body" className="flex-1 text-foreground">
-        Details
+      <View className="size-6 items-center justify-center">
+        <SymbolView
+          name={check.ok ? "checkmark" : "xmark"}
+          size={14}
+          tintColorClassName={check.ok ? "accent-success-foreground" : "accent-warning-foreground"}
+          type="monochrome"
+        />
+      </View>
+      <Text
+        textRole="footnote"
+        selectable={full}
+        numberOfLines={full ? undefined : 1}
+        ellipsizeMode="middle"
+        className="min-w-0 flex-1 pt-0.5 text-foreground-muted"
+      >
+        {text}
       </Text>
-      <SymbolView
-        name={props.open ? "chevron.up" : "chevron.down"}
-        size={16}
-        tintColorClassName="accent-icon"
-        type="monochrome"
-      />
     </Pressable>
-  );
-}
-
-const SECURITY_LEVEL_LABELS: Record<ElevationDevice["securityLevel"], string> = {
-  strongbox: "StrongBox",
-  tee: "TEE",
-  software: "Software (development)",
-};
-
-const formatDate = (value: { readonly epochMilliseconds: number }) =>
-  new Date(value.epochMilliseconds).toLocaleDateString();
-
-/** Checks, paths and devices: what an agent or a curious user needs, kept out of the normal path. */
-function DeviceApprovalDetails(props: {
-  readonly environmentId: EnvironmentId;
-  readonly machine: string;
-  readonly status: ElevationStatus;
-  readonly thisDevice: ElevationDevice | undefined;
-  readonly canRemove: boolean;
-  readonly turnOff: "uninstall" | "agent" | null;
-  readonly onRemove: () => void;
-  readonly onTurnOff: () => void;
-}) {
-  const { environmentId, status, thisDevice } = props;
-  const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
-  const canRevoke = useAtomValue(elevation.revoke.permissionAtom(environmentId));
-  const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(environmentId));
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const run = async (label: string, action: () => Promise<AtomCommandResult<unknown, unknown>>) => {
-    setBusy(label);
-    setError(null);
-    const result = await action().finally(() => setBusy(null));
-    if (result._tag === "Success") return true;
-    if (!isAtomCommandInterrupted(result)) {
-      setError(elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong."));
-    }
-    return false;
-  };
-
-  return (
-    <View className="gap-3 px-4 pb-4">
-      {status.checks.map((check) => {
-        const owner = check.ok ? null : deviceApprovalCheckOwner(check);
-        return (
-          <View key={check.id} className="flex-row items-start gap-2">
-            <SymbolView
-              name={check.ok ? "checkmark" : "xmark"}
-              size={14}
-              tintColorClassName={
-                check.ok ? "accent-success-foreground" : "accent-warning-foreground"
-              }
-              type="monochrome"
-            />
-            <View className="min-w-0 flex-1 gap-0.5">
-              <Text selectable className="text-sm text-foreground-muted">
-                {check.message}
-                {owner === null ? "" : ` · ${owner}`}
-              </Text>
-              {check.path === undefined ? null : (
-                <Text selectable className="font-mono text-xs text-foreground-muted">
-                  {check.path}
-                </Text>
-              )}
-            </View>
-          </View>
-        );
-      })}
-      {status.devices.map((device) => (
-        <View key={device.keyId} className="flex-row items-center gap-3">
-          <View className="min-w-0 flex-1 gap-0.5">
-            <Text className="text-sm text-foreground">
-              {device.keyId === thisDevice?.keyId ? `${device.label} (this phone)` : device.label}
-            </Text>
-            <Text className="text-xs text-foreground-muted">
-              {SECURITY_LEVEL_LABELS[device.securityLevel]} · Added {formatDate(device.enrolledAt)}
-              {device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`}
-            </Text>
-          </View>
-          {device.keyId !== thisDevice?.keyId && status.helperInstalled ? (
-            <Button
-              label="Revoke"
-              tone="text"
-              disabled={!canRevoke || busy !== null}
-              loading={busy === `revoke:${device.keyId}`}
-              onPress={() =>
-                Dialog.confirm({
-                  title: `Revoke ${device.label}?`,
-                  message: `It will no longer approve sudo on ${props.machine}.`,
-                  confirmText: "Revoke",
-                  destructive: true,
-                  onConfirm: () =>
-                    void run(`revoke:${device.keyId}`, () =>
-                      revoke({ environmentId, input: { keyId: device.keyId } }),
-                    ),
-                })
-              }
-            />
-          ) : null}
-        </View>
-      ))}
-      {error !== null ? (
-        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-          {error}
-        </Text>
-      ) : null}
-      {/* Removing runs the root-owned helper; without it the helper check above says why. */}
-      {status.helperInstalled && thisDevice !== undefined && props.canRemove ? (
-        <Button
-          label="Remove this phone"
-          tone="danger"
-          disabled={!canRevoke || busy !== null}
-          onPress={props.onRemove}
-        />
-      ) : null}
-      {props.turnOff !== null ? (
-        <Button
-          label="Turn off"
-          tone="text"
-          disabled={(props.turnOff === "uninstall" && !canUninstall) || busy !== null}
-          onPress={props.onTurnOff}
-        />
-      ) : null}
-    </View>
   );
 }
 
@@ -690,35 +725,37 @@ function isOwnRevokeRequest(entry: PendingElevationRequest, user: string, keyId:
 }
 
 /**
- * Remove this phone: the confirm sheet, then the fingerprint, then "Removed". Revoking runs the
- * helper through sudo, which this phone approves with the key it is removing; the request is
- * claimed so it doesn't also show as a banner. Without a phone to approve, the Mac password does.
+ * Remove this phone: the confirm, then the fingerprint, then "Removed". Revoking runs the helper
+ * through sudo, which this phone approves with the key it is removing; the request is claimed so
+ * it doesn't also show as a banner. Without a phone to approve, the Mac password does.
  */
-function RemovePhoneSheet(props: {
+function useRemoveThisPhone(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
-  readonly record: DeviceApprovalKeyRecord;
-  readonly onClose: () => void;
+  readonly record: DeviceApprovalKeyRecord | null;
   readonly onRemoved: () => void;
 }) {
   const { environmentId, machine, record } = props;
   const revoke = useAtomCommand(elevation.revoke, "remove this phone");
   const respond = useAtomCommand(elevation.respond, "answer sudo request");
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
-  const [phase, setPhase] = useState<"confirm" | "waiting" | "removed">("confirm");
+  const [phase, setPhase] = useState<"idle" | "waiting" | "removed">("idle");
   const [needsPassword, setNeedsPassword] = useState(false);
-  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const answered = useRef(new Set<string>());
   const cancelled = useRef(false);
 
-  const own = pending.find(
-    (entry) =>
-      entry.environmentId === environmentId && isOwnRevokeRequest(entry, record.user, record.keyId),
-  );
+  const own =
+    record === null
+      ? undefined
+      : pending.find(
+          (entry) =>
+            entry.environmentId === environmentId &&
+            isOwnRevokeRequest(entry, record.user, record.keyId),
+        );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- signs this phone's own removal request with the native keystore once it arrives
   useEffect(() => {
-    if (phase !== "waiting" || own === undefined) return;
+    if (phase !== "waiting" || own === undefined || record === null) return;
     const { requestId } = own.request;
     if (answered.current.has(requestId) || !Result.isSuccess(own.decoded)) return;
     answered.current.add(requestId);
@@ -727,6 +764,7 @@ function RemovePhoneSheet(props: {
       decoded: own.decoded.success,
       key: record,
       machine,
+      headline: "Remove this phone",
     });
     if (!prepared.ok) return;
     const { signing } = prepared;
@@ -753,12 +791,12 @@ function RemovePhoneSheet(props: {
     })();
   }, [environmentId, machine, own, phase, record, respond]);
 
-  const remove = async () => {
+  const remove = async (password: string | null) => {
+    if (record === null) return;
     setError(null);
     cancelled.current = false;
     setPhase("waiting");
-    const withPassword = needsPassword && password !== "";
-    if (!withPassword) {
+    if (password === null) {
       appAtomRegistry.set(claimedElevationRequestAtom, {
         environmentId,
         matches: (entry) => isOwnRevokeRequest(entry, record.user, record.keyId),
@@ -766,61 +804,75 @@ function RemovePhoneSheet(props: {
     }
     const result = await revoke({
       environmentId,
-      input: { keyId: record.keyId, ...(withPassword ? { password } : {}) },
-    }).finally(() => {
-      setPassword("");
-      appAtomRegistry.set(claimedElevationRequestAtom, null);
-    });
+      input: { keyId: record.keyId, ...(password === null ? {} : { password }) },
+    }).finally(() => appAtomRegistry.set(claimedElevationRequestAtom, null));
     if (result._tag === "Success") {
       approvalHaptic("approved");
+      setNeedsPassword(false);
       setPhase("removed");
-      setTimeout(props.onRemoved, REMOVED_MS);
+      setTimeout(() => {
+        setPhase("idle");
+        props.onRemoved();
+      }, REMOVED_MS);
       return;
     }
-    setPhase("confirm");
-    const reason = failureReason(result);
-    if (reason === "password_required") setNeedsPassword(true);
+    setPhase("idle");
+    if (failureReason(result) === "password_required") setNeedsPassword(true);
     else if (!cancelled.current) setError(failureText(result));
   };
 
+  return {
+    phase,
+    needsPassword,
+    error,
+    confirm: () =>
+      Dialog.confirm({
+        title: "Remove this phone?",
+        message: `Agents' sudo on ${machine} will ask for the password again.`,
+        confirmText: "Remove",
+        destructive: true,
+        onConfirm: () => void remove(null),
+      }),
+    removeWithPassword: (password: string) => void remove(password),
+    dismissPassword: () => {
+      setNeedsPassword(false);
+      setError(null);
+    },
+  };
+}
+
+/** Only when no phone can approve the removal; the confirm already happened. */
+function RemovePasswordSheet(props: {
+  readonly machine: string;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly onClose: () => void;
+  readonly onSubmit: (password: string) => void;
+}) {
+  const [password, setPassword] = useState("");
   return (
-    <Sheet title="Remove this phone?" onClose={props.onClose}>
+    <Sheet title="Remove this phone" onClose={props.onClose}>
       <View className="gap-4 px-5 pt-3 pb-8">
         <Text className="text-sm text-foreground-muted">
-          {needsPassword
-            ? `No phone can approve this, so ${machine} needs your Mac password.`
-            : `Agents' sudo on ${machine} will ask for the password again.`}
+          No phone can approve this, so {props.machine} needs your Mac password.
         </Text>
-        {needsPassword ? (
-          <PasswordField value={password} onChange={setPassword} editable={phase === "confirm"} />
-        ) : null}
-        {error !== null ? (
+        <PasswordField value={password} onChange={setPassword} editable={!props.busy} />
+        {props.error !== null ? (
           <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-            {error}
+            {props.error}
           </Text>
         ) : null}
-        <View className="flex-row gap-2">
-          <View className="flex-1">
-            <Button
-              label="Cancel"
-              tone="secondary"
-              fullWidth
-              disabled={phase !== "confirm"}
-              onPress={props.onClose}
-            />
-          </View>
-          <View className="flex-1">
-            <Button
-              label={phase === "removed" ? "Removed" : "Remove"}
-              icon={phase === "removed" ? "checkmark" : needsPassword ? undefined : FINGERPRINT}
-              tone="primary"
-              fullWidth
-              loading={phase === "waiting"}
-              disabled={phase !== "confirm" || (needsPassword && password === "")}
-              onPress={() => void remove()}
-            />
-          </View>
-        </View>
+        <Button
+          label="Remove"
+          tone="danger"
+          fullWidth
+          loading={props.busy}
+          disabled={props.busy || password === ""}
+          onPress={() => {
+            props.onSubmit(password);
+            setPassword("");
+          }}
+        />
       </View>
     </Sheet>
   );
@@ -853,11 +905,10 @@ function TurnOffSheet(props: {
   };
 
   return (
-    <Sheet title="Turn off device approval?" onClose={props.onClose}>
+    <Sheet title="Turn off device approval" onClose={props.onClose}>
       <View className="gap-4 px-5 pt-3 pb-8">
         <Text className="text-sm text-foreground-muted">
-          Agents' sudo on {props.machine} will ask for the password again, and every phone stops
-          approving there.
+          {props.machine} needs your Mac password to turn it off.
         </Text>
         <PasswordField value={password} onChange={setPassword} editable={!busy} />
         {error !== null ? (

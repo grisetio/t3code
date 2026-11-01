@@ -9,7 +9,7 @@ export interface ElevationApprovalTarget {
   readonly requestId: ElevationRequestId;
 }
 
-/** The request the approval sheet shows. The feed card, banner and push all open it here. */
+/** A request to open: the banner, a push and the lock screen open it here. */
 export const elevationApprovalTargetAtom = Atom.make<ElevationApprovalTarget | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:elevation-approval-target"),
@@ -24,8 +24,8 @@ export function closeElevationApproval(): void {
 }
 
 /**
- * Relay pushes only carry the thread link. A tap remembers the thread so the
- * sheet opens once that thread's pending request arrives over the socket.
+ * Relay pushes only carry the thread link. A tap remembers the thread so its
+ * request opens once it arrives over the socket.
  */
 export interface ElevationNotificationIntent {
   readonly environmentId: string;
@@ -105,7 +105,7 @@ export function wasDeniedHere(requestId: ElevationRequestId): boolean {
 
 /**
  * A request this phone raised itself and answers in its own flow, such as the sudo behind
- * "Remove this phone". The banner, sheet and push skip it so it never shows twice.
+ * "Remove this phone". The banner and push skip it so it never shows twice.
  */
 export interface ClaimedElevationRequest {
   readonly environmentId: EnvironmentId;

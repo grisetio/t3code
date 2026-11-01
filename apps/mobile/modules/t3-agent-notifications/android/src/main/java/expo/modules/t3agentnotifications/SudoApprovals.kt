@@ -103,9 +103,16 @@ object SudoApprovals {
 
   /**
    * Posts the push for [alertId]. The push carries no request content; the card is read from the
-   * server once opened. Returns false when this phone can't approve for that machine.
+   * server once opened. Returns false when this phone can't approve for that machine. A [silent]
+   * push lands in the shade without sound or a heads-up: the app on screen already shows the
+   * request, but its entry is how it's answered from the lock screen once the phone locks.
    */
-  fun post(context: Context, data: Map<String, String>, alertId: String): Boolean {
+  fun post(
+    context: Context,
+    data: Map<String, String>,
+    alertId: String,
+    silent: Boolean = false
+  ): Boolean {
     val path = data["alert_path"]
     if (!canApprove(path, keyAliases())) return false
     val manager = context.getSystemService(NotificationManager::class.java)
@@ -118,7 +125,8 @@ object SudoApprovals {
     val builder = NotificationCompat.Builder(context, CHANNEL)
       .setSmallIcon(if (icon != 0) icon else android.R.drawable.ic_dialog_info)
       .setPriority(NotificationCompat.PRIORITY_HIGH)
-      .setDefaults(Notification.DEFAULT_ALL)
+      .setDefaults(if (silent) 0 else Notification.DEFAULT_ALL)
+      .setSilent(silent)
       .setContentTitle(title)
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
       .setPublicVersion(public)

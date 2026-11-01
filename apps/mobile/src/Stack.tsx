@@ -551,7 +551,7 @@ function RootStackLayout(props: {
                 {props.children}
                 <HardwareKeyboardCommandOverlay />
                 <ElevationPendingBanner pathname={workspaceLocation.pathname} />
-                <ElevationApprovalHost />
+                <ElevationApprovalHost pathname={workspaceLocation.pathname} />
                 <ElevationLockScreen />
               </AdaptiveWorkspaceLayout>
             </AndroidWorkspaceTabsProvider>

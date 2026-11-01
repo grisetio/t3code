@@ -189,4 +189,11 @@ class DeviceApprovalCodecTest {
       assertEquals(ApprovalError.UNAVAILABLE, DeviceApprovalCodec.errorForCanAuthenticate(status))
     }
   }
+
+  @Test
+  fun negativeButtonSaysWhatBackingOutDoes() {
+    assertEquals("Deny", DeviceApprovalCodec.negativeLabel("Deny", "Cancel"))
+    assertEquals("Cancel", DeviceApprovalCodec.negativeLabel(null, "Cancel"))
+    assertEquals("Cancel", DeviceApprovalCodec.negativeLabel(" ", "Cancel"))
+  }
 }

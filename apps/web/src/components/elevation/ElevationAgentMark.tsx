@@ -30,11 +30,10 @@ export function useElevationAgent(environmentId: EnvironmentId, threadId: Thread
   return { name: agent.name, entry };
 }
 
-export function ElevationAgentIcon(props: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId | null;
-}) {
-  const entry = useElevationAgent(props.environmentId, props.threadId)?.entry;
+export type ElevationAgentView = NonNullable<ReturnType<typeof useElevationAgent>>;
+
+function AgentIcon(props: { readonly entry: ElevationAgentView["entry"] }) {
+  const { entry } = props;
   return entry ? (
     <ProviderInstanceIcon
       driverKind={entry.driverKind}
@@ -47,26 +46,18 @@ export function ElevationAgentIcon(props: {
   ) : null;
 }
 
-/** Icon and name; nothing when the thread or its provider isn't known here. */
-export function ElevationAgentMark(props: {
+export function ElevationAgentIcon(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
 }) {
-  const agent = useElevationAgent(props.environmentId, props.threadId);
-  if (agent === null) return null;
+  return <AgentIcon entry={useElevationAgent(props.environmentId, props.threadId)?.entry} />;
+}
+
+export function ElevationAgentMark(props: { readonly agent: ElevationAgentView }) {
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
-      {agent.entry ? (
-        <ProviderInstanceIcon
-          driverKind={agent.entry.driverKind}
-          displayName={agent.entry.displayName}
-          accentColor={agent.entry.accentColor}
-          acpRegistryAgentId={agent.entry.acpRegistryAgentId}
-          acpRegistryIconUrl={agent.entry.acpRegistryIconUrl}
-          size="compact"
-        />
-      ) : null}
-      <span className="truncate">{agent.name}</span>
+      <AgentIcon entry={props.agent.entry} />
+      <span className="truncate">{props.agent.name}</span>
     </span>
   );
 }

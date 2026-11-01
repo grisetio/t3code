@@ -36,7 +36,16 @@ export function SubagentRow(props: {
   /** The task runs in a linked environment this app is connected to. */
   readonly canOpenRemote?: boolean;
 }) {
-  const presentation = resolveSubagentRowPresentation(props.subagent, props.canOpenRemote);
+  const child = useThreadShell(
+    props.subagent.childThreadId === null
+      ? null
+      : scopeThreadRef(props.environmentId, props.subagent.childThreadId),
+  );
+  const presentation = resolveSubagentRowPresentation(
+    props.subagent,
+    props.canOpenRemote,
+    child?.hasPendingApprovals === true || child?.pendingSubagentRequest === "approval",
+  );
   const detail = subagentCardDetail(presentation.detail);
   return (
     <View className="flex-row gap-3">

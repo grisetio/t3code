@@ -13,6 +13,14 @@ pub const PREFIX: &str = "t3: ";
 pub const EXPIRED: &str = "t3: the user didn't approve in time. Ask them in the chat and wait for their answer; don't retry on your own.";
 pub const DENIED: &str =
     "t3: the user denied this sudo. Don't retry it without asking them in the chat first.";
+/// T3 cancelled the request (the turn stopped, or T3 shut down) or went
+/// away before the user answered.
+pub const WITHDRAWN: &str = "t3: T3 withdrew this request before the user answered. Ask them in the chat before trying again.";
+/// Ends every line of a failed sudo. sudo has no quiet failure code: sudo.ws
+/// follows with "PAM authentication error: …" and "a password is required",
+/// sudo-rs with "PAM error: …".
+pub const SUDO_LINES_FOLLOW: &str =
+    " sudo's own error lines below are expected; don't retry with a password.";
 
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)

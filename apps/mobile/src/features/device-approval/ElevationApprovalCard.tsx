@@ -2,14 +2,17 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_CANT_APPROVE_HERE,
   elevationAgent,
+  elevationDecodeFailureMessage,
   elevationFailureMessage,
   elevationHeadline,
+  elevationRequestFacts,
   type DecodedElevationPayload,
   type ElevationAgent,
+  type ElevationRequestFact,
+  type ElevationWarningView,
 } from "@t3tools/client-runtime/elevation";
 import {
   elevationCommandDisplay,
-  elevationCommandMoreLabel,
   type ElevationCommandDisplay,
 } from "@t3tools/client-runtime/elevation-command";
 import {
@@ -17,7 +20,6 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  escapeElevationDisplayText,
   type ElevationPayloadDecodeFailure,
   type ElevationRequestId,
   type ElevationRespondInput,
@@ -29,19 +31,21 @@ import { useNavigation } from "@react-navigation/native";
 import * as Result from "effect/Result";
 import { useRef, useState } from "react";
 import { Pressable, View } from "react-native";
+import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { useThreadShell } from "../../state/entities";
+import { useProject, useThreadShell } from "../../state/entities";
 import { environmentPresentations } from "../../state/presentation";
 import { elevation } from "../../state/elevation";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { REVIEW_WORKING_TREE_SECTION_ID } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
+import { THREAD_DISCLOSURE_TRANSITION_MS } from "../threads/thread-work-log";
 import { approvalHaptic } from "./approvalHaptics";
 import { deviceApprovalKeys, useThisPhoneKeyId } from "./deviceApprovalKeys";
 import {
@@ -101,19 +105,25 @@ function useElevationRespond(environmentId: EnvironmentId) {
   return { canRespond, pending, error, run };
 }
 
-/** Who asks and where: the agent from the thread's provider, the machine as named on this phone. */
+/**
+ * Who asks and where: the agent from the thread's provider, the machine as named on this phone,
+ * and the checkout a command normally runs in.
+ */
 export function useElevationRequestContext(
   environmentId: EnvironmentId,
   threadId: ThreadId | null,
   fallbackHost: string | null,
 ) {
   const thread = useThreadShell(threadId === null ? null : { environmentId, threadId });
+  const project = useProject(
+    thread === null ? null : { environmentId, projectId: thread.projectId },
+  );
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   return {
     agent: elevationAgent(thread, configs.get(environmentId)?.providers ?? []),
     machine: presentations.get(environmentId)?.entry.target.label ?? fallbackHost ?? "this machine",
-    threadTitle: thread ? escapeElevationDisplayText(thread.title) : null,
+    checkout: thread?.worktreePath ?? project?.workspaceRoot ?? null,
   };
 }
 
@@ -128,68 +138,101 @@ function ElevationAgentMark(props: { readonly agent: ElevationAgent; readonly si
   );
 }
 
-/** The agent's mark, then the machine; the thread title under it outside the open thread. */
-function ElevationRequestMeta(props: {
-  readonly context: ElevationRequestContext;
-  readonly showThread: boolean;
-}) {
-  const { agent, machine, threadTitle } = props.context;
+/** "{mark} Claude · Killian's MacBook Pro", the same second line on every surface. */
+function ElevationRequestMeta(props: { readonly context: ElevationRequestContext }) {
+  const { agent, machine } = props.context;
   return (
-    <View className="gap-0.5">
-      <View className="flex-row items-center gap-1.5">
-        {agent ? (
-          <>
-            <ElevationAgentMark agent={agent} size={14} />
-            <Text className="text-sm text-foreground-muted">·</Text>
-          </>
-        ) : null}
-        <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
-          {machine}
-        </Text>
-      </View>
-      {props.showThread && threadTitle ? (
-        <Text numberOfLines={1} className="text-sm text-foreground-muted">
-          {threadTitle}
-        </Text>
+    <View className="flex-row items-center gap-1.5">
+      {agent ? (
+        <>
+          <ElevationAgentMark agent={agent} size={14} />
+          <Text className="text-sm text-foreground-muted">·</Text>
+        </>
       ) : null}
+      <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
+        {machine}
+      </Text>
     </View>
   );
 }
 
-/** The command in a quiet box; a long one collapses to its first line and the programs run as admin. */
+const DISCLOSURE_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
+
+/** Runs as and Directory where they aren't the default, then the module's warnings. */
+export function ElevationRequestFacts(props: {
+  readonly facts: readonly ElevationRequestFact[];
+  readonly warnings: readonly ElevationWarningView[];
+}) {
+  if (props.facts.length === 0 && props.warnings.length === 0) return null;
+  return (
+    <View className="gap-1">
+      {props.facts.map((fact) => (
+        <View key={fact.label} className="flex-row gap-3">
+          <Text className="w-20 text-sm text-foreground-muted">{fact.label}</Text>
+          <Text
+            selectable
+            className={`min-w-0 flex-1 text-sm text-foreground-muted ${fact.mono ? "font-mono" : ""}`}
+          >
+            {fact.value}
+          </Text>
+        </View>
+      ))}
+      {props.warnings.map((warning) => (
+        <View key={`${warning.code}:${warning.message}`} className="flex-row items-start gap-2">
+          <SymbolView
+            name="exclamationmark.triangle"
+            size={13}
+            tintColorClassName="accent-icon"
+            type="monochrome"
+          />
+          <Text className="min-w-0 flex-1 text-sm text-foreground-muted">{warning.message}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** The short command on one quiet line; tap for the whole command and where it runs. */
 function ElevationCommandLine(props: {
   readonly display: ElevationCommandDisplay;
-  /** No reason given, so the command is the headline. */
-  readonly lead: boolean;
+  readonly facts: readonly ElevationRequestFact[];
+  readonly warnings: readonly ElevationWarningView[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const { display } = props;
-  const more = elevationCommandMoreLabel(display);
-  const textClass = props.lead
-    ? "font-mono text-sm text-foreground"
-    : "font-mono text-xs text-foreground-secondary";
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Command"
-      accessibilityState={{ expanded }}
-      accessibilityHint={expanded ? "Collapses the command" : "Shows the whole command"}
-      className="gap-1 rounded-xl border border-border bg-subtle px-3 py-2"
-      onPress={() => setExpanded((current) => !current)}
-    >
-      {expanded ? (
-        <Text selectable className={textClass}>
-          {display.lines.join("\n")}
+    <Animated.View layout={DISCLOSURE_LAYOUT}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Command, ${display.short}`}
+        accessibilityState={{ expanded }}
+        accessibilityHint={expanded ? "Hides the full command" : "Shows the full command"}
+        className="min-h-9 flex-row items-center gap-1.5 self-start"
+        onPress={() => setExpanded((current) => !current)}
+      >
+        <Text numberOfLines={1} className="min-w-0 shrink font-mono text-sm text-foreground-muted">
+          {display.short}
         </Text>
-      ) : (
-        <>
-          <Text numberOfLines={2} className={textClass}>
-            {display.collapsed}
+        <SymbolView
+          name={expanded ? "chevron.up" : "chevron.down"}
+          size={11}
+          tintColorClassName="accent-icon-subtle"
+          type="monochrome"
+        />
+      </Pressable>
+      {expanded ? (
+        <Animated.View
+          entering={FadeIn.duration(140)}
+          exiting={FadeOut.duration(120)}
+          className="gap-2 pb-1"
+        >
+          <Text selectable className="font-mono text-sm text-foreground-muted">
+            {display.lines.join("\n")}
           </Text>
-          {more ? <Text className="text-xs text-foreground-muted">{more}</Text> : null}
-        </>
-      )}
-    </Pressable>
+          <ElevationRequestFacts facts={props.facts} warnings={props.warnings} />
+        </Animated.View>
+      ) : null}
+    </Animated.View>
   );
 }
 
@@ -247,15 +290,13 @@ interface ElevationApprovalRequest {
  */
 export function ElevationApprovalCard(props: {
   readonly request: ElevationApprovalRequest;
-  /** Inside the open thread, whose title is already on screen. */
-  readonly inline: boolean;
   readonly hidden?: { readonly onUnlock: () => void };
   /** Called once the answer reached the server. */
   readonly onAnswered?: (decision: "approve" | "deny") => void;
   /**
    * True once the fingerprint signed, false if the approval then failed to send. The request
    * can leave the pending list before the answer returns, so the parent keeps the card up
-   * from here to show "✓ Approved".
+   * from here while it shows "✓ Approved".
    */
   readonly onApproving?: (active: boolean) => void;
   readonly openChanges?: (open: () => void) => void;
@@ -272,6 +313,11 @@ export function ElevationApprovalCard(props: {
   );
   const signerPresent = deviceApprovalSigner.isPresent();
   const enroll = decoded?.view.enroll ?? null;
+  const headline = elevationHeadline({
+    explanation: request.explanation,
+    decoded: request.decoded,
+    agentName: context.agent?.name ?? null,
+  });
 
   const deny = async () => {
     rememberDeniedHere(request.requestId);
@@ -292,6 +338,7 @@ export function ElevationApprovalCard(props: {
         decoded,
         key: await deviceApprovalKeys.read(request.environmentId),
         machine: context.machine,
+        headline,
       });
       if (!prepared.ok) {
         throw new BlockedApproval(
@@ -329,14 +376,24 @@ export function ElevationApprovalCard(props: {
     }
   };
 
-  const actions = (
+  const actions = approved ? (
+    // Replaces the buttons at their height, so nothing moves until the card settles.
+    <View
+      accessibilityRole="text"
+      accessibilityLiveRegion="polite"
+      className="min-h-12 flex-row items-center justify-center gap-2"
+    >
+      <SymbolView name="checkmark" size={16} tintColorClassName="accent-foreground" />
+      <Text className="font-t3-medium text-base text-foreground">Approved</Text>
+    </View>
+  ) : (
     <View className="flex-row gap-2">
       <View className="flex-1">
         <Button
           label="Deny"
           tone="secondary"
           fullWidth
-          disabled={!answer.canRespond || answer.pending || approved}
+          disabled={!answer.canRespond || answer.pending}
           onPress={() => void deny()}
         />
       </View>
@@ -350,14 +407,12 @@ export function ElevationApprovalCard(props: {
           />
         ) : (
           <Button
-            label={approved ? "Approved" : "Approve"}
-            icon={approved ? "checkmark" : { ios: "touchid", android: "fingerprint" }}
+            label="Approve"
+            icon={{ ios: "touchid", android: "fingerprint" }}
             tone="primary"
             fullWidth
-            disabled={
-              !answer.canRespond || !signerPresent || decoded === null || answer.pending || approved
-            }
-            loading={answer.pending && !approved}
+            disabled={!answer.canRespond || !signerPresent || decoded === null || answer.pending}
+            loading={answer.pending}
             onPress={() => void approve()}
           />
         )}
@@ -377,8 +432,8 @@ export function ElevationApprovalCard(props: {
       <View className="gap-4">
         <View className="gap-1">
           {context.agent ? <ElevationAgentMark agent={context.agent} size={14} /> : null}
-          <Text numberOfLines={2} className="font-t3-bold text-lg text-foreground">
-            {context.machine}
+          <Text numberOfLines={2} className="font-t3-semibold text-lg text-foreground">
+            Admin request on {context.machine}
           </Text>
         </View>
         {errorLine}
@@ -387,40 +442,33 @@ export function ElevationApprovalCard(props: {
     );
   }
 
-  const headline = elevationHeadline({
-    explanation: request.explanation,
-    decoded: request.decoded,
-  });
-  const command = decoded === null ? null : elevationCommandDisplay(decoded.payload);
-
   return (
     <View className="gap-3">
-      {headline.command && command ? (
-        <ElevationCommandLine display={command} lead />
-      ) : (
-        <Text selectable className="font-t3-bold text-lg text-foreground">
-          {headline.text}
-        </Text>
-      )}
-      <ElevationRequestMeta context={context} showThread={!props.inline} />
+      <ElevationHeadlineText text={headline} />
+      <ElevationRequestMeta context={context} />
       {decoded === null ? (
         <Text className="text-sm text-foreground-muted">
+          {Result.isFailure(request.decoded)
+            ? `${elevationDecodeFailureMessage(request.decoded.failure)} `
+            : ""}
           Deny it, or approve it on another device.
         </Text>
       ) : enroll ? (
         <EnrollComparison publicKey={enroll.publicKey} />
       ) : (
-        <>
-          {headline.command || command === null ? null : (
-            <ElevationCommandLine display={command} lead={false} />
-          )}
+        <View>
+          <ElevationCommandLine
+            display={elevationCommandDisplay(decoded.payload)}
+            facts={elevationRequestFacts(decoded.view, { cwd: context.checkout })}
+            warnings={decoded.view.warnings}
+          />
           <ElevationChangesPointer
             environmentId={request.environmentId}
             threadId={request.threadId}
             changes={request.changes}
             openChanges={props.openChanges}
           />
-        </>
+        </View>
       )}
       {errorLine}
       {signerPresent ? null : (
@@ -430,6 +478,21 @@ export function ElevationApprovalCard(props: {
       )}
       {actions}
     </View>
+  );
+}
+
+/** At most three lines, at the weight of a thread's headings; tap to read the rest. */
+function ElevationHeadlineText(props: { readonly text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Text
+      selectable={open}
+      numberOfLines={open ? undefined : 3}
+      onPress={() => setOpen((current) => !current)}
+      className="font-t3-semibold text-lg text-foreground"
+    >
+      {props.text}
+    </Text>
   );
 }
 

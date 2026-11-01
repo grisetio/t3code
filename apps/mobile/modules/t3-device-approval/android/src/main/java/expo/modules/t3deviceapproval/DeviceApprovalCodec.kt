@@ -56,6 +56,10 @@ object DeviceApprovalCodec {
     return signature.sign()
   }
 
+  /** The prompt's negative button: the caller's label, else the system's Cancel. */
+  fun negativeLabel(requested: String?, cancel: String): String =
+    requested?.takeIf { it.isNotBlank() } ?: cancel
+
   fun errorForPrompt(errorCode: Int): ApprovalError = when (errorCode) {
     BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED,
     BiometricPrompt.BIOMETRIC_ERROR_CANCELED,

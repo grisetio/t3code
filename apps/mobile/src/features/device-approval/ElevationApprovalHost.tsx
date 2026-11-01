@@ -1,13 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
-import { useNavigation } from "@react-navigation/native";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useRef, useState } from "react";
-import { AppState, Platform, ScrollView } from "react-native";
+import { AppState, Modal, Platform, ScrollView, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import * as Dialog from "../../components/ui/Dialog";
-import { Sheet } from "../../components/ui/Sheet";
+import { SheetHeader } from "../../components/ui/SheetHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
 import { environmentPresentations } from "../../state/presentation";
@@ -18,7 +19,10 @@ import {
   setAndroidSudoPendingThreads,
   subscribeAndroidSudoApprovalOpens,
 } from "../agent-awareness/androidNotifications";
-import { encodeThreadDeepLink } from "../agent-awareness/notificationPayload";
+import {
+  encodeThreadDeepLink,
+  threadDeepLinkOnScreen,
+} from "../agent-awareness/notificationPayload";
 import { approvalHaptic } from "./approvalHaptics";
 import { ElevationApprovalCard } from "./ElevationApprovalCard";
 import {
@@ -187,10 +191,10 @@ function useLockScreenReenrollPrompt(): void {
 }
 
 /**
- * Shows the approval sheet for whichever request was opened, and opens the
- * request a tapped push was about once it reaches this phone.
+ * Opens whichever request was opened from the banner, a push or the lock screen: its thread,
+ * which ends at the request's card, or a full-screen card for a request no thread owns.
  */
-export function ElevationApprovalHost() {
+export function ElevationApprovalHost(props: { readonly pathname: string }) {
   const allPending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
   const claim = useAtomValue(claimedElevationRequestAtom);
   const pending =
@@ -199,11 +203,13 @@ export function ElevationApprovalHost() {
       : allPending.filter((entry) => !isClaimedElevationRequest(claim, entry));
   const target = useAtomValue(elevationApprovalTargetAtom);
   const intent = useAtomValue(elevationNotificationIntentAtom);
+  const lockScreen = useAtomValue(elevationLockScreenAtom);
+  const navigation = useNavigation();
   useArrivalHaptic(pending);
   useSudoApprovalPushes(pending);
   useLockScreenReenrollPrompt();
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes a tapped push once its request reaches this phone and opens its sheet
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes a tapped push once its request reaches this phone and opens it
   useEffect(() => {
     if (intent === null) return;
     const match = pendingRequestForNotificationIntent(intent, pending, Date.now());
@@ -221,7 +227,7 @@ export function ElevationApprovalHost() {
   // stays a moment after it does.
   const [held, setHeld] = useState<PendingElevationRequest | null>(null);
   const [settled, setSettled] = useState(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the sheet on a timer after the approval settles
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the held request on a timer after the approval settles
   useEffect(() => {
     if (!settled) return;
     const timer = setTimeout(() => {
@@ -241,44 +247,78 @@ export function ElevationApprovalHost() {
             candidate.environmentId === target.environmentId &&
             candidate.request.requestId === target.requestId,
         ));
-  // Answered elsewhere, or expired: the request left the pending list.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the approval sheet when its request leaves the pending list
+  const threadId = entry?.request.threadId ?? null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves an opened request to its thread's card in the navigator, or drops it once it leaves the pending list
   useEffect(() => {
+    // Answered elsewhere, or expired: the request left the pending list.
     if (target !== null && entry === undefined) closeElevationApproval();
-  }, [target, entry]);
+    if (entry === undefined || threadId === null || held !== null) return;
+    closeElevationApproval();
+    const link = encodeThreadDeepLink({ environmentId: entry.environmentId, threadId });
+    // Pushed, so Back returns to wherever the request was opened from.
+    if (link !== threadDeepLinkOnScreen(props.pathname)) {
+      navigation.dispatch(
+        StackActions.push("Thread", {
+          environmentId: String(entry.environmentId),
+          threadId: String(threadId),
+        }),
+      );
+    }
+  }, [target, entry, threadId, held, navigation, props.pathname]);
 
-  if (entry === undefined) return null;
-  const { environmentId, request, decoded } = entry;
+  // A Modal is its own window and would draw above the lock-screen cover, over the keyguard.
+  if (entry === undefined || threadId !== null || lockScreen !== null) return null;
   return (
-    <Sheet onClose={closeElevationApproval}>
-      <ScrollView
-        nestedScrollEnabled
-        className="flex-1"
-        contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
-        contentContainerClassName="px-5 pt-5 pb-8"
-      >
-        <ElevationApprovalCard
-          key={request.requestId}
-          inline={false}
-          request={{
-            environmentId,
-            requestId: request.requestId,
-            threadId: request.threadId,
-            decoded,
-            explanation: request.explanation,
-            changes: request.changes,
-          }}
-          onApproving={(active) => setHeld(active ? entry : null)}
-          onAnswered={(decision) => {
-            if (decision === "approve") setSettled(true);
-            else closeElevationApproval();
-          }}
-          openChanges={(open) => {
-            closeElevationApproval();
-            open();
-          }}
-        />
-      </ScrollView>
-    </Sheet>
+    <ThreadlessElevationRequest
+      entry={entry}
+      onApproving={(active) => setHeld(active ? entry : null)}
+      onApproved={() => setSettled(true)}
+    />
+  );
+}
+
+/** A request no thread owns, such as one the server raised, on a full screen of its own. */
+function ThreadlessElevationRequest(props: {
+  readonly entry: PendingElevationRequest;
+  readonly onApproving: (active: boolean) => void;
+  readonly onApproved: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const { environmentId, request, decoded } = props.entry;
+  return (
+    <Modal
+      visible
+      animationType="slide"
+      presentationStyle="fullScreen"
+      statusBarTranslucent
+      onRequestClose={closeElevationApproval}
+    >
+      <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>
+        <SheetHeader presentation="inline" title="Admin request" onClose={closeElevationApproval} />
+        <ScrollView
+          className="flex-1"
+          contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+          contentContainerClassName="px-5 pt-3"
+          contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+        >
+          <ElevationApprovalCard
+            key={request.requestId}
+            request={{
+              environmentId,
+              requestId: request.requestId,
+              threadId: null,
+              decoded,
+              explanation: request.explanation,
+              changes: request.changes,
+            }}
+            onApproving={props.onApproving}
+            onAnswered={(decision) => {
+              if (decision === "approve") props.onApproved();
+              else closeElevationApproval();
+            }}
+          />
+        </ScrollView>
+      </View>
+    </Modal>
   );
 }

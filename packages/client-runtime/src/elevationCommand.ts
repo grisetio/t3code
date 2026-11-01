@@ -348,8 +348,10 @@ function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1) || path;
 }
 
-/** "psql as postgres": the program a sudo runs and its target when that isn't root. */
-function sudoProgram(args: readonly (string | null)[]): string | null {
+/** Where a sudo's program sits in its args, and its target when that isn't root. */
+function sudoTarget(
+  args: readonly (string | null)[],
+): { readonly index: number; readonly user: string | null } | null {
   let user: string | null = null;
   let index = 0;
   for (; index < args.length; index++) {
@@ -383,21 +385,35 @@ function sudoProgram(args: readonly (string | null)[]): string | null {
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(args[index] ?? "")) index++;
   const program = args[index];
   if (program === null || program === undefined) return null;
-  const name = basename(program);
-  return user === null || user === "root" || user === "#0" ? name : `${name} as ${user}`;
+  return { index, user: user === "root" || user === "#0" ? null : user };
 }
 
-/** Characters of a collapsed first line that two rows show on the narrowest phone. */
-const COLLAPSED_VISIBLE_CHARS = 40;
+/** "psql as postgres": the program a sudo runs and its target when that isn't root. */
+function sudoProgram(args: readonly (string | null)[]): string | null {
+  const target = sudoTarget(args);
+  if (target === null) return null;
+  const name = basename(args[target.index]!);
+  return target.user === null ? name : `${name} as ${target.user}`;
+}
+
+/** "ls /var/db": a sudo's program by name and its arguments, or null when a word may expand. */
+function sudoShort(args: readonly (string | null)[]): string | null {
+  const target = sudoTarget(args);
+  if (target === null) return null;
+  const rest = args.slice(target.index + 1);
+  if (rest.some((arg) => arg === null)) return null;
+  return [basename(args[target.index]!), ...(rest as string[])].join(" ");
+}
 
 /** What the card's command line shows, all text escaped for display. */
 export interface ElevationCommandDisplay {
   /** Every line of the command as written. */
   readonly lines: readonly string[];
-  /** The first line with runs of blanks collapsed, for the two-row form. */
-  readonly collapsed: string;
-  /** Whether the two-row form leaves text out. */
-  readonly hidden: boolean;
+  /**
+   * The quiet one-line form: the program by name and its arguments ("ls /var/db"), or the
+   * programs when the command runs several sudos ("id, ls"). Never sudo itself.
+   */
+  readonly short: string;
   /** Programs run as admin, with their target when it isn't root. */
   readonly programs: readonly string[];
 }
@@ -422,8 +438,10 @@ export function elevationCommandDisplay(
   const argv = payload.command.argv;
   const sessionCommand = session?.command;
   const found = sessionCommand === undefined ? null : elevationSudoCalls(sessionCommand);
+  const argvShort = [argv[0] === undefined ? "" : basename(argv[0]), ...argv.slice(1)].join(" ");
   let raw: readonly string[];
   let programs: string[];
+  let short: string;
   if (sessionCommand !== undefined && found !== null) {
     raw = elevationAgentCommand(sessionCommand)
       .trim()
@@ -434,29 +452,22 @@ export function elevationCommandDisplay(
       const program = sudoProgram(call.args);
       if (program !== null && !programs.includes(program)) programs.push(program);
     }
+    const only = found.length === 1 ? found[0] : undefined;
+    short =
+      (only === undefined ? null : sudoShort(only.args)) ??
+      (programs.length > 0 ? programs.join(", ") : argvShort);
   } else {
     raw = [argv.join(" ")];
     programs = argv[0] === undefined ? [] : [basename(argv[0])];
+    short = argvShort;
   }
-  const first = raw[0] ?? "";
-  const collapsedRaw = first.replace(/[ \t]+/g, " ");
   return {
     lines: raw.map(escapeLine),
-    collapsed: escapeLine(collapsedRaw),
-    hidden:
-      raw.length > 1 ||
-      collapsedRaw !== first ||
-      Array.from(collapsedRaw).length > COLLAPSED_VISIBLE_CHARS,
+    short: escapeElevationDisplayText(short)
+      .replace(/[ \t]+/g, " ")
+      .trim(),
     programs: programs.map(escapeElevationDisplayText),
   };
-}
-
-/** "+2 more lines · darwin-rebuild, launchctl", "More · apt", or null when nothing is hidden. */
-export function elevationCommandMoreLabel(display: ElevationCommandDisplay): string | null {
-  if (!display.hidden) return null;
-  const more = display.lines.length - 1;
-  const lead = more > 0 ? `+${more} more line${more === 1 ? "" : "s"}` : "More";
-  return display.programs.length > 0 ? `${lead} · ${display.programs.join(", ")}` : lead;
 }
 
 /** The whole command on one line, continuations dropped, for a row that shows one line. */

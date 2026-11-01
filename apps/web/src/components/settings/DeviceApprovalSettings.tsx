@@ -280,7 +280,7 @@ function DeviceRow(props: {
       control={
         confirming || !props.revocable ? null : (
           <Button
-            variant="outline"
+            variant="destructive-outline"
             size="xs"
             disabled={!canRevoke}
             onClick={() => setConfirming(true)}

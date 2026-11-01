@@ -29,7 +29,8 @@ import {
 /**
  * Pending sudo requests from every connected environment, so a request is
  * seen even when another environment or screen is in front. Hidden while its
- * own thread, which shows the request inline, is on screen.
+ * own thread, which shows the request inline, is on screen. Once dismissed, the
+ * thread list's Approval tag is what's left of it.
  */
 export function ElevationPendingBanner(props: { readonly pathname: string }) {
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
@@ -50,7 +51,7 @@ export function ElevationPendingBanner(props: { readonly pathname: string }) {
         }) !== threadOnScreen),
   );
   const first = visible[0];
-  // One entry per request: not while its sheet or the lock screen shows it.
+  // One entry per request: not while its own screen or the lock screen shows it.
   if (target !== null || lockScreen !== null || first === undefined) return null;
   return (
     <View
@@ -80,14 +81,22 @@ function BannerContent(props: {
     request.threadId,
     view?.view.host ?? null,
   );
-  const headline = elevationHeadline({ explanation: request.explanation, decoded });
-  const where = [context.threadTitle, context.machine].filter(Boolean).join(" · ");
+  const headline = elevationHeadline({
+    explanation: request.explanation,
+    decoded,
+    agentName: context.agent?.name ?? null,
+  });
+  const who = context.agent ? `${context.agent.name} · ${context.machine}` : context.machine;
+  const more = props.more > 0 ? `+${props.more}` : null;
   const open = () => openElevationApproval({ environmentId, requestId: request.requestId });
   return (
     <GlassSurface className="p-3" style={{ borderRadius: MOBILE_SHAPE.toast }}>
       <View className="flex-row items-center gap-3">
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel={[headline, who, more && `${props.more} more waiting`]
+            .filter(Boolean)
+            .join(", ")}
           accessibilityHint="Opens the request"
           className="min-w-0 flex-1 flex-row items-center gap-3"
           onPress={open}
@@ -100,19 +109,19 @@ function BannerContent(props: {
             />
           ) : null}
           <View className="min-w-0 flex-1">
-            <Text
-              numberOfLines={2}
-              className={
-                headline.command
-                  ? "font-mono text-sm text-foreground"
-                  : "font-t3-semibold text-sm text-foreground"
-              }
-            >
-              {headline.text}
+            <Text numberOfLines={2} className="font-t3-semibold text-sm text-foreground">
+              {headline}
             </Text>
-            <Text numberOfLines={1} className="text-xs text-foreground-muted">
-              {props.more > 0 ? `${where} · ${props.more} more` : where}
-            </Text>
+            <View className="flex-row items-center gap-1.5">
+              <Text numberOfLines={1} className="min-w-0 shrink text-xs text-foreground-muted">
+                {who}
+              </Text>
+              {more ? (
+                <Text className="shrink-0 font-t3-medium text-xs tabular-nums text-foreground-muted">
+                  {more}
+                </Text>
+              ) : null}
+            </View>
           </View>
         </Pressable>
         <IconButton accessibilityLabel="Dismiss" icon="xmark" onPress={props.onDismiss} />

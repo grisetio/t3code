@@ -9,7 +9,7 @@ export type DeviceApprovalErrorCode =
   | "unavailable"
   | "no_biometrics"
   | "cancelled"
-  /** The user backed out of the prompt: its Cancel button or Back. */
+  /** The user backed out of the prompt: its negative button or Back. */
   | "declined"
   | "lockout"
   | "key_invalidated"
@@ -31,6 +31,14 @@ export interface DeviceApprovalKey {
   readonly securityLevel: "strongbox" | "tee";
 }
 
+export interface DeviceApprovalPrompt {
+  readonly title: string;
+  readonly subtitle?: string;
+  readonly description?: string;
+  /** The prompt's negative button; Android's Cancel when absent. */
+  readonly negative?: string;
+}
+
 interface NativeDeviceApproval {
   getAvailability(): Promise<DeviceApprovalAvailability>;
   generateKey(alias: string, attestationChallengeB64url: string): Promise<DeviceApprovalKey>;
@@ -38,7 +46,7 @@ interface NativeDeviceApproval {
   sign(
     alias: string,
     payloadB64url: string,
-    prompt: { readonly title: string; readonly subtitle?: string; readonly description?: string },
+    prompt: DeviceApprovalPrompt,
   ): Promise<{ readonly signature: string }>;
   deleteKey(alias: string): Promise<void>;
   hasKey(alias: string): Promise<boolean>;
@@ -91,11 +99,8 @@ export const deviceApprovalSigner = {
       : call((module) => module.getAvailability()),
   generateKey: (alias: string, attestationChallengeB64url: string) =>
     call((module) => module.generateKey(alias, attestationChallengeB64url)),
-  sign: (
-    alias: string,
-    payloadB64url: string,
-    prompt: { readonly title: string; readonly subtitle?: string; readonly description?: string },
-  ) => call((module) => module.sign(alias, payloadB64url, prompt)),
+  sign: (alias: string, payloadB64url: string, prompt: DeviceApprovalPrompt) =>
+    call((module) => module.sign(alias, payloadB64url, prompt)),
   deleteKey: (alias: string) => call((module) => module.deleteKey(alias)),
   hasKey: (alias: string) => call((module) => module.hasKey(alias)),
   /** Whether the key can sign from the lock screen; keys from earlier builds can't. */

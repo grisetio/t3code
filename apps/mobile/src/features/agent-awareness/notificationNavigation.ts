@@ -4,7 +4,6 @@ import { setAndroidThreadOnScreen } from "./androidNotifications";
 import { foregroundNotificationBehavior } from "./foregroundNotificationBehavior";
 import { routeAgentNotificationResponseOnce, threadDeepLinkOnScreen } from "./notificationPayload";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
-import { rememberElevationNotificationTap } from "../device-approval/elevationApprovalTarget";
 
 let deepLinkOnScreen: string | null = null;
 
@@ -30,11 +29,8 @@ export function installAgentNotificationNavigation(navigate: (href: string) => v
     routeAgentNotificationResponseOnce({
       handledResponseIds,
       response,
-      navigate: (deepLink) => {
-        // The push may be a sudo request; the sheet opens if that thread has one.
-        rememberElevationNotificationTap(deepLink, Date.now());
-        navigate(deepLink);
-      },
+      // A sudo push opens its thread, which ends at the request's card.
+      navigate,
     });
   };
   const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);

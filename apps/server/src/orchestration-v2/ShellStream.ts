@@ -298,12 +298,20 @@ export function shouldPublishShellApplicationEvent(
     // Replay and the live tail overlap; keep known IDs so late events stay filtered.
     return true;
   }
+  if (!subagentThreadIds.has(event.threadId)) return true;
+  // A sudo or secret request moves only its turn item, and the thread list and
+  // the parent's pill show it from the child's shell.
+  if (
+    event.type === "turn-item.updated" &&
+    (event.payload.type === "elevation_request" || event.payload.type === "secret_request")
+  ) {
+    return true;
+  }
   return !(
-    subagentThreadIds.has(event.threadId) &&
-    (event.type === "node.updated" ||
-      event.type === "turn-item.updated" ||
-      event.type === "provider-turn.updated" ||
-      event.type === "message.updated")
+    event.type === "node.updated" ||
+    event.type === "turn-item.updated" ||
+    event.type === "provider-turn.updated" ||
+    event.type === "message.updated"
   );
 }
 

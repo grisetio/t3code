@@ -39,7 +39,9 @@ const emptyShellSnapshot = {
 
 describe("subagent shell events", () => {
   const stored = (threadId: string, type: string) =>
-    ({ event: { threadId, type } }) as ApplicationStoredEvent;
+    ({
+      event: { threadId, type, payload: { type: "command_execution" } },
+    }) as ApplicationStoredEvent;
 
   it("keeps regular threads and subagent state changes while omitting subagent transcript updates", () => {
     const subagents = new Set(["child"]);
@@ -57,6 +59,23 @@ describe("subagent shell events", () => {
     ).toBe(true);
     expect(shouldPublishShellApplicationEvent(stored("child", "run.updated"), subagents)).toBe(
       true,
+    );
+  });
+
+  it("keeps a subagent's sudo and secret requests, which only move their turn item", () => {
+    const subagents = new Set(["child"]);
+    const item = (threadId: string, itemType: string) =>
+      ({
+        event: { threadId, type: "turn-item.updated", payload: { type: itemType } },
+      }) as ApplicationStoredEvent;
+    expect(shouldPublishShellApplicationEvent(item("child", "elevation_request"), subagents)).toBe(
+      true,
+    );
+    expect(shouldPublishShellApplicationEvent(item("child", "secret_request"), subagents)).toBe(
+      true,
+    );
+    expect(shouldPublishShellApplicationEvent(item("child", "command_execution"), subagents)).toBe(
+      false,
     );
   });
 

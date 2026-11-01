@@ -112,6 +112,7 @@ function ConfiguredSettingsRouteScreen() {
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
   const { savedConnectionsById } = useSavedRemoteConnections();
+  const deviceApprovalRows = useDeviceApprovalRows();
   const accountLabel = !isLoaded
     ? "Checking"
     : !isSignedIn
@@ -130,6 +131,7 @@ function ConfiguredSettingsRouteScreen() {
           onPress: () => navigation.navigate("SettingsAuth"),
         },
         environmentsRow(Object.keys(savedConnectionsById).length),
+        ...deviceApprovalRows,
         {
           id: "SettingsNotifications",
           icon: "bell.badge",
@@ -143,7 +145,32 @@ function ConfiguredSettingsRouteScreen() {
 
 function LocalSettingsRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
-  return <SettingsList connections={[environmentsRow(Object.keys(savedConnectionsById).length)]} />;
+  const deviceApprovalRows = useDeviceApprovalRows();
+  return (
+    <SettingsList
+      connections={[
+        environmentsRow(Object.keys(savedConnectionsById).length),
+        ...deviceApprovalRows,
+      ]}
+    />
+  );
+}
+
+function useDeviceApprovalRows(): SettingsListRow[] {
+  const { environments } = useEnvironments();
+  if (
+    !environments.some((environment) => environmentSupportsDeviceApproval(environment.serverConfig))
+  ) {
+    return [];
+  }
+  return [
+    {
+      id: "SettingsDeviceApproval",
+      icon: { ios: "touchid", android: "fingerprint" },
+      label: "Device approval",
+      target: "SettingsDeviceApproval",
+    },
+  ];
 }
 
 function environmentsRow(count: number): SettingsListRow {
@@ -214,10 +241,6 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
 function useSettingsIndexSections(): SettingsListSection[] {
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const noServerTargets = selectedTargets.length === 0;
-  const { environments } = useEnvironments();
-  const hasDeviceApproval = environments.some((environment) =>
-    environmentSupportsDeviceApproval(environment.serverConfig),
-  );
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const scopedProjectMembers =
     selectedProject?.members
@@ -282,7 +305,6 @@ function useSettingsIndexSections(): SettingsListSection[] {
     {
       rows: [
         serverPage("SettingsEnvironmentMaintenance", "arrow.clockwise", "Maintenance"),
-        ...(hasDeviceApproval ? [page("SettingsDeviceApproval", "iphone", "Device approval")] : []),
         page("SettingsLabs", "sparkles", "Labs"),
         page("SettingsAbout", "info.circle", "About"),
         page("SettingsArchive", "archivebox", "Archive"),
