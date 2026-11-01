@@ -24,6 +24,9 @@ class SignPrompt : Record {
   @Field val subtitle: String? = null
 
   @Field val description: String? = null
+
+  /** A request's prompt says "Deny", since backing out of it denies; setup keeps Cancel. */
+  @Field val negative: String? = null
 }
 
 /**
@@ -101,7 +104,10 @@ class T3DeviceApprovalModule : Module() {
       .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
       // A passive strong face match must not approve a command at a glance.
       .setConfirmationRequired(true)
-      .setNegativeButton(activity.getString(android.R.string.cancel), promptExecutor) { _, _ ->
+      .setNegativeButton(
+        DeviceApprovalCodec.negativeLabel(prompt.negative, activity.getString(android.R.string.cancel)),
+        promptExecutor
+      ) { _, _ ->
         declined()
       }
     prompt.subtitle?.let { builder.setSubtitle(it) }
