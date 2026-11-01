@@ -1,14 +1,17 @@
 import { useAtomValue } from "@effect/atom-react";
-import { elevationHeadline } from "@t3tools/client-runtime/elevation";
+import { elevationHeadline, elevationNoticeText } from "@t3tools/client-runtime/elevation";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
+import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { ElevationAgentIcon, useElevationAgent } from "./ElevationAgentMark";
+import { useElevationSidebarStore } from "./elevationSidebarStore";
 
 type ToastId = ReturnType<typeof toastManager.add>;
 
@@ -20,7 +23,8 @@ function requestKey(entry: PendingElevationRequest) {
  * One persistent notice per pending sudo request on any connected
  * environment, so a request is seen whichever thread or machine is open. It
  * closes when the request resolves anywhere, and stays away while the
- * request's own thread is open, where the card already shows it.
+ * request's own thread is open, where the card already shows it, or, for a
+ * request no thread claims, while the sidebar that lists those is open.
  */
 export function ElevationPendingNotices() {
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
@@ -28,16 +32,18 @@ export function ElevationPendingNotices() {
   const openEnvironmentId = useParams({ strict: false, select: (params) => params.environmentId });
   const openThreadId = useParams({ strict: false, select: (params) => params.threadId });
   const respond = useAtomCommand(elevation.respond, "deny device approval");
+  const listOnScreen = useElevationSidebarStore((state) => state.listOnScreen);
+  const reveal = useElevationSidebarStore((state) => state.reveal);
   // A key maps to null once the user dismissed its notice, so it isn't reopened.
   const shown = useRef(new Map<string, ToastId | null>());
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens and closes imperative toasts to match the pending requests
   useEffect(() => {
-    const inOpenThread = (entry: PendingElevationRequest) =>
-      entry.request.threadId !== null &&
-      entry.environmentId === openEnvironmentId &&
-      entry.request.threadId === openThreadId;
-    const live = new Set(pending.filter((entry) => !inOpenThread(entry)).map(requestKey));
+    const shownElsewhere = (entry: PendingElevationRequest) =>
+      entry.request.threadId === null
+        ? listOnScreen
+        : entry.environmentId === openEnvironmentId && entry.request.threadId === openThreadId;
+    const live = new Set(pending.filter((entry) => !shownElsewhere(entry)).map(requestKey));
     const stillPending = new Set(pending.map(requestKey));
     for (const [key, id] of shown.current) {
       if (live.has(key)) continue;
@@ -52,14 +58,23 @@ export function ElevationPendingNotices() {
       const { threadId } = entry.request;
       const id: ToastId = toastManager.add({
         type: "info",
-        title: <NoticeHeadline entry={entry} />,
-        description: <NoticeSource entry={entry} />,
+        title: <NoticeTitle entry={entry} />,
+        description: <NoticeDetail entry={entry} />,
         timeout: 0,
         onClose: () => {
           if (shown.current.get(key) === id) shown.current.set(key, null);
         },
         ...(threadId === null
-          ? {}
+          ? {
+              actionProps: {
+                children: "Show",
+                onClick: () =>
+                  reveal({
+                    environmentId: entry.environmentId,
+                    requestId: entry.request.requestId,
+                  }),
+              },
+            }
           : {
               actionProps: {
                 children: "Open thread",
@@ -72,7 +87,11 @@ export function ElevationPendingNotices() {
             }),
         data: {
           leadingIcon: (
-            <ElevationAgentIcon environmentId={entry.environmentId} threadId={threadId} />
+            <ElevationAgentIcon
+              environmentId={entry.environmentId}
+              threadId={threadId}
+              driver={entry.request.driver}
+            />
           ),
           actionLayout: "stacked-end",
           secondaryActionVariant: "ghost",
@@ -88,7 +107,7 @@ export function ElevationPendingNotices() {
       });
       shown.current.set(key, id);
     }
-  }, [navigate, openEnvironmentId, openThreadId, pending, respond]);
+  }, [listOnScreen, navigate, openEnvironmentId, openThreadId, pending, respond, reveal]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the toasts this component opened when it unmounts
   useEffect(() => {
@@ -102,25 +121,33 @@ export function ElevationPendingNotices() {
   return null;
 }
 
-// Toasts are added outside render, so the agent's name resolves inside them.
-function NoticeHeadline(props: { readonly entry: PendingElevationRequest }) {
-  const { entry } = props;
-  const agent = useElevationAgent(entry.environmentId, entry.request.threadId);
-  return (
-    <span className="line-clamp-2">
-      {elevationHeadline({
-        explanation: entry.request.explanation,
-        decoded: entry.decoded,
-        agentName: agent?.name ?? null,
-      })}
-    </span>
+// Toasts are added outside render, so their text resolves inside them.
+function useNoticeText(entry: PendingElevationRequest) {
+  const { environmentId, request } = entry;
+  const agent = useElevationAgent(environmentId, request.threadId, request.driver);
+  const thread = useQuietThreadShell(
+    request.threadId === null ? null : scopeThreadRef(environmentId, request.threadId),
   );
+  const machine = useEnvironment(environmentId)?.label ?? "this machine";
+  return elevationNoticeText({
+    headline: elevationHeadline({
+      explanation: request.explanation,
+      decoded: entry.decoded,
+      agentName: agent?.name ?? null,
+    }),
+    series: request.series,
+    threadId: request.threadId,
+    threadTitle: thread?.title ?? null,
+    raisedByT3: request.raisedByT3,
+    machine,
+  });
 }
 
-/** "Claude · Killian's MacBook Pro": this client's name for the machine, not its hostname. */
-function NoticeSource(props: { readonly entry: PendingElevationRequest }) {
-  const { entry } = props;
-  const agent = useElevationAgent(entry.environmentId, entry.request.threadId);
-  const machine = useEnvironment(entry.environmentId)?.label ?? null;
-  return [agent?.name, machine].filter(Boolean).join(" · ");
+function NoticeTitle(props: { readonly entry: PendingElevationRequest }) {
+  return <span className="line-clamp-2">{useNoticeText(props.entry).title}</span>;
+}
+
+/** "Fix the build · Killian's MacBook Pro": this client's name for the machine, not its hostname. */
+function NoticeDetail(props: { readonly entry: PendingElevationRequest }) {
+  return useNoticeText(props.entry).detail;
 }

@@ -29,6 +29,8 @@ interface AdaptiveWorkspaceContextValue {
   readonly toggleAuxiliaryPane: () => void;
   readonly togglePrimarySidebar: () => void;
   readonly setPrimarySidebarVisible: (visible: boolean) => void;
+  /** Shows the split view's sidebar, stepping the inspector or keyboard aside if they hid it. */
+  readonly revealPrimarySidebar: () => void;
   /** Opens a workspace tab with its list and, with columns, the page it last showed. */
   readonly openWorkspaceTab: (
     tab: WorkspaceTab | "settings",
@@ -73,6 +75,7 @@ export const AdaptiveWorkspaceContext = createContext<AdaptiveWorkspaceContextVa
   toggleAuxiliaryPane: () => undefined,
   togglePrimarySidebar: () => undefined,
   setPrimarySidebarVisible: () => undefined,
+  revealPrimarySidebar: () => undefined,
   openWorkspaceTab: () => undefined,
   setAuxiliaryPaneWidth: () => undefined,
   composerKeyboardActive: false,

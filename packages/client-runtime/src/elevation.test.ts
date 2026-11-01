@@ -5,15 +5,24 @@ import * as Base64Url from "effect/encoding/Base64Url";
 
 import {
   decodeElevationRequestPayload,
+  elevationAgent,
   elevationFailureMessage,
   elevationHeadline,
+  elevationNoticeText,
+  elevationRequestSource,
+  elevationSeriesLine,
   elevationRequestFacts,
   elevationResolvedSummary,
   elevationRequestFallbackView,
   elevationRequestStatusView,
   elevationSudoApproval,
 } from "./elevation.ts";
-import { ElevationError } from "@t3tools/contracts";
+import {
+  ElevationError,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 
 const NEW_DEVICE_SPKI =
   "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8_wgWhUhphKlOaDHtrEbnNg-p2DSnqBoQ";
@@ -378,5 +387,142 @@ describe("elevationSudoApproval", () => {
     expect(elevationSudoApproval({ ownsApprovals: false, devices: [] }).passwordRequired).toBe(
       false,
     );
+  });
+});
+
+describe("elevationAgent", () => {
+  const claude = ProviderDriverKind.make("claudeAgent");
+  const provider = (instanceId: string, displayName?: string) =>
+    ({
+      instanceId: ProviderInstanceId.make(instanceId),
+      driver: claude,
+      ...(displayName === undefined ? {} : { displayName }),
+    }) as unknown as ServerProvider;
+
+  it("names the agent from its process's driver when no thread is known", () => {
+    expect(elevationAgent(null, [provider("claudeAgent", "Claude")], claude)).toMatchObject({
+      driver: claude,
+      instanceId: "claudeAgent",
+      name: "Claude",
+    });
+    // Several instances run the driver: the driver's name, no instance.
+    expect(
+      elevationAgent(null, [provider("claudeAgent"), provider("claude-work", "Work")], claude),
+    ).toMatchObject({ driver: claude, instanceId: null, name: "Claude" });
+    expect(elevationAgent(null, [], undefined)).toBeNull();
+  });
+
+  it("prefers the thread's own instance over the driver", () => {
+    const thread = {
+      modelSelection: { instanceId: ProviderInstanceId.make("claude-work") },
+      runtime: null,
+    };
+    expect(
+      elevationAgent(thread, [provider("claudeAgent"), provider("claude-work", "Work")], claude)
+        ?.name,
+    ).toBe("Work");
+  });
+});
+
+describe("elevationRequestSource", () => {
+  it("says a request no thread claims wasn't placed, and leaves the agent to the headline", () => {
+    expect(
+      elevationRequestSource({
+        explanation: null,
+        threadId: null,
+        raisedByT3: undefined,
+        machine: "Killian's MacBook Pro",
+      }),
+    ).toEqual({ agentMark: false, parts: ["Killian's MacBook Pro", "thread not found"] });
+    // In the threads list the section header names the machine.
+    expect(
+      elevationRequestSource({
+        explanation: null,
+        threadId: null,
+        raisedByT3: false,
+        machine: null,
+      }),
+    ).toEqual({ agentMark: false, parts: ["thread not found"] });
+  });
+
+  it("leads with the agent's mark under its reason, and T3 for its own sudo", () => {
+    expect(
+      elevationRequestSource({
+        explanation: "Deploy",
+        threadId: "thread:a",
+        raisedByT3: undefined,
+        machine: "mac",
+      }),
+    ).toEqual({ agentMark: true, parts: ["mac"] });
+    expect(
+      elevationRequestSource({
+        explanation: "Test device approval",
+        threadId: null,
+        raisedByT3: true,
+        machine: "mac",
+      }),
+    ).toEqual({ agentMark: false, parts: ["T3 Code", "mac"] });
+  });
+});
+
+describe("elevationSeriesLine", () => {
+  const at = (millis: number) => DateTime.makeUnsafe(millis);
+  it("says which request this is and how long ago the first ended", () => {
+    const line = (series: Parameters<typeof elevationSeriesLine>[0], threadId: string | null) => {
+      const { ordinal, rest } = elevationSeriesLine(series, threadId, 10_000);
+      return ordinal + rest;
+    };
+    expect(
+      line({ ordinal: 2, first: { elevationStatus: "approved", resolvedAt: at(6_000) } }, "t"),
+    ).toBe("2nd request this turn · first approved 4 s ago");
+    expect(
+      line({ ordinal: 3, first: { elevationStatus: "denied", resolvedAt: at(9_500) } }, null),
+    ).toBe("3rd request in a few minutes · first denied just now");
+    expect(line({ ordinal: 11, first: { elevationStatus: "pending" } }, "t")).toBe(
+      "11th request this turn · first still waiting",
+    );
+  });
+});
+
+describe("elevationNoticeText", () => {
+  const base = {
+    headline: "“Deploying release .7 to the Mac”",
+    threadId: "thread:a",
+    threadTitle: "Deploy device approval .7",
+    raisedByT3: undefined,
+    machine: "Killian's MacBook Pro",
+  };
+  it("leads with the headline, then the thread and machine", () => {
+    expect(elevationNoticeText({ ...base, series: undefined })).toEqual({
+      title: "“Deploying release .7 to the Mac”",
+      detail: "Deploy device approval .7 · Killian's MacBook Pro",
+    });
+  });
+
+  it("says a repeat is one, the reason moving underneath", () => {
+    expect(
+      elevationNoticeText({
+        ...base,
+        series: { ordinal: 2, first: { elevationStatus: "approved" } },
+      }),
+    ).toEqual({
+      title: "2nd admin request this turn",
+      detail: "“Deploying release .7 to the Mac” · Killian's MacBook Pro",
+    });
+  });
+
+  it("says a request no thread claims wasn't placed", () => {
+    expect(
+      elevationNoticeText({
+        ...base,
+        headline: "Claude wants admin access",
+        threadId: null,
+        threadTitle: null,
+        series: undefined,
+      }),
+    ).toEqual({
+      title: "Claude wants admin access",
+      detail: "Killian's MacBook Pro · thread not found",
+    });
   });
 });

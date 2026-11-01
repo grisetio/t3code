@@ -662,7 +662,9 @@ function CheckLine(props: { readonly check: ElevationCheck }) {
         <SymbolView
           name={check.ok ? "checkmark" : "xmark"}
           size={14}
-          tintColorClassName={check.ok ? "accent-success-foreground" : "accent-warning-foreground"}
+          tintColorClassName={
+            check.ok ? "accent-adaptive-emerald-600" : "accent-warning-foreground"
+          }
           type="monochrome"
         />
       </View>

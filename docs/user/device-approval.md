@@ -41,7 +41,8 @@ password. Until a phone is set up, only the password can approve it.
   fails.
 
 Requests show up in the app as a banner, and in the agent's thread, while the
-app is connected to the environment. With T3 Connect linked, the phone also
+app is connected to the environment. A request T3 Code can't match to a thread
+waits at the top of the threads list instead. With T3 Connect linked, the phone also
 gets a push for requests that belong to a thread; without it there is no push.
 Web and desktop show requests and can deny them; approving needs the phone.
 

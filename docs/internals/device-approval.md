@@ -504,7 +504,15 @@ sudo password into T3.
   `pendingRuntimeRequest` with kind `command`.
 - A request attributed to no thread has no turn item. Clients get every
   pending request, with its payload, from the `elevationSubscribe` stream,
-  which also drives the cross-environment banner.
+  which also drives the cross-environment banner. Clients list requests with no
+  thread at the top of the threads list, under their machine, since there is
+  no thread to open.
+- Each provider runtime registers its process with its driver, so a request no
+  thread claims still names its agent. Cursor runs agents inside the server
+  process, so its requests can't be traced to a process and carry no driver.
+- The server counts a turn's requests (`series`), because only it sees the
+  ones already resolved. A request with no thread counts within its machine
+  over the last few minutes instead.
 - One entry per request. While the Android app is in front, the request already
   shows in the app, so the native push handler posts nothing for it. Our relay
   marks sudo pushes with `alert_request_kind`, but upstream relays strip it, so
@@ -513,7 +521,7 @@ sudo password into T3.
   reached the app are removed.
 - Removing a phone revokes through the helper's sudo, which that phone approves
   with the key it is removing. The phone claims the request so it never shows
-  as a banner or sheet.
+  as a banner or in the threads list.
 - RPC schemas and helpers: `packages/contracts/src/elevation.ts`. Clients
   check the `deviceApproval` environment capability before showing anything.
 - Test vectors shared by the Rust, TypeScript and Kotlin tests:

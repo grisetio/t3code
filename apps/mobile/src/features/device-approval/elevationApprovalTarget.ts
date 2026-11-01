@@ -24,6 +24,24 @@ export function closeElevationApproval(): void {
 }
 
 /**
+ * A request no thread claims, opened from the banner: the threads list it lives in plays a
+ * highlight on it once, then clears this.
+ */
+export const elevationListHighlightAtom = Atom.make<ElevationApprovalTarget | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:elevation-list-highlight"),
+);
+
+/**
+ * How many threads lists are on screen. Those lists show requests no thread claims, so the
+ * banner leaves those requests to them.
+ */
+export const elevationListsOnScreenAtom = Atom.make(0).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:elevation-lists-on-screen"),
+);
+
+/**
  * Relay pushes only carry the thread link. A tap remembers the thread so its
  * request opens once it arrives over the socket.
  */

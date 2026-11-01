@@ -11,6 +11,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import type { LegendListRef } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -64,6 +65,8 @@ import { useFabScroll } from "../home/FabScrollContext";
 import { SidebarFilterButton } from "./sidebar-filter-button";
 import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 import { SidebarNavigationShell } from "./sidebar-navigation-shell";
+import { ThreadlessElevationRequests } from "../device-approval/ThreadlessElevationRequests";
+import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
@@ -154,6 +157,20 @@ function ThreadNavigationSidebarPane(
   const searchBarRef = useRef<SearchBarCommands>(null);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const sidebarScrollGesture = useNativeGesture();
+  const listRef = useRef<LegendListRef>(null);
+  const selectedTab = useWorkspaceTabs()?.state.selectedTab ?? "threads";
+  const elevationRequests = (
+    <ThreadlessElevationRequests
+      onScreen={props.visible && selectedTab === "threads"}
+      pane="sidebar"
+      // The native search header's height isn't known here, so that list isn't scrolled.
+      onReveal={
+        props.nativeChrome
+          ? undefined
+          : () => listRef.current?.scrollToOffset({ offset: 0, animated: true })
+      }
+    />
+  );
   const {
     archiveThread,
     confirmDeleteThread,
@@ -730,6 +747,7 @@ function ThreadNavigationSidebarPane(
             <GestureDetector gesture={sidebarScrollGesture}>
               <AnimatedLegendList
                 renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
+                ref={listRef}
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}
                 drawDistance={500}
@@ -758,6 +776,7 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={elevationRequests}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>
@@ -794,12 +813,16 @@ function ThreadNavigationSidebarPane(
         }
       >
         {Platform.OS === "android" && listItems.length === 0 ? (
-          <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          <View className="flex-1 px-2 pt-1.5">
+            {elevationRequests}
+            <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          </View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
               {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- Only the non-native workspace layout (Android and the fallback) renders this sidebar, which has no native header to register with. */}
               <AnimatedLegendList
+                ref={listRef}
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}
                 drawDistance={500}
@@ -831,6 +854,7 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={elevationRequests}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>

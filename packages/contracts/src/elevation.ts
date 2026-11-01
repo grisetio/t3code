@@ -9,6 +9,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
+import { ProviderDriverKind } from "./providerInstance.ts";
 
 // Formats are specified in docs/internals/device-approval.md; the shared test
 // vectors in packages/contracts/test-vectors/device-approval.json pin them.
@@ -262,6 +263,30 @@ export const ElevationRespondInput = Schema.Union([
 ]);
 export type ElevationRespondInput = typeof ElevationRespondInput.Type;
 
+export const ElevationRequestStatus = Schema.Literals([
+  "pending",
+  "approved",
+  "denied",
+  "expired",
+  "cancelled",
+]);
+export type ElevationRequestStatus = typeof ElevationRequestStatus.Type;
+
+/**
+ * This request is not the first of its turn, or, with no thread, of its machine within a few
+ * minutes. A script's second sudo otherwise reads as the first one still waiting.
+ */
+export const ElevationRequestSeries = Schema.Struct({
+  /** 2 for the second request. */
+  ordinal: PositiveInt,
+  first: Schema.Struct({
+    elevationStatus: ElevationRequestStatus,
+    /** Absent while the first still waits. */
+    resolvedAt: Schema.optionalKey(Schema.DateTimeUtc),
+  }),
+});
+export type ElevationRequestSeries = typeof ElevationRequestSeries.Type;
+
 /** A waiting request, including ones attributed to no thread. */
 export const ElevationPendingRequest = Schema.Struct({
   requestId: ElevationRequestId,
@@ -274,6 +299,15 @@ export const ElevationPendingRequest = Schema.Struct({
   changes: Schema.optionalKey(
     Schema.Struct({ files: NonNegativeInt, additions: NonNegativeInt, deletions: NonNegativeInt }),
   ),
+  /**
+   * The provider that runs the asking agent, from its process. Set even when no thread could be
+   * told apart, so the card can still name the agent. Older servers omit it.
+   */
+  driver: Schema.optionalKey(ProviderDriverKind),
+  /** T3 raised this sudo itself, such as the setup test or removing a phone. */
+  raisedByT3: Schema.optionalKey(Schema.Boolean),
+  /** Absent for the first request. */
+  series: Schema.optionalKey(ElevationRequestSeries),
   createdAt: Schema.DateTimeUtc,
 });
 export type ElevationPendingRequest = typeof ElevationPendingRequest.Type;

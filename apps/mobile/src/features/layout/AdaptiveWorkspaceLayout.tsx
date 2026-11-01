@@ -825,6 +825,7 @@ function AdaptiveWorkspaceLayoutContent(
     togglePrimarySidebar,
     setPrimarySidebarVisible,
     openWorkspaceTab,
+    revealPrimarySidebar,
     setAuxiliaryPaneWidth,
     composerKeyboardActive,
     setComposerEditing,

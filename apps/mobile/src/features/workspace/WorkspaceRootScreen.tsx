@@ -1,10 +1,11 @@
+import { useAtomValue } from "@effect/atom-react";
 import { WorkspaceNoTabs } from "./WorkspaceNoTabs";
 import { WORKSPACE_TAB_LABELS, useEnabledNavigationTabs } from "./navigation-tabs";
 import { WorkspaceExtraTab } from "./WorkspaceExtraTab";
 import { SettingsRouteScreen } from "../settings/SettingsRouteScreen";
 import { WorkspaceSectionToolbar } from "./WorkspaceSectionToolbar";
 import { useNavigation } from "@react-navigation/native";
-import { use } from "react";
+import { use, useEffect } from "react";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,6 +23,7 @@ import {
   useNativeColumnLayoutMetrics,
   useNativeLayoutMetrics,
 } from "../../native/native-layout-metrics";
+import { elevationListHighlightAtom } from "../device-approval/elevationApprovalTarget";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
 import { dispatchHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { WorkspaceConnectionTitle } from "../home/WorkspaceConnectionTitle";
@@ -96,7 +98,13 @@ function WorkspaceRootContent() {
   const insets = useSafeAreaInsets();
   const keyboardHeight = useKeyboardState((keyboard) => keyboard.height);
   const workspace = useWorkspaceTabs()!;
-  const { state } = workspace;
+  const { state, dispatch } = workspace;
+  // The tabs live here on iOS, so the request the banner opened is shown from here.
+  const elevationHighlight = useAtomValue(elevationListHighlightAtom);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- selects the Threads tab when a request no thread claims is opened
+  useEffect(() => {
+    if (elevationHighlight !== null) dispatch({ type: "select", tab: "threads" });
+  }, [elevationHighlight, dispatch]);
   // Settings is a workspace tab too; its list takes the place of the selected tab's.
   const settingsOpen = workspace.settingsOpen;
   const renderHeaderTitle = () => (

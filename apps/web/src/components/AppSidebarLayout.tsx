@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useLocation, useRouter, type AnyRouter } from "@tanstack/react-router";
+import { useLocation, useNavigate, useRouter, type AnyRouter } from "@tanstack/react-router";
 
 import { moveWorkspaceFocus, workspaceAreaProps } from "../lib/workspaceFocus";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
@@ -43,6 +43,7 @@ import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
+import { useElevationSidebarStore } from "./elevation/elevationSidebarStore";
 import {
   clampThreadSidebarWidth,
   resolveInitialThreadSidebarWidth,
@@ -400,6 +401,21 @@ function SidebarControl() {
   );
 }
 
+// A request no thread claims waits at the top of the thread list; its notice opens it there.
+function ElevationSidebarReveal() {
+  const highlight = useElevationSidebarStore((state) => state.highlight);
+  const { isMobile, setOpen, setOpenMobile } = useSidebar();
+  const navigate = useNavigate();
+  const onModalPage = useLocation({ select: (location) => isAppModalPage(location.pathname) });
+  useEffect(() => {
+    if (highlight === null) return;
+    if (onModalPage) void navigate({ to: "/" });
+    if (isMobile) setOpenMobile(true);
+    else setOpen(true);
+  }, [highlight, isMobile, onModalPage, navigate, setOpen, setOpenMobile]);
+  return null;
+}
+
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const sidebarArea = workspaceAreaProps("sidebar", 0, "Threads");
   const [sidebarRouteReveal] = useState<SidebarRouteReveal>(() => ({
@@ -474,6 +490,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         {children}
         <BackgroundThreadAnnouncer />
         <SidebarControl />
+        <ElevationSidebarReveal />
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );

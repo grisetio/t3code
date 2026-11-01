@@ -2,10 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_CANT_APPROVE_HERE,
   elevationAgent,
+  elevationAgoRefreshMs,
   elevationDecodeFailureMessage,
   elevationFailureMessage,
   elevationHeadline,
   elevationRequestFacts,
+  elevationRequestSource,
+  elevationSeriesLine,
   type DecodedElevationPayload,
   type ElevationAgent,
   type ElevationRequestFact,
@@ -22,14 +25,16 @@ import {
 import {
   type ElevationPayloadDecodeFailure,
   type ElevationRequestId,
+  type ElevationRequestSeries,
   type ElevationRespondInput,
   type EnvironmentId,
   type OrchestrationV2ElevationChanges,
+  type ProviderDriverKind,
   type ThreadId,
 } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
 import * as Result from "effect/Result";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
@@ -106,13 +111,14 @@ function useElevationRespond(environmentId: EnvironmentId) {
 }
 
 /**
- * Who asks and where: the agent from the thread's provider, the machine as named on this phone,
- * and the checkout a command normally runs in.
+ * Who asks and where: the agent from the thread's provider, or from the driver the server found
+ * on its process, the machine as named on this phone, and the checkout a command normally runs in.
  */
 export function useElevationRequestContext(
   environmentId: EnvironmentId,
   threadId: ThreadId | null,
   fallbackHost: string | null,
+  driver?: ProviderDriverKind,
 ) {
   const thread = useThreadShell(threadId === null ? null : { environmentId, threadId });
   const project = useProject(
@@ -121,8 +127,9 @@ export function useElevationRequestContext(
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   return {
-    agent: elevationAgent(thread, configs.get(environmentId)?.providers ?? []),
+    agent: elevationAgent(thread, configs.get(environmentId)?.providers ?? [], driver),
     machine: presentations.get(environmentId)?.entry.target.label ?? fallbackHost ?? "this machine",
+    threadTitle: thread?.title ?? null,
     checkout: thread?.worktreePath ?? project?.workspaceRoot ?? null,
   };
 }
@@ -138,19 +145,61 @@ function ElevationAgentMark(props: { readonly agent: ElevationAgent; readonly si
   );
 }
 
-/** "{mark} Claude · Killian's MacBook Pro", the same second line on every surface. */
-function ElevationRequestMeta(props: { readonly context: ElevationRequestContext }) {
-  const { agent, machine } = props.context;
+/**
+ * "{mark} Claude · Killian's MacBook Pro", or "Killian's MacBook Pro · thread not found": the
+ * same second line on every surface.
+ */
+function ElevationRequestMeta(props: {
+  readonly context: ElevationRequestContext;
+  readonly source: ReturnType<typeof elevationRequestSource>;
+}) {
+  const { agent } = props.context;
+  const mark = props.source.agentMark ? agent : null;
+  if (mark === null && props.source.parts.length === 0) return null;
   return (
     <View className="flex-row items-center gap-1.5">
-      {agent ? (
-        <>
-          <ElevationAgentMark agent={agent} size={14} />
-          <Text className="text-sm text-foreground-muted">·</Text>
-        </>
+      {mark ? <ElevationAgentMark agent={mark} size={14} /> : null}
+      {mark && props.source.parts.length > 0 ? (
+        <Text className="text-sm text-foreground-muted">·</Text>
       ) : null}
+      {props.source.parts.length > 0 ? (
+        <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
+          {props.source.parts.join(" · ")}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** The current time, kept fresh enough for an "ago" measured from `since`. */
+function useElevationNow(since: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (since === null) return;
+    const timer = setTimeout(() => setNow(Date.now()), elevationAgoRefreshMs(since, now));
+    return () => clearTimeout(timer);
+  }, [since, now]);
+  return now;
+}
+
+/** "2nd request this turn · first approved 4 s ago", from the second request of a turn on. */
+function ElevationSeriesLine(props: {
+  readonly series: ElevationRequestSeries;
+  readonly threadId: ThreadId | null;
+}) {
+  const now = useElevationNow(props.series.first.resolvedAt?.epochMilliseconds ?? null);
+  const line = elevationSeriesLine(props.series, props.threadId, now);
+  return (
+    <View className="flex-row items-center gap-1.5">
+      <SymbolView
+        name="arrow.clockwise"
+        size={12}
+        tintColorClassName="accent-icon"
+        type="monochrome"
+      />
       <Text numberOfLines={1} className="min-w-0 shrink text-sm text-foreground-muted">
-        {machine}
+        <Text className="font-t3-semibold text-sm text-foreground">{line.ordinal}</Text>
+        {line.rest}
       </Text>
     </View>
   );
@@ -280,6 +329,9 @@ interface ElevationApprovalRequest {
   readonly decoded: Result.Result<DecodedElevationPayload, ElevationPayloadDecodeFailure>;
   readonly explanation: string | null;
   readonly changes?: OrchestrationV2ElevationChanges | undefined;
+  readonly driver?: ProviderDriverKind | undefined;
+  readonly raisedByT3?: boolean | undefined;
+  readonly series?: ElevationRequestSeries | undefined;
 }
 
 /**
@@ -291,6 +343,8 @@ interface ElevationApprovalRequest {
 export function ElevationApprovalCard(props: {
   readonly request: ElevationApprovalRequest;
   readonly hidden?: { readonly onUnlock: () => void };
+  /** Under a header that names the machine, which the card then leaves out. */
+  readonly inMachineSection?: boolean;
   /** Called once the answer reached the server. */
   readonly onAnswered?: (decision: "approve" | "deny") => void;
   /**
@@ -310,6 +364,7 @@ export function ElevationApprovalCard(props: {
     request.environmentId,
     request.threadId,
     decoded?.view.host ?? null,
+    request.driver,
   );
   const signerPresent = deviceApprovalSigner.isPresent();
   const enroll = decoded?.view.enroll ?? null;
@@ -444,8 +499,21 @@ export function ElevationApprovalCard(props: {
 
   return (
     <View className="gap-3">
-      <ElevationHeadlineText text={headline} />
-      <ElevationRequestMeta context={context} />
+      <View className="gap-1">
+        <ElevationHeadlineText text={headline} />
+        {request.series ? (
+          <ElevationSeriesLine series={request.series} threadId={request.threadId} />
+        ) : null}
+      </View>
+      <ElevationRequestMeta
+        context={context}
+        source={elevationRequestSource({
+          explanation: request.explanation,
+          threadId: request.threadId,
+          raisedByT3: request.raisedByT3,
+          machine: props.inMachineSection ? null : context.machine,
+        })}
+      />
       {decoded === null ? (
         <Text className="text-sm text-foreground-muted">
           {Result.isFailure(request.decoded)

@@ -88,7 +88,7 @@ function LockScreenRequest() {
   return (
     <Modal visible animationType="fade" statusBarTranslucent onRequestClose={leaveLockScreen}>
       <View
-        className="flex-1 justify-end gap-4 bg-background px-4"
+        className="flex-1 justify-end gap-4 bg-screen px-4"
         style={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 16 }}
       >
         <View className="flex-row items-center gap-1.5 self-center">

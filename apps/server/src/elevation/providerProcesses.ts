@@ -11,10 +11,11 @@ export const layer = Layer.effect(
     const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
     const entries = new Set<ProviderProcess>();
     return {
-      register: ({ pid, threadId }) => {
+      register: ({ pid, threadId, driver }) => {
         const entry: ProviderProcess = {
           pid,
           threadId,
+          driver,
           startTime: processStartTime(host, pid, { onlyIfLoaded: true }),
         };
         entries.add(entry);

@@ -3,12 +3,10 @@ import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elev
 import { StackActions, useNavigation } from "@react-navigation/native";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useRef, useState } from "react";
-import { AppState, Modal, Platform, ScrollView, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useEffect, useRef } from "react";
+import { AppState, Platform } from "react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
-import { SheetHeader } from "../../components/ui/SheetHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
 import { environmentPresentations } from "../../state/presentation";
@@ -23,12 +21,14 @@ import {
   encodeThreadDeepLink,
   threadDeepLinkOnScreen,
 } from "../agent-awareness/notificationPayload";
+import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
+import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
 import { approvalHaptic } from "./approvalHaptics";
-import { ElevationApprovalCard } from "./ElevationApprovalCard";
 import {
   claimedElevationRequestAtom,
   closeElevationApproval,
   elevationApprovalTargetAtom,
+  elevationListHighlightAtom,
   isClaimedElevationRequest,
   elevationLockScreenAtom,
   elevationNotificationIntentAtom,
@@ -39,7 +39,6 @@ import {
 } from "./elevationApprovalTarget";
 import { requestDeviceApprovalRekey } from "./deviceApprovalRekey";
 import { deviceApprovalKeys } from "./deviceApprovalKeys";
-import { ELEVATION_SETTLE_MS } from "./elevationApproval";
 import { deviceApprovalSigner } from "./deviceApprovalSigner";
 
 // A request created this recently is arriving now, not found on reconnect.
@@ -191,8 +190,21 @@ function useLockScreenReenrollPrompt(): void {
 }
 
 /**
+ * The threads list, where requests no thread claims wait: the sidebar in a split view, otherwise
+ * the Threads tab at the root of the stack.
+ */
+function useOpenThreadsList(): () => void {
+  const { layout, revealPrimarySidebar } = useAdaptiveWorkspaceLayout();
+  const selectTab = useSelectWorkspaceTab();
+  return () => {
+    selectTab("threads");
+    if (layout.usesSplitView) revealPrimarySidebar();
+  };
+}
+
+/**
  * Opens whichever request was opened from the banner, a push or the lock screen: its thread,
- * which ends at the request's card, or a full-screen card for a request no thread owns.
+ * which ends at the request's card, or the threads list, which holds requests no thread claims.
  */
 export function ElevationApprovalHost(props: { readonly pathname: string }) {
   const allPending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
@@ -203,8 +215,8 @@ export function ElevationApprovalHost(props: { readonly pathname: string }) {
       : allPending.filter((entry) => !isClaimedElevationRequest(claim, entry));
   const target = useAtomValue(elevationApprovalTargetAtom);
   const intent = useAtomValue(elevationNotificationIntentAtom);
-  const lockScreen = useAtomValue(elevationLockScreenAtom);
   const navigation = useNavigation();
+  const openThreadsList = useOpenThreadsList();
   useArrivalHaptic(pending);
   useSudoApprovalPushes(pending);
   useLockScreenReenrollPrompt();
@@ -223,37 +235,26 @@ export function ElevationApprovalHost(props: { readonly pathname: string }) {
     }
   }, [intent, pending]);
 
-  // Approved here: the request may leave the list before the answer returns, and "✓ Approved"
-  // stays a moment after it does.
-  const [held, setHeld] = useState<PendingElevationRequest | null>(null);
-  const [settled, setSettled] = useState(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the held request on a timer after the approval settles
-  useEffect(() => {
-    if (!settled) return;
-    const timer = setTimeout(() => {
-      setHeld(null);
-      setSettled(false);
-      closeElevationApproval();
-    }, ELEVATION_SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [settled]);
-
   const entry =
-    held ??
-    (target === null
+    target === null
       ? undefined
       : pending.find(
           (candidate) =>
             candidate.environmentId === target.environmentId &&
             candidate.request.requestId === target.requestId,
-        ));
-  const threadId = entry?.request.threadId ?? null;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves an opened request to its thread's card in the navigator, or drops it once it leaves the pending list
+        );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves an opened request to its thread's card, or to the threads list when no thread claims it
   useEffect(() => {
-    // Answered elsewhere, or expired: the request left the pending list.
-    if (target !== null && entry === undefined) closeElevationApproval();
-    if (entry === undefined || threadId === null || held !== null) return;
+    if (target === null) return;
     closeElevationApproval();
+    // Answered elsewhere, or expired: the request left the pending list.
+    if (entry === undefined) return;
+    const { threadId } = entry.request;
+    if (threadId === null) {
+      appAtomRegistry.set(elevationListHighlightAtom, target);
+      openThreadsList();
+      return;
+    }
     const link = encodeThreadDeepLink({ environmentId: entry.environmentId, threadId });
     // Pushed, so Back returns to wherever the request was opened from.
     if (link !== threadDeepLinkOnScreen(props.pathname)) {
@@ -264,61 +265,7 @@ export function ElevationApprovalHost(props: { readonly pathname: string }) {
         }),
       );
     }
-  }, [target, entry, threadId, held, navigation, props.pathname]);
+  }, [target, entry, navigation, openThreadsList, props.pathname]);
 
-  // A Modal is its own window and would draw above the lock-screen cover, over the keyguard.
-  if (entry === undefined || threadId !== null || lockScreen !== null) return null;
-  return (
-    <ThreadlessElevationRequest
-      entry={entry}
-      onApproving={(active) => setHeld(active ? entry : null)}
-      onApproved={() => setSettled(true)}
-    />
-  );
-}
-
-/** A request no thread owns, such as one the server raised, on a full screen of its own. */
-function ThreadlessElevationRequest(props: {
-  readonly entry: PendingElevationRequest;
-  readonly onApproving: (active: boolean) => void;
-  readonly onApproved: () => void;
-}) {
-  const insets = useSafeAreaInsets();
-  const { environmentId, request, decoded } = props.entry;
-  return (
-    <Modal
-      visible
-      animationType="slide"
-      presentationStyle="fullScreen"
-      statusBarTranslucent
-      onRequestClose={closeElevationApproval}
-    >
-      <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>
-        <SheetHeader presentation="inline" title="Admin request" onClose={closeElevationApproval} />
-        <ScrollView
-          className="flex-1"
-          contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
-          contentContainerClassName="px-5 pt-3"
-          contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
-        >
-          <ElevationApprovalCard
-            key={request.requestId}
-            request={{
-              environmentId,
-              requestId: request.requestId,
-              threadId: null,
-              decoded,
-              explanation: request.explanation,
-              changes: request.changes,
-            }}
-            onApproving={props.onApproving}
-            onAnswered={(decision) => {
-              if (decision === "approve") props.onApproved();
-              else closeElevationApproval();
-            }}
-          />
-        </ScrollView>
-      </View>
-    </Modal>
-  );
+  return null;
 }

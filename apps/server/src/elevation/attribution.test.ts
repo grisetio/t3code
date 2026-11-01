@@ -77,7 +77,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [],
-        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
         serverSudos: [],
       }),
     ).toEqual({ type: "not_mine" });
@@ -133,7 +133,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [background],
-        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
         serverSudos: [],
       }),
     ).toEqual({
@@ -161,7 +161,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [script],
-        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
         serverSudos: [],
       }),
     ).toEqual({ type: "mine", run: script, explanation: "Run the checks", command: "./check.sh" });
@@ -183,7 +183,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [background],
-        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
         serverSudos: [],
       });
     };
@@ -216,7 +216,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [a, b],
-        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
+        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null, driver: null }],
         serverSudos: [],
       }),
     ).toEqual({
@@ -242,7 +242,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [a, run("b", [{ text: "ls" }])],
-        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
+        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null, driver: null }],
         serverSudos: [],
       }),
     ).toEqual({
@@ -269,7 +269,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [a, run("b", [{ text: "ls" }])],
-        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
+        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null, driver: null }],
         serverSudos: [],
       }),
     ).toEqual({ type: "mine", run: a, explanation: null, command: "./install.sh --system" });
@@ -288,10 +288,58 @@ describe("attribute", () => {
           run("a", [{ text: "sudo apt-get update" }]),
           run("b", [{ text: "sudo apt-get update" }]),
         ],
-        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
+        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null, driver: null }],
         serverSudos: [],
       }),
     ).toEqual({ type: "mine", run: null, explanation: null });
+  });
+
+  it("names the agent's driver when no thread can be told apart", () => {
+    // The deploy script's second sudo: `just` → `python3 deploy.py`, under Codex's shared
+    // app-server, while two threads run calls whose text appears nowhere in the chain.
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "python3", "deploy.py", "_status-system", "darwin-7ede7e6d", "--wait"],
+          chain: [
+            entry(320, ["python3", "deploy.py", "_status-system", "darwin-7ede7e6d", "--wait"]),
+            entry(310, ["just", "darwin-macbook"]),
+            entry(300, ["codex", "app-server"]),
+            serverEntry,
+          ],
+        },
+        server,
+        now,
+        liveRuns: [run("a", [{ text: "pnpm dev" }]), run("b", [{ text: "cargo test" }])],
+        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null, driver: "codex" }],
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "mine", run: null, explanation: null, driver: "codex" });
+  });
+
+  it("names the driver of a matched thread's process too", () => {
+    const a = run("a", [{ text: "sudo ls /var/db", explanation: "List the databases" }]);
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "ls", "/var/db"],
+          chain: [entry(200, claudeBash("sudo ls /var/db")), entry(150, ["claude"]), serverEntry],
+        },
+        server,
+        now,
+        liveRuns: [a],
+        providerProcesses: [
+          { pid: 150, startTime: 6000, threadId: "thread:a", driver: "claudeAgent" },
+        ],
+        serverSudos: [],
+      }),
+    ).toEqual({
+      type: "mine",
+      run: a,
+      explanation: "List the databases",
+      command: "sudo ls /var/db",
+      driver: "claudeAgent",
+    });
   });
 
   it("falls back to the provider process spawned for one thread", () => {
@@ -305,7 +353,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [run("b", [{ text: "ls" }]), a],
-        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
         serverSudos: [],
       }),
     ).toEqual({ type: "mine", run: a, explanation: null });
@@ -338,7 +386,7 @@ describe("attribute", () => {
           server,
           now,
           liveRuns: [run("b", [{ text: "pnpm dev", explanation: "Start the dev server" }]), a],
-          providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+          providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
           serverSudos: [],
         }),
       };
@@ -368,7 +416,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [run("a", [])],
-        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a" }],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
         serverSudos: [],
       }),
     ).toEqual({ type: "not_mine" });
@@ -384,7 +432,7 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [run("a", [{ text: "pnpm dev" }])],
-        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null }],
+        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null, driver: null }],
         serverSudos: [],
       }),
     ).toEqual({ type: "not_mine" });

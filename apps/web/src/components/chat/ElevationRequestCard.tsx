@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  ELEVATION_APPROVE_ON_PHONE,
   decodeElevationRequestPayload,
   elevationDecodeFailureMessage,
   elevationHeadline,
@@ -16,41 +15,19 @@ import {
   elevationCommandDisplay,
   type ElevationCommandDisplay,
 } from "@t3tools/client-runtime/elevation-command";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
   ElevationPayloadDecodeFailure,
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  ClockIcon,
-  FileDiffIcon,
-  MinusIcon,
-  ShieldIcon,
-  SmartphoneIcon,
-  XIcon,
-} from "lucide-react";
+import { CheckIcon, ClockIcon, MinusIcon, ShieldIcon, XIcon } from "lucide-react";
 import { use, useState, type KeyboardEvent } from "react";
 
-import { cn } from "~/lib/utils";
-import { useDiffPanelStore } from "../../diffPanelStore";
-import { useRightPanelStore } from "../../rightPanelStore";
-import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
-import {
-  ElevationAgentMark,
-  useElevationAgent,
-  type ElevationAgentView,
-} from "../elevation/ElevationAgentMark";
-import {
-  ElevationComparisonCode,
-  ElevationRequestFactLines,
-} from "../elevation/ElevationRequestDetails";
-import { useElevationDeny } from "../elevation/useElevationDeny";
-import { Button } from "../ui/button";
+import { useElevationAgent } from "../elevation/ElevationAgentMark";
+import { DisclosureChevron, ElevationPendingCard } from "../elevation/ElevationPendingCard";
+import { ElevationRequestFactLines } from "../elevation/ElevationRequestDetails";
 import { TimelineRowActivityCtx, TimelineRowCtx } from "./timelineRowContext";
 import { WorkLogDetails, WorkLogRow } from "./WorkLog";
 
@@ -93,6 +70,11 @@ export function ElevationRequestCard(props: {
   const { activeTurnInProgress, latestRunId } = use(TimelineRowActivityCtx);
   const { workspaceRoot } = use(TimelineRowCtx);
   const agent = useElevationAgent(props.environmentId, item.threadId);
+  // The turn item doesn't carry how many requests came before; the pending request does.
+  const series = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).find(
+    (entry) =>
+      entry.environmentId === props.environmentId && entry.request.requestId === item.requestId,
+  )?.request.series;
   const runActive = activeTurnInProgress && item.runId !== null && item.runId === latestRunId;
   const status = elevationRequestStatusView(item, { finished: !runActive });
   const showCard = status.kind === "pending" && props.visibility === "local";
@@ -108,9 +90,14 @@ export function ElevationRequestCard(props: {
   const facts = elevationRequestFacts(view, { cwd: workspaceRoot ?? null });
   if (showCard) {
     return (
-      <PendingElevationRequest
+      <ElevationPendingCard
         environmentId={props.environmentId}
-        item={item}
+        requestId={item.requestId}
+        threadId={item.threadId}
+        explanation={item.explanation}
+        changes={item.changes ?? null}
+        series={series}
+        dataItemType={item.type}
         agent={agent}
         headline={headline}
         enrollKey={view.enroll?.publicKey ?? null}
@@ -195,159 +182,5 @@ function ElevationRequestRow(props: {
         </WorkLogDetails>
       ) : null}
     </WorkLogRow>
-  );
-}
-
-function DisclosureChevron(props: { readonly open: boolean }) {
-  return (
-    <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
-      <ChevronRightIcon
-        className={cn(
-          "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-          props.open && "rotate-90",
-        )}
-      />
-    </span>
-  );
-}
-
-function PendingElevationRequest(props: {
-  readonly environmentId: EnvironmentId;
-  readonly item: ElevationRequestItem;
-  readonly agent: ElevationAgentView | null;
-  readonly headline: string;
-  readonly enrollKey: Uint8Array | null;
-  readonly command: ElevationCommandDisplay;
-  readonly facts: readonly ElevationRequestFact[];
-  readonly warnings: readonly ElevationWarningView[];
-  readonly decodeFailure: string | null;
-}) {
-  const { item, agent } = props;
-  const canRespond = useAtomValue(elevation.respond.permissionAtom(props.environmentId));
-  const deny = useElevationDeny();
-  const machine = useEnvironment(props.environmentId)?.label ?? null;
-  return (
-    <div
-      data-v2-item-type={item.type}
-      className="flex min-w-0 flex-col gap-2 rounded-xl border border-border/60 bg-card p-4"
-    >
-      <p className="line-clamp-3 text-sm font-semibold break-words text-foreground">
-        {props.headline}
-      </p>
-      {agent !== null || machine !== null ? (
-        <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {agent !== null ? <ElevationAgentMark agent={agent} /> : null}
-          {agent !== null && machine !== null ? <span aria-hidden>·</span> : null}
-          {machine !== null ? <span className="truncate">{machine}</span> : null}
-        </p>
-      ) : null}
-      {props.enrollKey !== null ? (
-        <ElevationComparisonCode publicKey={props.enrollKey} />
-      ) : (
-        <CommandDisclosure command={props.command} facts={props.facts} warnings={props.warnings} />
-      )}
-      {props.decodeFailure !== null ? (
-        <p className="text-xs text-muted-foreground">{props.decodeFailure}</p>
-      ) : null}
-      {item.changes ? (
-        <ChangesPointer
-          environmentId={props.environmentId}
-          threadId={item.threadId}
-          changes={item.changes}
-        />
-      ) : null}
-      {deny.error ? (
-        <p role="alert" className="text-xs text-destructive">
-          {deny.error}
-        </p>
-      ) : null}
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <SmartphoneIcon className="size-3.5 shrink-0" aria-hidden />
-          {ELEVATION_APPROVE_ON_PHONE}
-        </p>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost-muted"
-          disabled={!canRespond || deny.pending}
-          onClick={() =>
-            void deny.run({ environmentId: props.environmentId, requestId: item.requestId })
-          }
-        >
-          Deny
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/** The short command as one quiet line; opens to the full command and non-default facts. */
-function CommandDisclosure(props: {
-  readonly command: ElevationCommandDisplay;
-  readonly facts: readonly ElevationRequestFact[];
-  readonly warnings: readonly ElevationWarningView[];
-}) {
-  const { command } = props;
-  const [open, setOpen] = useState(false);
-  const full = command.lines.join("\n");
-  const expandable = full !== command.short || props.facts.length > 0 || props.warnings.length > 0;
-  const line = <code className="min-w-0 truncate font-mono">{command.short}</code>;
-  if (!expandable) {
-    return (
-      <p aria-label="Command" className="flex min-w-0 text-xs text-muted-foreground">
-        {line}
-      </p>
-    );
-  }
-  return (
-    <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
-      <button
-        type="button"
-        aria-expanded={open}
-        className="flex max-w-full min-w-0 items-center gap-1 self-start text-left hover:text-foreground"
-        onClick={() => setOpen((current) => !current)}
-      >
-        {line}
-        <DisclosureChevron open={open} />
-      </button>
-      {open ? (
-        <>
-          <code className="block font-mono break-all whitespace-pre-wrap">{full}</code>
-          <ElevationRequestFactLines facts={props.facts} warnings={props.warnings} />
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-/** The checkout's uncommitted changes when the request arrived; opens the diff panel. */
-function ChangesPointer(props: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ElevationRequestItem["threadId"];
-  readonly changes: NonNullable<ElevationRequestItem["changes"]>;
-}) {
-  const { changes } = props;
-  const openDiff = () => {
-    const threadRef = scopeThreadRef(props.environmentId, props.threadId);
-    useDiffPanelStore.getState().selectGitScope(threadRef, "unstaged");
-    useRightPanelStore.getState().open(threadRef, "diff");
-  };
-  return (
-    <button
-      type="button"
-      className="flex min-w-0 items-center gap-1.5 self-start text-xs text-muted-foreground hover:text-foreground"
-      onClick={openDiff}
-    >
-      <FileDiffIcon className="size-3.5 shrink-0" aria-hidden />
-      <span>Uncommitted changes</span>
-      <span aria-hidden>·</span>
-      <span>
-        {changes.files} file{changes.files === 1 ? "" : "s"}
-      </span>
-      <span className="text-success">+{changes.additions}</span>
-      <span className="text-destructive">−{changes.deletions}</span>
-      <ChevronRightIcon className="size-3.5 shrink-0" aria-hidden />
-    </button>
   );
 }

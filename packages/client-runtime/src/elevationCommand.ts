@@ -348,6 +348,28 @@ function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1) || path;
 }
 
+/**
+ * A long path argument with its middle elided, so the one-line form reaches the words that tell
+ * two requests apart. The start stays, because it says where the command acts: `rm -rf
+ * /usr/…/app` must not read as a relative `app`. Only words that are plainly paths shorten, and
+ * only long ones: `/var/db/x` stays whole, and `system/x` (a launchd target) or `origin/main`
+ * aren't paths. An option's or variable's value after `=` shortens the same way.
+ */
+function shortArg(arg: string): string {
+  const assignment = /^(--?[^=]+=|[A-Za-z_][A-Za-z0-9_]*=)(.*)$/s.exec(arg);
+  if (assignment !== null) return `${assignment[1]}${shortArg(assignment[2]!)}`;
+  const prefix = /^(\/|\.{1,2}\/|~\/)/.exec(arg)?.[0];
+  if (prefix === undefined) return arg;
+  const components = arg
+    .slice(prefix.length)
+    .split("/")
+    .filter((part) => part !== "");
+  if (prefix === "/") {
+    return components.length >= 4 ? `/${components[0]}/…/${components.at(-1)}` : arg;
+  }
+  return components.length >= 3 ? `${prefix}…/${components.at(-1)}` : arg;
+}
+
 /** Where a sudo's program sits in its args, and its target when that isn't root. */
 function sudoTarget(
   args: readonly (string | null)[],
@@ -402,7 +424,7 @@ function sudoShort(args: readonly (string | null)[]): string | null {
   if (target === null) return null;
   const rest = args.slice(target.index + 1);
   if (rest.some((arg) => arg === null)) return null;
-  return [basename(args[target.index]!), ...(rest as string[])].join(" ");
+  return [basename(args[target.index]!), ...(rest as string[]).map(shortArg)].join(" ");
 }
 
 /** What the card's command line shows, all text escaped for display. */
@@ -410,8 +432,9 @@ export interface ElevationCommandDisplay {
   /** Every line of the command as written. */
   readonly lines: readonly string[];
   /**
-   * The quiet one-line form: the program by name and its arguments ("ls /var/db"), or the
-   * programs when the command runs several sudos ("id, ls"). Never sudo itself.
+   * The quiet one-line form: the program by name and its arguments, long paths with their middle
+   * elided ("python3 /Users/…/deploy.py --wait"), or the programs when the command runs several sudos
+   * ("id, ls"). Never sudo itself.
    */
   readonly short: string;
   /** Programs run as admin, with their target when it isn't root. */
@@ -438,7 +461,10 @@ export function elevationCommandDisplay(
   const argv = payload.command.argv;
   const sessionCommand = session?.command;
   const found = sessionCommand === undefined ? null : elevationSudoCalls(sessionCommand);
-  const argvShort = [argv[0] === undefined ? "" : basename(argv[0]), ...argv.slice(1)].join(" ");
+  const argvShort = [
+    argv[0] === undefined ? "" : basename(argv[0]),
+    ...argv.slice(1).map(shortArg),
+  ].join(" ");
   let raw: readonly string[];
   let programs: string[];
   let short: string;

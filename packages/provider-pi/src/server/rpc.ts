@@ -195,6 +195,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     const forget = (yield* ProviderProcesses).register({
       pid: child.pid,
       threadId: ownerThreadId,
+      driver: "pi",
     });
     yield* Scope.addFinalizer(scope, Effect.sync(forget));
   }
