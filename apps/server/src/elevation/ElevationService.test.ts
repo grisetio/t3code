@@ -416,10 +416,19 @@ describe("ElevationService", () => {
           alg: "es256-der",
           signature,
         });
-        // Answered requests leave the set phones sign from.
+        // Answered requests leave the set phones sign from, saying who answered.
         assert.deepStrictEqual(
           (yield* Stream.runHead(fixture.service.pendingRequests)).pipe(Option.getOrThrow),
-          { requests: [] },
+          {
+            requests: [],
+            ended: [
+              {
+                requestId: request.requestId,
+                elevationStatus: "approved",
+                resolvedBy: { deviceLabel: "Pixel", keyId: enrolledKeyId },
+              },
+            ],
+          },
         );
 
         yield* module.send({ type: "result", outcome: "approved" });
@@ -481,7 +490,10 @@ describe("ElevationService", () => {
       assert.isNull(resolved.resolvedBy);
       assert.deepStrictEqual(
         (yield* Stream.runHead(fixture.service.pendingRequests)).pipe(Option.getOrThrow),
-        { requests: [] },
+        {
+          requests: [],
+          ended: [{ requestId: request.requestId, elevationStatus: "cancelled", resolvedBy: null }],
+        },
       );
       const late = yield* fixture.service
         .respond({ requestId: request.requestId, decision: "deny" })
@@ -544,12 +556,16 @@ describe("ElevationService", () => {
     Effect.gen(function* () {
       yield* setupRunningThread;
       const fixture = yield* makeFixture();
-      const { module } = yield* openRequest(fixture);
+      const { module, request } = yield* openRequest(fixture);
       yield* Queue.take(fixture.commands);
       yield* TestClock.setTime((basic.decoded.expiresAt + 5) * 1000);
       const resolved = yield* nextResolve(fixture.commands);
       assert.strictEqual(resolved.elevationStatus, "expired");
       assert.isNull(yield* module.receive);
+      assert.deepStrictEqual(
+        Option.getOrThrow(yield* Stream.runHead(fixture.service.pendingRequests)).ended,
+        [{ requestId: request.requestId, elevationStatus: "expired", resolvedBy: null }],
+      );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
@@ -557,14 +573,17 @@ describe("ElevationService", () => {
     Effect.gen(function* () {
       yield* setupRunningThread;
       const fixture = yield* makeFixture();
-      const { module } = yield* openRequest(fixture);
+      const { module, request } = yield* openRequest(fixture);
       yield* Queue.take(fixture.commands);
       yield* module.close;
       const resolved = yield* nextResolve(fixture.commands);
       assert.strictEqual(resolved.elevationStatus, "cancelled");
       assert.deepStrictEqual(
         Option.getOrThrow(yield* Stream.runHead(fixture.service.pendingRequests)),
-        { requests: [] },
+        {
+          requests: [],
+          ended: [{ requestId: request.requestId, elevationStatus: "cancelled", resolvedBy: null }],
+        },
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );

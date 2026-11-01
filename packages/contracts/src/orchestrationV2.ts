@@ -39,9 +39,9 @@ import {
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   ElevationBase64Url,
-  ElevationKeyId,
   ElevationRequestId,
   ElevationRequestStatus,
+  ElevationResolvedBy,
   ElevationWarning,
 } from "./elevation.ts";
 import {
@@ -1361,11 +1361,7 @@ export const OrchestrationV2ElevationRequestFailure = Schema.Literals([
 export type OrchestrationV2ElevationRequestFailure =
   typeof OrchestrationV2ElevationRequestFailure.Type;
 
-export const OrchestrationV2ElevationResolvedBy = Schema.Struct({
-  deviceLabel: Schema.String,
-  /** The approving key, or the enrolled key a phone named when it denied. */
-  keyId: Schema.optionalKey(ElevationKeyId),
-});
+export const OrchestrationV2ElevationResolvedBy = ElevationResolvedBy;
 export type OrchestrationV2ElevationResolvedBy = typeof OrchestrationV2ElevationResolvedBy.Type;
 
 /** Uncommitted changes in the checkout at the request's cwd when it arrived. */
