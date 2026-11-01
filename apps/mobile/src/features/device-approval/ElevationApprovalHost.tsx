@@ -287,7 +287,7 @@ function ThreadlessElevationRequest(props: {
       statusBarTranslucent
       onRequestClose={closeElevationApproval}
     >
-      <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>
+      <View className="flex-1 bg-screen" style={{ paddingTop: insets.top }}>
         <SheetHeader presentation="inline" title="Admin request" onClose={closeElevationApproval} />
         <ScrollView
           className="flex-1"
