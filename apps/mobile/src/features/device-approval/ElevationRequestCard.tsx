@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   decodeElevationRequestPayload,
   elevationHeadline,
@@ -23,6 +24,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { elevation } from "../../state/elevation";
 import { AppText as Text } from "../../components/ui/AppText";
 import {
   THREAD_DISCLOSURE_TRANSITION_MS,
@@ -83,6 +85,14 @@ export function ElevationRequestCard(props: {
     const timer = setTimeout(() => setHeld(false), ELEVATION_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [settled]);
+
+  // The turn item doesn't carry how many requests came before; the pending request does.
+  const series = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).find(
+    (entry) =>
+      entry.environmentId === props.environmentId &&
+      item.type === "elevation_request" &&
+      entry.request.requestId === item.requestId,
+  )?.request.series;
 
   const showCard =
     item.type === "elevation_request" &&
@@ -160,6 +170,7 @@ export function ElevationRequestCard(props: {
               decoded: decoded!,
               explanation: item.explanation,
               changes: item.changes,
+              series,
             }}
             onApproving={setHeld}
             onAnswered={(decision) => {

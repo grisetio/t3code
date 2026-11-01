@@ -1,5 +1,6 @@
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
-import { use, useCallback, useMemo } from "react";
+import { use, useCallback, useEffect, useMemo } from "react";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,6 +16,7 @@ import {
   useNativeColumnLayoutMetrics,
   useNativeLayoutMetrics,
 } from "../../native/native-layout-metrics";
+import { elevationListHighlightAtom } from "../device-approval/elevationApprovalTarget";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
 import { dispatchHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { WorkspaceConnectionTitle } from "../home/WorkspaceConnectionTitle";
@@ -74,7 +76,12 @@ function WorkspaceRootContent() {
   const bottomBarInset = useDuoBottomBarInset();
   const keyboardHeight = useKeyboardState((keyboard) => keyboard.height);
   const workspace = useWorkspaceTabs()!;
-  const { state } = workspace;
+  const { state, dispatch } = workspace;
+  // The tabs live here on iOS, so the request the banner opened is shown from here.
+  const elevationHighlight = useAtomValue(elevationListHighlightAtom);
+  useEffect(() => {
+    if (elevationHighlight !== null) dispatch({ type: "select", tab: "threads" });
+  }, [elevationHighlight, dispatch]);
   const renderHeaderTitle = useCallback(
     () => (
       <WorkspaceRootTitle

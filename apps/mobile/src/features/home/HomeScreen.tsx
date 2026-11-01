@@ -16,7 +16,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { use, useEffect, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
@@ -91,6 +91,7 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
+import { ThreadlessElevationRequests } from "../device-approval/ThreadlessElevationRequests";
 
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
@@ -342,6 +343,23 @@ export function HomeScreen(props: HomeScreenProps) {
   };
   const onFabScroll = useFabScroll();
   const listRef = useRef<LegendListRef>(null);
+  const focused = useIsFocused();
+  // A native primary column stays in view while the detail beside it has focus.
+  const listOnScreen =
+    (focused || primaryColumn !== null) &&
+    (workspace?.state.selectedTab ?? "threads") === "threads";
+  const elevationRequests = (
+    <ThreadlessElevationRequests
+      onScreen={listOnScreen}
+      pane={primaryColumn ? "sidebar" : "screen"}
+      onReveal={() =>
+        listRef.current?.scrollToOffset({
+          offset: Platform.OS === "ios" ? -insets.top : 0,
+          animated: true,
+        })
+      }
+    />
+  );
   const searchMode = workspace?.state.tabs.threads.searchMode;
   const restoredOffset = workspace?.state.tabs.threads.scrollOffset;
   useEffect(() => {
@@ -758,6 +776,7 @@ export function HomeScreen(props: HomeScreenProps) {
           }}
         >
           <View className="w-full max-w-[430px]">
+            {elevationRequests}
             <EmptyState
               title={emptyState.title}
               detail={emptyState.detail}
@@ -802,6 +821,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onProjectChange={props.onProjectChange}
         />
       ) : null}
+      {elevationRequests}
     </>
   );
 
@@ -839,6 +859,7 @@ export function HomeScreen(props: HomeScreenProps) {
           className="flex-1 items-center justify-center overflow-hidden rounded-t-[28px] bg-screen px-4"
           style={{ paddingBottom: insets.bottom }}
         >
+          <View className="w-full">{elevationRequests}</View>
           {v2ListEmpty}
         </View>
       </View>
