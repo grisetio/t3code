@@ -5,12 +5,15 @@ import {
   parseElevationEnrollCommand,
   type ElevationPayload,
   type ElevationPayloadDecodeFailure,
+  type ElevationRequestSeries,
   type ElevationStatus,
   type ElevationWarning,
   type EnvironmentId,
   type OrchestrationV2ElevationRequestFailure,
   type OrchestrationV2TurnItem,
+  type ProviderDriverKind,
   type ServerProvider,
+  defaultInstanceIdForDriver,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 
@@ -244,14 +247,23 @@ export function elevationRequestFacts(
 
 export interface ElevationAgent {
   readonly driver: ServerProvider["driver"];
-  readonly instanceId: ServerProvider["instanceId"];
+  /** Null when only the driver is known and several instances run it. */
+  readonly instanceId: ServerProvider["instanceId"] | null;
   readonly iconUrl: ServerProvider["iconUrl"];
   readonly name: string;
 }
 
+const agentOf = (provider: ServerProvider): ElevationAgent => ({
+  driver: provider.driver,
+  instanceId: provider.instanceId,
+  iconUrl: provider.iconUrl,
+  name: resolveProviderInstanceDisplayName(provider),
+});
+
 /**
- * The agent that asked, from the provider instance its thread ran on. Null when the thread or its
- * provider isn't known here, in which case surfaces show no mark rather than a guess.
+ * The agent that asked: the provider instance its thread ran on, or else the driver the server
+ * found on its process. Null when neither is known here, in which case surfaces show no mark
+ * rather than a guess.
  */
 export function elevationAgent(
   thread: {
@@ -259,18 +271,124 @@ export function elevationAgent(
     readonly runtime: { readonly providerInstanceId: ServerProvider["instanceId"] } | null;
   } | null,
   providers: readonly ServerProvider[],
+  driver?: ProviderDriverKind,
 ): ElevationAgent | null {
-  if (thread === null) return null;
-  const instanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
-  const provider = providers.find((candidate) => candidate.instanceId === instanceId);
-  return provider === undefined
-    ? null
-    : {
-        driver: provider.driver,
-        instanceId: provider.instanceId,
-        iconUrl: provider.iconUrl,
-        name: resolveProviderInstanceDisplayName(provider),
-      };
+  if (thread !== null) {
+    const instanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const provider = providers.find((candidate) => candidate.instanceId === instanceId);
+    if (provider !== undefined) return agentOf(provider);
+  }
+  if (driver === undefined) return null;
+  const running = providers.filter((candidate) => candidate.driver === driver);
+  if (running.length === 1) return agentOf(running[0]!);
+  return {
+    driver,
+    instanceId: null,
+    iconUrl: running[0]?.iconUrl,
+    name: resolveProviderInstanceDisplayName({
+      driver,
+      instanceId: defaultInstanceIdForDriver(driver),
+    }),
+  };
+}
+
+/** Who a card names for a request T3 raised itself, such as the setup test. */
+const ELEVATION_T3_NAME = "T3 Code";
+
+/** Under the headline, for a request that reached this flow but matched no thread. */
+const ELEVATION_THREAD_NOT_FOUND = "thread not found";
+
+/**
+ * The quiet line under a card's headline. The agent's mark leads when the headline is its reason;
+ * a headline that already names the agent doesn't repeat it. Agents always run in a thread, so a
+ * request with none is one T3 couldn't place, and says so. Pass a null machine where a header
+ * above already names it.
+ */
+export function elevationRequestSource(input: {
+  readonly explanation: string | null;
+  readonly threadId: string | null;
+  readonly raisedByT3: boolean | undefined;
+  readonly machine: string | null;
+}): { readonly agentMark: boolean; readonly parts: readonly string[] } {
+  const byT3 = input.raisedByT3 === true;
+  const parts = [
+    ...(byT3 ? [ELEVATION_T3_NAME] : []),
+    ...(input.machine === null ? [] : [input.machine]),
+    ...(input.threadId === null && !byT3 ? [ELEVATION_THREAD_NOT_FOUND] : []),
+  ];
+  return { agentMark: !byT3 && elevationReason(input.explanation) !== null, parts };
+}
+
+function ordinal(value: number): string {
+  const tens = value % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : (["th", "st", "nd", "rd"][value % 10] ?? "th");
+  return `${value}${suffix}`;
+}
+
+/** "4 s ago", coarse enough not to need repainting more than every few seconds. */
+function elevationAgo(epochMillis: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - epochMillis) / 1000));
+  if (seconds < 1) return "just now";
+  if (seconds < 60) return `${seconds} s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  return `${Math.floor(minutes / 60)} h ago`;
+}
+
+/** How soon `elevationAgo` would read differently, for a surface that keeps it current. */
+export function elevationAgoRefreshMs(epochMillis: number, now: number): number {
+  return now - epochMillis < 60_000 ? 1_000 : 30_000;
+}
+
+/** A request no thread claims counts within its machine's last few minutes, not a turn. */
+const seriesScope = (threadId: string | null) =>
+  threadId === null ? "in a few minutes" : "this turn";
+
+/**
+ * "2nd request this turn · first approved 4 s ago", under the headline from the second request
+ * on. `ordinal` is "2nd request", the part a surface may set in the foreground colour.
+ */
+export function elevationSeriesLine(
+  series: ElevationRequestSeries,
+  threadId: string | null,
+  now: number,
+): { readonly ordinal: string; readonly rest: string } {
+  const { first } = series;
+  const firstText =
+    first.elevationStatus === "pending" || first.resolvedAt === undefined
+      ? "first still waiting"
+      : `first ${first.elevationStatus} ${elevationAgo(first.resolvedAt.epochMilliseconds, now)}`;
+  return {
+    ordinal: `${ordinal(series.ordinal)} request`,
+    rest: ` ${seriesScope(threadId)} · ${firstText}`,
+  };
+}
+
+/**
+ * A banner's two lines. The first request leads with the card's headline, then its thread and
+ * machine; from the second on it says which request this is, the headline moving underneath.
+ */
+export function elevationNoticeText(input: {
+  readonly headline: string;
+  readonly series: ElevationRequestSeries | undefined;
+  readonly threadId: string | null;
+  readonly threadTitle: string | null;
+  readonly raisedByT3: boolean | undefined;
+  readonly machine: string;
+}): { readonly title: string; readonly detail: string } {
+  const byT3 = input.raisedByT3 === true;
+  if (input.series !== undefined) {
+    return {
+      title: `${ordinal(input.series.ordinal)} admin request ${seriesScope(input.threadId)}`,
+      detail: [input.headline, input.machine].join(" · "),
+    };
+  }
+  const where =
+    input.threadId === null
+      ? [...(byT3 ? [ELEVATION_T3_NAME] : []), input.machine]
+      : [...(input.threadTitle === null ? [] : [input.threadTitle]), input.machine];
+  const notFound = input.threadId === null && !byT3 ? [ELEVATION_THREAD_NOT_FOUND] : [];
+  return { title: input.headline, detail: [...where, ...notFound].join(" · ") };
 }
 
 const ELEVATION_FAILURE_MESSAGES: Record<OrchestrationV2ElevationRequestFailure, string> = {

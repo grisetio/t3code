@@ -87,6 +87,48 @@ describe("elevationCommandDisplay", () => {
     expect(short('f=/var/db; sudo -k /bin/ls "$f"')).toBe("ls");
   });
 
+  it("shortens long path arguments to their last component, so two requests tell apart", () => {
+    const deploy =
+      "/Users/k/.local/state/t3-code-visuals/worktrees/nix-hosts/t3-device-approval/hosts/darwin/deploy/deploy.py";
+    const short = (command: string) =>
+      elevationCommandDisplay({ command: { argv: ["python3"] }, session: session(command) }).short;
+    expect(
+      short(
+        `sudo python3 ${deploy} _submit-system /Users/k/w/t3-device-approval /nix/store/q8v-nix-2.31/bin/nix darwin-7ede7e6d`,
+      ),
+    ).toBe("python3 deploy.py _submit-system t3-device-approval nix darwin-7ede7e6d");
+    expect(short(`sudo python3 ${deploy} _status-system darwin-7ede7e6d --wait`)).toBe(
+      "python3 deploy.py _status-system darwin-7ede7e6d --wait",
+    );
+    // The full command is still there to expand.
+    expect(
+      elevationCommandDisplay({
+        command: { argv: ["python3"] },
+        session: session(`sudo python3 ${deploy} --wait`),
+      }).lines,
+    ).toEqual([`sudo python3 ${deploy} --wait`]);
+    // Values after `=`, for options and variables alike.
+    expect(short("sudo --preserve-env=PATH nix --config=/etc/nix/conf.d/x.conf run")).toBe(
+      "nix --config=x.conf run",
+    );
+    expect(short("sudo NIX_CONF=/etc/nix/conf.d/x.conf nix run")).toBe("nix run");
+    expect(
+      elevationCommandDisplay({ command: { argv: ["env", "CONF=./a/b/c.toml", "x"] } }).short,
+    ).toBe("env CONF=c.toml x");
+    // Short paths stay whole; words that only contain a slash aren't paths.
+    expect(short("sudo rm -rf /etc")).toBe("rm -rf /etc");
+    expect(short("sudo launchctl kickstart -k system/com.example.agent")).toBe(
+      "launchctl kickstart -k system/com.example.agent",
+    );
+    expect(short("sudo curl -o /tmp/x https://example.com/a/b/c")).toBe(
+      "curl -o /tmp/x https://example.com/a/b/c",
+    );
+    // Shortening happens before escaping, so the name still shows its control characters.
+    expect(
+      elevationCommandDisplay({ command: { argv: ["cat", "/var/log/a\u202Eb.log"] } }).short,
+    ).toBe("cat a\\u{202E}b.log");
+  });
+
   it("lists the programs when the command runs several sudos", () => {
     const display = elevationCommandDisplay({
       command: { argv: ["/usr/bin/id", "-u"] },

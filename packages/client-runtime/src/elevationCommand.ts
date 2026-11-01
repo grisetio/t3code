@@ -351,6 +351,21 @@ function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1) || path;
 }
 
+/**
+ * A long path argument by its last component, so the one-line form reaches the words that tell
+ * two requests apart. Only words that are plainly paths, with three or more components:
+ * `system/x` (a launchd target) and `origin/main` aren't paths, and `/etc` or `/var/db` stay
+ * whole so `rm -rf /etc` never reads as a relative `etc`. An option's or variable's value
+ * after `=` shortens the same way.
+ */
+function shortArg(arg: string): string {
+  const assignment = /^(--?[^=]+=|[A-Za-z_][A-Za-z0-9_]*=)(.*)$/s.exec(arg);
+  if (assignment !== null) return `${assignment[1]}${shortArg(assignment[2]!)}`;
+  if (!/^(\/|\.{1,2}\/|~\/)/.test(arg)) return arg;
+  const components = arg.split("/").filter((part) => part !== "" && part !== "~");
+  return components.length >= 3 ? components.at(-1)! : arg;
+}
+
 /** Where a sudo's program sits in its args, and its target when that isn't root. */
 function sudoTarget(
   args: readonly (string | null)[],
@@ -405,7 +420,7 @@ function sudoShort(args: readonly (string | null)[]): string | null {
   if (target === null) return null;
   const rest = args.slice(target.index + 1);
   if (rest.some((arg) => arg === null)) return null;
-  return [basename(args[target.index]!), ...(rest as string[])].join(" ");
+  return [basename(args[target.index]!), ...(rest as string[]).map(shortArg)].join(" ");
 }
 
 /** What the card's command line shows, all text escaped for display. */
@@ -413,8 +428,9 @@ export interface ElevationCommandDisplay {
   /** Every line of the command as written. */
   readonly lines: readonly string[];
   /**
-   * The quiet one-line form: the program by name and its arguments ("ls /var/db"), or the
-   * programs when the command runs several sudos ("id, ls"). Never sudo itself.
+   * The quiet one-line form: the program by name and its arguments, long paths by their last
+   * component ("python3 deploy.py --wait"), or the programs when the command runs several sudos
+   * ("id, ls"). Never sudo itself.
    */
   readonly short: string;
   /** Programs run as admin, with their target when it isn't root. */
@@ -441,7 +457,10 @@ export function elevationCommandDisplay(
   const argv = payload.command.argv;
   const sessionCommand = session?.command;
   const found = sessionCommand === undefined ? null : elevationSudoCalls(sessionCommand);
-  const argvShort = [argv[0] === undefined ? "" : basename(argv[0]), ...argv.slice(1)].join(" ");
+  const argvShort = [
+    argv[0] === undefined ? "" : basename(argv[0]),
+    ...argv.slice(1).map(shortArg),
+  ].join(" ");
   let raw: readonly string[];
   let programs: string[];
   let short: string;
