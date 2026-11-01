@@ -54,6 +54,10 @@ and deletes its key; other phones keep approving. If you lose a phone, revoke
 it from another device or with the password; the password keeps working for
 `sudo` in a terminal.
 
+If `sudo` on a Mac stops with "unable to initialize PAM", macOS's own
+administrator prompt still runs a command as root:
+`osascript -e 'do shell script "<command>" with administrator privileges'`.
+
 Once a phone is set up, adding a phone, revoking, and turning off are approved
 on a phone by default. You can still use the sudo password instead; it passes
 through the T3 Code server on its way to `sudo`.
