@@ -113,7 +113,8 @@ export function resolveSubagentRowPresentation(
   };
 }
 
-export type WorkflowRailTone = SubagentRowTone | "queued";
+// A phase rail reads member statuses only; approvals show on the members' rows.
+export type WorkflowRailTone = Exclude<SubagentRowTone, "approval"> | "queued";
 
 export interface WorkflowRailItem {
   readonly key: string;
