@@ -175,7 +175,9 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   useSidebar,
+  useSidebarVisibility,
 } from "./ui/sidebar";
+import { ThreadlessElevationRequests } from "./elevation/ThreadlessElevationRequests";
 import {
   getThreadKeysToDeselectAfterDelete,
   useThreadSelectionStore,
@@ -2813,6 +2815,7 @@ interface SidebarProjectsContentProps {
 const SidebarProjectsContent = memo(function SidebarProjectsContent(
   props: SidebarProjectsContentProps,
 ) {
+  const sidebarVisible = useSidebarVisibility();
   const {
     showArm64IntelBuildWarning,
     arm64IntelBuildWarningDescription,
@@ -2881,6 +2884,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       }
     >
+      <div className="px-2 pt-2 empty:hidden">
+        <ThreadlessElevationRequests onScreen={sidebarVisible} />
+      </div>
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
         <SidebarGroup>
           <Alert variant="warning">

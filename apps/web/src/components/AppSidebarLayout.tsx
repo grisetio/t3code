@@ -45,6 +45,7 @@ import { SidebarBrandWidthProbe, SidebarChromeHeader } from "./sidebar/SidebarCh
 import { MainAppLocationTracker } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
+import { useElevationSidebarStore } from "./elevation/elevationSidebarStore";
 import { useProjects } from "../state/entities";
 import {
   clampThreadSidebarWidth,
@@ -328,6 +329,21 @@ function ProjectProjectionRetention() {
   return null;
 }
 
+// A request no thread claims waits at the top of the thread list; its notice opens it there.
+function ElevationSidebarReveal(props: { readonly isOnSettings: boolean }) {
+  const highlight = useElevationSidebarStore((state) => state.highlight);
+  const { isMobile, setOpen, setOpenMobile } = useSidebar();
+  const navigate = useNavigate();
+  const { isOnSettings } = props;
+  useEffect(() => {
+    if (highlight === null) return;
+    if (isOnSettings) void navigate({ to: "/" });
+    if (isMobile) setOpenMobile(true);
+    else void setOpen(true);
+  }, [highlight, isMobile, isOnSettings, navigate, setOpen, setOpenMobile]);
+  return null;
+}
+
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
@@ -438,6 +454,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <NavigationHistoryShortcuts />
         {isOnSettings ? null : <ThreadUndoShortcut />}
         <MainAppLocationTracker />
+        <ElevationSidebarReveal isOnSettings={isOnSettings} />
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );
