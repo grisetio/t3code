@@ -21,6 +21,7 @@ import {
   ELEVATION_HELPER_INSTALL_PATH,
   ElevationError,
   ElevationRequestId,
+  ProviderDriverKind,
   TurnItemId,
   type ElevationCheck,
   type ElevationDevice,
@@ -32,6 +33,7 @@ import {
   type ElevationPayload,
   type ElevationPendingRequest,
   type ElevationPendingRequests,
+  type ElevationRequestSeries,
   type ElevationRespondInput,
   type ElevationRevokeInput,
   type ElevationStatus,
@@ -119,6 +121,8 @@ const INSTALL_KEY_FILE_MAX_AGE_MS = 60 * 60 * 1000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const RUNNING_ITEM_STATUSES = new Set(["pending", "running", "waiting"]);
 const FINISHED_ITEM_STATUSES = new Set(["completed"]);
+// With no thread to bound a series, a machine's requests this close together read as one.
+const MACHINE_SERIES_WINDOW_MS = 5 * 60_000;
 
 export interface ElevationOptions {
   readonly user: string;
@@ -146,8 +150,18 @@ interface Answer {
   readonly resolvedBy: OrchestrationV2ElevationResolvedBy | null;
 }
 
+/** One turn's requests, or a machine's when no thread claims them. */
+interface RequestSeries {
+  /** Null for a machine's series, which ends after a quiet window instead. */
+  readonly runId: RunId | null;
+  count: number;
+  first: ElevationRequestSeries["first"];
+  lastAt: number;
+}
+
 interface PendingEntry {
   readonly request: ElevationPendingRequest;
+  readonly series: { readonly of: RequestSeries; readonly ordinal: number } | null;
   /** The run attribution picked, even when its thread item couldn't be recorded. */
   readonly runId: RunId | null;
   readonly interrupted: Deferred.Deferred<void>;
@@ -241,14 +255,50 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const pending = new Map<ElevationRequestId, PendingEntry>();
   const pendingRef = yield* SubscriptionRef.make<ElevationPendingRequests>({ requests: [] });
+  // Read at publish time, so a second request learns how the first ended once it does.
+  const published = (entry: PendingEntry): ElevationPendingRequest =>
+    entry.series === null || entry.series.ordinal < 2
+      ? entry.request
+      : {
+          ...entry.request,
+          series: { ordinal: entry.series.ordinal, first: entry.series.of.first },
+        };
   // Answered requests leave the set: the phone has nothing left to sign.
   const publish = Effect.suspend(() =>
     SubscriptionRef.set(pendingRef, {
-      requests: [...pending.values()]
-        .filter((entry) => entry.answer === null)
-        .map((entry) => entry.request),
+      requests: [...pending.values()].filter((entry) => entry.answer === null).map(published),
     }),
   );
+  const series = new Map<string, RequestSeries>();
+  /** Counts an agent's request in its run, or its machine's for one no thread claims. */
+  const joinSeries = (
+    owner: { readonly runId: RunId } | { readonly machineId: string },
+    now: number,
+    liveRunIds: ReadonlySet<RunId>,
+  ): NonNullable<PendingEntry["series"]> => {
+    for (const [key, entry] of series) {
+      const ended =
+        entry.runId === null
+          ? now - entry.lastAt > MACHINE_SERIES_WINDOW_MS
+          : !liveRunIds.has(entry.runId);
+      if (ended) series.delete(key);
+    }
+    const key = "runId" in owner ? `run:${owner.runId}` : `machine:${owner.machineId}`;
+    const existing = series.get(key);
+    if (existing !== undefined) {
+      existing.count++;
+      existing.lastAt = now;
+      return { of: existing, ordinal: existing.count };
+    }
+    const created: RequestSeries = {
+      runId: "runId" in owner ? owner.runId : null,
+      count: 1,
+      first: { elevationStatus: "pending" },
+      lastAt: now,
+    };
+    series.set(key, created);
+    return { of: created, ordinal: 1 };
+  };
   const serverSudos = new Set<OwnSudo>();
   let serverIdentity: ReturnType<ElevationOptions["server"]> | undefined;
   const serverProcess = () => (serverIdentity ??= options.server());
@@ -444,11 +494,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       return;
     }
     if (!options.peerCredentialsSupported() && !options.plausiblePeer(decoded.value)) return;
+    const runs = yield* liveRuns;
     const attribution = attribute({
       hello: decoded.value,
       now: DateTime.toEpochMillis(yield* DateTime.now),
       server: serverProcess(),
-      liveRuns: yield* liveRuns,
+      liveRuns: runs,
       providerProcesses: providerProcesses.list(),
       serverSudos: [...serverSudos],
     });
@@ -549,6 +600,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       // A run that ended meanwhile still gets the banner, without a thread item.
       if (Option.isSome(recorded)) item = { run: attribution.run, turnItemId };
     }
+    const createdAt = yield* DateTime.now;
     const entry: PendingEntry = {
       request: {
         requestId,
@@ -558,8 +610,22 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         explanation: attribution.explanation,
         ...(attribution.command === undefined ? {} : { agentCommand: attribution.command }),
         ...(requestChanges === null ? {} : { changes: requestChanges }),
-        createdAt: yield* DateTime.now,
+        ...(attribution.driver === undefined
+          ? {}
+          : { driver: ProviderDriverKind.make(attribution.driver) }),
+        ...(ownSudo === undefined ? {} : { raisedByT3: true }),
+        createdAt,
       },
+      series:
+        ownSudo !== undefined
+          ? null
+          : joinSeries(
+              attribution.run === null
+                ? { machineId: payload.success.host.machineId }
+                : { runId: attribution.run.runId },
+              DateTime.toEpochMillis(createdAt),
+              new Set(runs.map((run) => run.runId)),
+            ),
       runId: attribution.run?.runId ?? null,
       interrupted: yield* Deferred.make<void>(),
       payload: payload.success,
@@ -597,6 +663,15 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       Effect.as<Outcome>({ elevationStatus: "cancelled" }),
     );
     const outcome = yield* Effect.raceAllFirst([waitForResult, expire, interrupted]).pipe(
+      Effect.tap((ended) =>
+        Effect.gen(function* () {
+          if (entry.series?.ordinal !== 1) return;
+          entry.series.of.first = {
+            elevationStatus: ended.elevationStatus,
+            resolvedAt: yield* DateTime.now,
+          };
+        }),
+      ),
       Effect.onInterrupt(() =>
         Effect.sync(() => send({ type: "cancel", reason: "shutdown" })).pipe(
           Effect.andThen(

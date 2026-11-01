@@ -11,6 +11,8 @@ export interface ProviderProcess {
   readonly startTime: number | null;
   /** Null for a process shared by several threads (Codex app-server, OpenCode 2.x). */
   readonly threadId: string | null;
+  /** The provider driver that runs it, so a request no thread claims still names its agent. */
+  readonly driver: string | null;
 }
 
 export interface ProviderProcessesShape {
@@ -18,6 +20,7 @@ export interface ProviderProcessesShape {
   readonly register: (input: {
     readonly pid: number;
     readonly threadId: string | null;
+    readonly driver: string | null;
   }) => () => void;
   readonly list: () => ReadonlyArray<ProviderProcess>;
 }
@@ -25,4 +28,10 @@ export interface ProviderProcessesShape {
 export const ProviderProcesses = Context.Reference<ProviderProcessesShape>(
   "@t3tools/shared/ProviderProcesses",
   { defaultValue: () => ({ register: () => () => {}, list: () => [] }) },
+);
+
+/** The driver a shared runtime (ACP) spawns for; its adapter provides it beside the thread. */
+export const ProviderProcessDriver = Context.Reference<string | null>(
+  "@t3tools/shared/ProviderProcesses/Driver",
+  { defaultValue: () => null },
 );

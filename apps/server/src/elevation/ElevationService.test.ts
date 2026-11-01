@@ -587,11 +587,32 @@ describe("ElevationService", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("says a turn's second request is one, and how the first ended", () =>
+    Effect.gen(function* () {
+      yield* setupRunningThread;
+      const fixture = yield* makeFixture();
+      const first = yield* openRequest(fixture);
+      assert.isUndefined(first.request.series);
+      yield* Queue.take(fixture.commands);
+      yield* fixture.service.respond(approval(first.request.requestId));
+      yield* first.module.receive;
+      yield* TestClock.adjust("3 seconds");
+      yield* first.module.send({ type: "result", outcome: "approved" });
+      yield* nextResolve(fixture.commands);
+
+      const second = yield* openRequest(fixture);
+      assert.deepStrictEqual(second.request.series, {
+        ordinal: 2,
+        first: { elevationStatus: "approved", resolvedAt: DateTime.makeUnsafe(3_000) },
+      });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("shows a sudo from a shared provider process without a thread", () =>
     Effect.gen(function* () {
       yield* setupRunningThread;
       const fixture = yield* makeFixture({
-        providerProcesses: [{ pid: 300, startTime: 7, threadId: null }],
+        providerProcesses: [{ pid: 300, startTime: 7, threadId: null, driver: "codex" }],
       });
       const module = yield* connectModule(fixture.socketPath);
       yield* module.send({
@@ -607,8 +628,40 @@ describe("ElevationService", () => {
       const [request] = yield* firstPending(fixture.service);
       assert.isNull(request?.threadId);
       assert.isNull(request?.turnItemId);
+      assert.strictEqual(request?.driver, "codex");
       yield* fixture.service.respond({ requestId: request!.requestId, decision: "deny" });
       assert.deepStrictEqual(yield* module.receive, { type: "response", decision: "deny" });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("counts requests no thread claims per machine, within a few minutes", () =>
+    Effect.gen(function* () {
+      yield* setupRunningThread;
+      const fixture = yield* makeFixture({
+        providerProcesses: [{ pid: 300, startTime: 7, threadId: null, driver: "codex" }],
+      });
+      const threadless = Effect.gen(function* () {
+        const module = yield* connectModule(fixture.socketPath);
+        yield* module.send({
+          ...hello([chainEntry(300, ["codex", "app-server"]), serverEntry]),
+          argv: ["sudo", "whoami"],
+        });
+        yield* module.receive;
+        yield* module.send({ type: "request", payload: basic.payload });
+        const [request] = yield* firstPending(fixture.service);
+        yield* fixture.service.respond({ requestId: request!.requestId, decision: "deny" });
+        yield* module.receive;
+        yield* module.send({ type: "result", outcome: "denied" });
+        assert.isNull(yield* module.receive);
+        return request!;
+      });
+      assert.isUndefined((yield* threadless).series);
+      assert.deepStrictEqual((yield* threadless).series, {
+        ordinal: 2,
+        first: { elevationStatus: "denied", resolvedAt: DateTime.makeUnsafe(0) },
+      });
+      yield* TestClock.adjust("6 minutes");
+      assert.isUndefined((yield* threadless).series);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
@@ -832,6 +885,10 @@ describe("ElevationService helper", () => {
         decision: "mine",
         ownSudo: true,
       });
+      yield* module.send({ type: "request", payload: basic.payload });
+      const [request] = yield* firstPending(fixture.service);
+      assert.isTrue(request?.raisedByT3);
+      assert.isUndefined(request?.series);
       yield* module.close;
       yield* Effect.promise(async () => {
         await release.write("\n");

@@ -39,6 +39,8 @@ export type Attribution =
       readonly explanation: string | null;
       /** The matched tool call's command line. */
       readonly command?: string;
+      /** The driver of the provider process the sudo runs under, when one is registered. */
+      readonly driver?: string;
       /** Set when the sudo is one this server spawned. */
       readonly serverSudo?: ServerSudo;
     };
@@ -104,7 +106,7 @@ const sameArgv = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
   basename(left[0]) === basename(right[0]) &&
   left.every((value, index) => index === 0 || value === right[index]);
 
-export function attribute(input: {
+interface AttributionInput {
   readonly hello: Pick<Hello, "argv" | "chain">;
   /** Epoch millis when the sudo asked. */
   readonly now: number;
@@ -112,7 +114,26 @@ export function attribute(input: {
   readonly liveRuns: ReadonlyArray<LiveRun>;
   readonly providerProcesses: ReadonlyArray<ProviderProcess>;
   readonly serverSudos: ReadonlyArray<ServerSudo>;
-}): Attribution {
+}
+
+const isProcessAt =
+  (entry: Hello["chain"][number]) =>
+  (process: Pick<ProviderProcess, "pid" | "startTime">): boolean =>
+    process.pid === entry.pid &&
+    (process.startTime === null || process.startTime === entry.startTime);
+
+export function attribute(input: AttributionInput): Attribution {
+  const found = attributeThread(input);
+  if (found.type === "not_mine" || found.serverSudo !== undefined) return found;
+  // Every agent sudo reaches here only through a provider process or a matched tool call; the
+  // nearest registered process names the agent even when no thread could be told apart.
+  const driver = input.hello.chain
+    .map((entry) => input.providerProcesses.find(isProcessAt(entry)))
+    .find((process) => process !== undefined)?.driver;
+  return driver == null ? found : { ...found, driver };
+}
+
+function attributeThread(input: AttributionInput): Attribution {
   const { hello, server } = input;
   const serverIndex = hello.chain.findIndex(
     (entry) =>
@@ -174,11 +195,7 @@ export function attribute(input: {
   }
 
   const providerProcessAt = (entry: (typeof belowServer)[number]) =>
-    input.providerProcesses.find(
-      (process) =>
-        process.pid === entry.pid &&
-        (process.startTime === null || process.startTime === entry.startTime),
-    );
+    input.providerProcesses.find(isProcessAt(entry));
   for (const entry of belowServer) {
     const process = providerProcessAt(entry);
     if (process === undefined) continue;

@@ -972,7 +972,11 @@ export const layerQueryRunner: Layer.Layer<
                     stopScope?.();
                   },
                   (pid) => {
-                    forget = providerProcesses.register({ pid, threadId: input.threadId });
+                    forget = providerProcesses.register({
+                      pid,
+                      threadId: input.threadId,
+                      driver: CLAUDE_PROVIDER,
+                    });
                   },
                 );
               });

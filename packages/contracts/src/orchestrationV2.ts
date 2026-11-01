@@ -41,6 +41,7 @@ import {
   ElevationBase64Url,
   ElevationKeyId,
   ElevationRequestId,
+  ElevationRequestStatus,
   ElevationWarning,
 } from "./elevation.ts";
 import {
@@ -1347,13 +1348,7 @@ const OrchestrationV2SecretRequestFields = {
   secretStatus: OrchestrationV2SecretRequestStatus,
 } as const;
 
-export const OrchestrationV2ElevationRequestStatus = Schema.Literals([
-  "pending",
-  "approved",
-  "denied",
-  "expired",
-  "cancelled",
-]);
+export const OrchestrationV2ElevationRequestStatus = ElevationRequestStatus;
 export type OrchestrationV2ElevationRequestStatus =
   typeof OrchestrationV2ElevationRequestStatus.Type;
 

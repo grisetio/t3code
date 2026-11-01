@@ -761,7 +761,11 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     const forgetServer = yield* serverLedger.track({ pid: Number(child.pid), port, args });
     yield* Scope.addFinalizer(ledgerScope, forgetServer);
     // One server answers several sessions, so it names no thread.
-    const forgetProcess = providerProcesses.register({ pid: Number(child.pid), threadId: null });
+    const forgetProcess = providerProcesses.register({
+      pid: Number(child.pid),
+      threadId: null,
+      driver: "opencode",
+    });
     yield* Scope.addFinalizer(runtimeScope, Effect.sync(forgetProcess));
 
     const stdoutRef = yield* Ref.make<string | null>("");

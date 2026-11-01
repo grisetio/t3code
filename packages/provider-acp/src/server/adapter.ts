@@ -32,7 +32,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { AgentScope, AgentScopeThreadId } from "@t3tools/shared/AgentScope";
-import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
+import { ProviderProcessDriver, ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
 import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { type SelfInvocation, selfInvocationArgs } from "@t3tools/shared/nodeRuntime";
@@ -6391,6 +6391,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               Effect.provideService(AgentScope, agentScope),
               Effect.provideService(ProviderProcesses, providerProcesses),
               Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
+              Effect.provideService(ProviderProcessDriver, driver),
             );
         });
 
@@ -6473,6 +6474,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 Effect.provideService(AgentScope, agentScope),
                 Effect.provideService(ProviderProcesses, providerProcesses),
                 Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
+                Effect.provideService(ProviderProcessDriver, driver),
               );
             yield* replacementRuntime.handleSessionUpdate((notification) =>
               Effect.suspend(() => handleCandidateSessionUpdate(notification)),

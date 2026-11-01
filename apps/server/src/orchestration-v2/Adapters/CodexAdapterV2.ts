@@ -1614,7 +1614,13 @@ export const layerAppServerClientFactory: Layer.Layer<
         );
         // One app-server serves many threads, so it names no thread.
         yield* Effect.acquireRelease(
-          Effect.sync(() => providerProcesses.register({ pid: handle.pid, threadId: null })),
+          Effect.sync(() =>
+            providerProcesses.register({
+              pid: handle.pid,
+              threadId: null,
+              driver: CODEX_PROVIDER,
+            }),
+          ),
           (release) => Effect.sync(release),
         ).pipe(Effect.provideService(Scope.Scope, scope));
         const protocolLogger = makeCodexAppServerProtocolLogger({
