@@ -5,6 +5,7 @@ import type { SubagentRowTone } from "./threadAgentsPresentation";
 
 const TONE_CLASS = {
   working: "bg-adaptive-sky-600-400",
+  approval: "bg-warning-foreground",
   completed: "bg-adaptive-emerald-600-400",
   failed: "bg-adaptive-rose-600-400",
   stopped: "bg-foreground-muted",
@@ -12,6 +13,7 @@ const TONE_CLASS = {
 
 export const SUBAGENT_TONE_TEXT_CLASS = {
   working: "text-adaptive-sky-600-400",
+  approval: "text-warning-foreground",
   completed: "text-adaptive-emerald-600-400",
   failed: "text-adaptive-rose-600-400",
   stopped: "text-foreground-muted",

@@ -33,7 +33,15 @@ export function SubagentRow(props: {
   readonly subagent: SubagentRowSubagent;
   readonly elapsed: ReactNode;
 }) {
-  const presentation = resolveSubagentRowPresentation(props.subagent);
+  const child = useThreadShell(
+    props.subagent.childThreadId === null
+      ? null
+      : scopeThreadRef(props.environmentId, props.subagent.childThreadId),
+  );
+  const presentation = resolveSubagentRowPresentation(
+    props.subagent,
+    child?.hasPendingApprovals === true || child?.pendingSubagentRequest === "approval",
+  );
   const detail = subagentCardDetail(presentation.detail);
   return (
     <View className="flex-row gap-3">

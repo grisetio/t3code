@@ -7,7 +7,7 @@ import type { OrchestrationV2Subagent } from "@t3tools/contracts";
 
 const PROMPT_TITLE_LIMIT = 80;
 
-export type SubagentRowTone = "working" | "completed" | "failed" | "stopped";
+export type SubagentRowTone = "working" | "approval" | "completed" | "failed" | "stopped";
 
 export interface SubagentRowPresentation {
   readonly title: string;
@@ -60,13 +60,16 @@ export function resolveSubagentRowPresentation(
     OrchestrationV2Subagent,
     "title" | "prompt" | "status" | "progress" | "result" | "childThreadId"
   >,
+  /** Its thread, or one below it, waits on an approval: the same words as the thread's pill. */
+  needsApproval = false,
 ): SubagentRowPresentation {
   const live = isActiveSubagentStatus(subagent.status);
+  const approval = live && needsApproval;
   return {
     title: rowTitle(subagent),
     detail: subagentDetailPreview(subagent),
-    statusLabel: rowStatusLabel(subagent.status),
-    tone: rowTone(subagent.status),
+    statusLabel: approval ? "Needs approval" : rowStatusLabel(subagent.status),
+    tone: approval ? "approval" : rowTone(subagent.status),
     live,
     canOpenThread: subagent.childThreadId !== null,
   };
