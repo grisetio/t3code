@@ -15,6 +15,7 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ProcessLifecycleOwner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -665,14 +666,22 @@ class AgentNotificationsTest {
   private fun alerts() = manager.activeNotifications.filter { it.tag == "t3-agent-alert" }
 
   @Test
-  fun inFrontSudoPushesNeverPostEvenForAnotherThread() {
-    lifecycle.currentState = Lifecycle.State.RESUMED
-    AgentNotifications.setThreadOnScreen("/threads/environment/other")
-    AgentNotifications.receive(
-      context,
-      update("sudo", false) + ("alert_request_kind" to "sudo")
-    )
-    assertTrue(alerts().isEmpty())
+  fun inFrontSudoPushesPostOnlyTheirSilentApprovalEntry() {
+    SudoApprovals.keyAliases = { listOf("t3-elevation:environment:alice") }
+    try {
+      lifecycle.currentState = Lifecycle.State.RESUMED
+      AgentNotifications.setThreadOnScreen("/threads/environment/other")
+      AgentNotifications.receive(
+        context,
+        update("sudo", false) + ("alert_request_kind" to "sudo")
+      )
+      assertTrue(alerts().isEmpty())
+      val entry = manager.activeNotifications.single { it.tag == "t3-sudo-approval" }.notification
+      assertNull(entry.sound)
+      assertEquals(0, entry.defaults and Notification.DEFAULT_SOUND)
+    } finally {
+      SudoApprovals.keyAliases = { emptyList() }
+    }
   }
 
   @Test

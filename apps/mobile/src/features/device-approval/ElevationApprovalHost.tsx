@@ -200,6 +200,7 @@ export function ElevationApprovalHost(props: { readonly pathname: string }) {
       : allPending.filter((entry) => !isClaimedElevationRequest(claim, entry));
   const target = useAtomValue(elevationApprovalTargetAtom);
   const intent = useAtomValue(elevationNotificationIntentAtom);
+  const lockScreen = useAtomValue(elevationLockScreenAtom);
   const navigation = useNavigation();
   useArrivalHaptic(pending);
   useSudoApprovalPushes(pending);
@@ -259,7 +260,8 @@ export function ElevationApprovalHost(props: { readonly pathname: string }) {
     }
   }, [target, entry, threadId, held, navigation, props.pathname]);
 
-  if (entry === undefined || threadId !== null) return null;
+  // A Modal is its own window and would draw above the lock-screen cover, over the keyguard.
+  if (entry === undefined || threadId !== null || lockScreen !== null) return null;
   return (
     <ThreadlessElevationRequest
       entry={entry}

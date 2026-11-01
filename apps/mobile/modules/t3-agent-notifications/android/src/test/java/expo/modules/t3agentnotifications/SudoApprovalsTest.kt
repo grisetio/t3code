@@ -106,6 +106,22 @@ class SudoApprovalsTest {
   }
 
   @Test
+  fun inFrontTheSudoPushStillPostsQuietlyForTheLockScreen() {
+    (ProcessLifecycleOwner.get().lifecycle as LifecycleRegistry).currentState =
+      Lifecycle.State.RESUMED
+    AgentNotifications.receive(context, push("sudo", "/threads/env%201/thread"))
+
+    val posted = manager.activeNotifications.single()
+    assertEquals("t3-sudo-approval", posted.tag)
+    assertNull(posted.notification.sound)
+    assertEquals(0, posted.notification.defaults and Notification.DEFAULT_SOUND)
+    assertEquals(
+      SudoApprovalActivity::class.java.name,
+      shadowOf(posted.notification.contentIntent).savedIntent.component?.className
+    )
+  }
+
+  @Test
   fun phoneWithoutAKeyForThatMachinePostsNothing() {
     AgentNotifications.receive(context, push("other-machine", "/threads/env-2/thread"))
     aliases = emptyList()

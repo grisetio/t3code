@@ -182,11 +182,12 @@ object AgentNotifications {
       val path = data["alert_path"]
       val visibleThread = threadOnScreen
       val onScreen = resumed && visibleThread != null && path == visibleThread
-      // In front, the app already shows a waiting request. Our relay marks sudo pushes; upstream
-      // relays strip the marker, so an unmarked alert for a thread JS reports as waiting on a
-      // request is that request's push.
+      // In front, the app already shows a waiting request, so its push posts silently; without
+      // it, tapping the shade after the phone locks would reach only the full-unlock activity
+      // entry. Our relay marks sudo pushes; upstream relays strip the marker, so an unmarked alert
+      // for a thread JS reports as waiting on a request is that request's push.
       if (SudoApprovals.isSudoApproval(data)) {
-        if (!resumed) SudoApprovals.post(context, data, alertId)
+        SudoApprovals.post(context, data, alertId, silent = resumed)
       } else if (!onScreen && !(resumed && path in sudoPendingThreads)) {
         postAlert(context, scheme, data, alertId)
       }
