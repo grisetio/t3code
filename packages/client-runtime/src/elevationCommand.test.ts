@@ -4,7 +4,6 @@ import vectorsJson from "../../contracts/test-vectors/elevation-commands.json" w
 import {
   elevationAgentCommand,
   elevationCommandDisplay,
-  elevationCommandMoreLabel,
   elevationCommandOneLine,
   elevationSudoCalls,
 } from "./elevationCommand.ts";
@@ -33,9 +32,8 @@ describe("elevationCommandDisplay", () => {
     expect(display).toMatchObject({
       lines: ["killall coreaudiod"],
       programs: ["killall"],
-      hidden: false,
+      short: "killall coreaudiod",
     });
-    expect(elevationCommandMoreLabel(display)).toBeNull();
     expect(elevationCommandOneLine(display)).toBe("killall coreaudiod");
   });
 
@@ -51,7 +49,7 @@ describe("elevationCommandDisplay", () => {
       "  && sudo launchctl kickstart -k system/x \\",
       "  && system_profiler SPAudioDataType",
     ]);
-    expect(elevationCommandMoreLabel(display)).toBe("+2 more lines · darwin-rebuild, launchctl");
+    expect(display.short).toBe("darwin-rebuild, launchctl");
     expect(elevationCommandOneLine(display)).toBe(
       "sudo darwin-rebuild switch --flake .#mbp && sudo launchctl kickstart -k system/x && system_profiler SPAudioDataType",
     );
@@ -75,16 +73,27 @@ describe("elevationCommandDisplay", () => {
     ]);
   });
 
-  it("labels a long single line that the two-row form hides", () => {
-    const command = `echo start${" ".repeat(300)}&& sudo rm -rf /tmp/x && sudo id`;
+  it("shortens one sudo to its program by name and arguments, never sudo itself", () => {
+    const short = (command: string, argv = ["/bin/ls", "/var/db"]) =>
+      elevationCommandDisplay({ command: { argv }, session: session(command) }).short;
+    expect(short("sudo -k /bin/ls /var/db")).toBe("ls /var/db");
+    expect(short("cd /tmp && sudo -u postgres /usr/bin/psql -c 'select 1'")).toBe(
+      "psql -c select 1",
+    );
+    expect(elevationCommandDisplay({ command: { argv: ["/usr/bin/id", "-u"] } }).short).toBe(
+      "id -u",
+    );
+    // A word the shell may expand isn't shown as if it were literal.
+    expect(short('f=/var/db; sudo -k /bin/ls "$f"')).toBe("ls");
+  });
+
+  it("lists the programs when the command runs several sudos", () => {
     const display = elevationCommandDisplay({
-      command: { argv: ["rm", "-rf", "/tmp/x"] },
-      session: session(command),
+      command: { argv: ["/usr/bin/id", "-u"] },
+      session: session("sudo -k /usr/bin/id -u; sudo -k /bin/ls /var/db"),
     });
-    expect(display.collapsed).toBe("echo start && sudo rm -rf /tmp/x && sudo id");
-    expect(elevationCommandMoreLabel(display)).toBe("More · rm, id");
-    const long = elevationCommandDisplay({ command: { argv: ["echo", "x".repeat(80)] } });
-    expect(elevationCommandMoreLabel(long)).toBe("More · echo");
+    expect(display.short).toBe("id, ls");
+    expect(display.lines).toEqual(["sudo -k /usr/bin/id -u; sudo -k /bin/ls /var/db"]);
   });
 
   it("shows the agent's command from Claude Code's wrapper", () => {

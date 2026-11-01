@@ -7,6 +7,8 @@ import {
   decodeElevationRequestPayload,
   elevationFailureMessage,
   elevationHeadline,
+  elevationRequestFacts,
+  elevationResolvedSummary,
   elevationRequestFallbackView,
   elevationRequestStatusView,
   elevationSudoApproval,
@@ -299,19 +301,44 @@ describe("elevationHeadline", () => {
     encodePayload({ argv: ["killall", "coreaudiod"], resolvedPath: null, warnings: [] }),
   );
 
-  it("leads with the trimmed reason, else the command", () => {
-    expect(elevationHeadline({ explanation: "  Restart audio\n", decoded })).toEqual({
-      text: "“Restart audio”",
-      command: false,
-    });
-    expect(elevationHeadline({ explanation: "  ", decoded })).toEqual({
-      text: "killall coreaudiod",
-      command: true,
-    });
-    expect(elevationHeadline({ explanation: null, decoded: Result.fail("too_large") })).toEqual({
-      text: "Too long to approve on a device; use the terminal.",
-      command: false,
-    });
+  it("leads with the trimmed reason in quotes, else a fixed line that is never the command", () => {
+    expect(
+      elevationHeadline({ explanation: "  Restart audio\n", decoded, agentName: "Claude" }),
+    ).toBe("“Restart audio”");
+    expect(elevationHeadline({ explanation: "  ", decoded, agentName: "Claude" })).toBe(
+      "Claude wants admin access",
+    );
+    expect(
+      elevationHeadline({ explanation: null, decoded: Result.fail("too_large"), agentName: null }),
+    ).toBe("An agent wants admin access");
+  });
+});
+
+describe("elevationResolvedSummary", () => {
+  it("names the reason, else the programs", () => {
+    const display = { programs: ["id", "ls"], short: "id, ls" };
+    expect(elevationResolvedSummary("Approved", " Restart audio ", display)).toBe(
+      "Approved · Restart audio",
+    );
+    expect(elevationResolvedSummary("Denied", null, display)).toBe("Denied · id, ls");
+  });
+});
+
+describe("elevationRequestFacts", () => {
+  it("shows Runs as and Directory only where they differ from root and the checkout", () => {
+    expect(elevationRequestFacts({ runAs: "root", cwd: "/w/app" }, { cwd: "/w/app/" })).toEqual([]);
+    expect(
+      elevationRequestFacts(
+        { runAs: "postgres", runAsGroup: "staff", cwd: "/tmp" },
+        { cwd: "/w/app" },
+      ),
+    ).toEqual([
+      { label: "Runs as", value: "postgres (group staff)", mono: false },
+      { label: "Directory", value: "/tmp", mono: true },
+    ]);
+    expect(elevationRequestFacts({ runAs: "root", cwd: "/w" }, { cwd: null })).toEqual([
+      { label: "Directory", value: "/w", mono: true },
+    ]);
   });
 });
 

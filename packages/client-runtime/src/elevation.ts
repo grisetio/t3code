@@ -14,7 +14,7 @@ import {
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 
-import { elevationCommandDisplay } from "./elevationCommand.ts";
+import type { ElevationCommandDisplay } from "./elevationCommand.ts";
 import { resolveProviderInstanceDisplayName } from "./state/providerInstanceDisplay.ts";
 
 // Formats: docs/internals/device-approval.md. Every string a client shows from a
@@ -76,7 +76,8 @@ const ELEVATION_DECODE_FAILURE_MESSAGES: Record<ElevationPayloadDecodeFailure, s
   invalid: "This request is malformed and can't be approved.",
 };
 
-function elevationDecodeFailureMessage(failure: ElevationPayloadDecodeFailure): string {
+/** Why a request can't be shown or signed here, for the card under its headline. */
+export function elevationDecodeFailureMessage(failure: ElevationPayloadDecodeFailure): string {
   return ELEVATION_DECODE_FAILURE_MESSAGES[failure];
 }
 
@@ -180,31 +181,65 @@ export function elevationReason(explanation: string | null | undefined): string 
   return trimmed === "" ? null : escapeElevationDisplayText(trimmed);
 }
 
-export interface ElevationHeadline {
-  readonly text: string;
-  /** The command stands in for a missing reason, so it reads as code. */
-  readonly command: boolean;
-}
-
 /**
- * What a pending request leads with on every surface: the agent's reason in quotes, "Add device
- * X" for a new phone, or the command when the agent gave no reason.
+ * What a request leads with on every surface: the agent's reason in quotes, "Add device X" for a
+ * new phone, or T3's fixed line, unquoted so it never reads as the agent's words. Never the
+ * command: a command as the headline is the line nobody reads.
  */
 export function elevationHeadline(input: {
   readonly explanation: string | null;
   readonly decoded: Result.Result<DecodedElevationPayload, ElevationPayloadDecodeFailure>;
-}): ElevationHeadline {
+  /** The asking agent's display name, when known. */
+  readonly agentName: string | null;
+}): string {
   const decoded = Result.isSuccess(input.decoded) ? input.decoded.success : null;
-  if (decoded?.view.enroll)
-    return { text: `Add device ${decoded.view.enroll.label}`, command: false };
+  if (decoded?.view.enroll) return `Add device ${decoded.view.enroll.label}`;
   const reason = elevationReason(input.explanation);
-  if (reason !== null) return { text: `“${reason}”`, command: false };
-  if (decoded !== null) {
-    return { text: elevationCommandDisplay(decoded.payload).collapsed, command: true };
+  if (reason !== null) return `“${reason}”`;
+  return `${input.agentName === null ? "An agent" : escapeElevationDisplayText(input.agentName)} wants admin access`;
+}
+
+/** "Approved · Restart audio": a resolved row's one line, the reason or else the programs. */
+export function elevationResolvedSummary(
+  label: string,
+  explanation: string | null,
+  display: Pick<ElevationCommandDisplay, "programs" | "short">,
+): string {
+  const subject =
+    elevationReason(explanation) ??
+    (display.programs.length > 0 ? display.programs.join(", ") : display.short);
+  return subject === "" ? label : `${label} · ${subject}`;
+}
+
+export interface ElevationRequestFact {
+  readonly label: "Runs as" | "Directory";
+  readonly value: string;
+  readonly mono: boolean;
+}
+
+/**
+ * Runs as and Directory, only where they differ from what a reader assumes: root, and the
+ * thread's own checkout. With no checkout to compare to, the directory is always shown.
+ */
+export function elevationRequestFacts(
+  view: Pick<ElevationRequestView, "runAs" | "cwd"> &
+    Partial<Pick<ElevationRequestView, "runAsGroup">>,
+  defaults: { readonly cwd: string | null },
+): readonly ElevationRequestFact[] {
+  const facts: ElevationRequestFact[] = [];
+  const runAsGroup = view.runAsGroup ?? null;
+  if (view.runAs !== "root" || runAsGroup !== null) {
+    facts.push({
+      label: "Runs as",
+      value: runAsGroup === null ? view.runAs : `${view.runAs} (group ${runAsGroup})`,
+      mono: false,
+    });
   }
-  return Result.isFailure(input.decoded)
-    ? { text: elevationDecodeFailureMessage(input.decoded.failure), command: false }
-    : { text: "Approval needed", command: false };
+  const trim = (path: string) => (path.length > 1 ? path.replace(/\/+$/, "") : path);
+  if (defaults.cwd === null || trim(view.cwd) !== trim(escapeElevationDisplayText(defaults.cwd))) {
+    facts.push({ label: "Directory", value: view.cwd, mono: true });
+  }
+  return facts;
 }
 
 export interface ElevationAgent {
