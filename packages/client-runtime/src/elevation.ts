@@ -3,6 +3,7 @@ import {
   decodeElevationPayload,
   escapeElevationDisplayText,
   parseElevationEnrollCommand,
+  type ElevationEndedRequest,
   type ElevationPayload,
   type ElevationPayloadDecodeFailure,
   type ElevationRequestSeries,
@@ -466,6 +467,38 @@ export function elevationRequestStatusView(
       };
     case "cancelled":
       return { kind: "cancelled", label: "Cancelled", time, how: `Cancelled · ${time}`, detail };
+  }
+}
+
+export interface ElevationEndedView {
+  readonly kind: ElevationEndedRequest["elevationStatus"];
+  readonly text: string;
+}
+
+/**
+ * "Approved on Pixel": the last moment of a card whose request ended elsewhere, before it leaves.
+ * A request with no thread has no row to settle into, so this line is all that says how it went.
+ */
+export function elevationEndedLine(
+  ended: Pick<ElevationEndedRequest, "elevationStatus" | "resolvedBy">,
+  thisKeyId: string | null,
+): ElevationEndedView {
+  const { resolvedBy } = ended;
+  const on =
+    resolvedBy === null
+      ? ""
+      : resolvedBy.keyId !== undefined && resolvedBy.keyId === thisKeyId
+        ? " on this phone"
+        : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
+  switch (ended.elevationStatus) {
+    case "approved":
+      return { kind: "approved", text: `Approved${on}` };
+    case "denied":
+      return { kind: "denied", text: `Denied${on}` };
+    case "expired":
+      return { kind: "expired", text: "Expired" };
+    case "cancelled":
+      return { kind: "cancelled", text: "Cancelled" };
   }
 }
 

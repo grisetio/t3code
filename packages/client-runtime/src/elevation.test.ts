@@ -12,6 +12,7 @@ import {
   elevationRequestSource,
   elevationSeriesLine,
   elevationRequestFacts,
+  elevationEndedLine,
   elevationResolvedSummary,
   elevationRequestFallbackView,
   elevationRequestStatusView,
@@ -321,6 +322,25 @@ describe("elevationHeadline", () => {
     expect(
       elevationHeadline({ explanation: null, decoded: Result.fail("too_large"), agentName: null }),
     ).toBe("An agent wants admin access");
+  });
+});
+
+describe("elevationEndedLine", () => {
+  it("names the device that answered, this phone by its key", () => {
+    const resolvedBy = { deviceLabel: "Fixture key\n", keyId: "doBaY6aYDBgHVCShPzJ3LQ" };
+    expect(elevationEndedLine({ elevationStatus: "approved", resolvedBy }, null)).toEqual({
+      kind: "approved",
+      text: "Approved on Fixture key\\n",
+    });
+    expect(
+      elevationEndedLine({ elevationStatus: "denied", resolvedBy }, "doBaY6aYDBgHVCShPzJ3LQ"),
+    ).toEqual({ kind: "denied", text: "Denied on this phone" });
+    expect(elevationEndedLine({ elevationStatus: "denied", resolvedBy: null }, null).text).toBe(
+      "Denied",
+    );
+    expect(elevationEndedLine({ elevationStatus: "expired", resolvedBy: null }, null).text).toBe(
+      "Expired",
+    );
   });
 });
 
