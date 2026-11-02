@@ -24,6 +24,11 @@ export interface LiveRun {
      */
     readonly finishedAt: number | null;
   }>;
+  /**
+   * The provider reports background work for this thread. Claude's background
+   * commands keep running after their call finished, so any sudo could be theirs.
+   */
+  readonly backgroundWork: boolean;
 }
 
 /** A sudo the server spawned itself, such as the setup test or a helper call. */
@@ -210,10 +215,10 @@ function attributeThread(input: AttributionInput): Attribution {
     const run = input.liveRuns.find((candidate) => candidate.threadId === process.threadId);
     if (run === undefined) return { type: "mine", run: null, explanation: null };
     // A script between the call and sudo can hide the call's text from every
-    // level. The thread's only running call is still the one that ran it;
-    // with several, guessing could show the wrong reason.
+    // level. The thread's only running call is still the one that ran it,
+    // unless background work could have; guessing could show the wrong reason.
     const running = run.commands.filter((command) => command.finishedAt === null);
-    const only = running.length === 1 ? running[0] : undefined;
+    const only = running.length === 1 && !run.backgroundWork ? running[0] : undefined;
     return only === undefined
       ? { type: "mine", run, explanation: null }
       : { type: "mine", run, explanation: only.explanation, command: only.text };

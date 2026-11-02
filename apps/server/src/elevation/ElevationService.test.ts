@@ -17,6 +17,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -652,6 +653,61 @@ describe("ElevationService", () => {
       assert.strictEqual(request?.driver, "codex");
       yield* fixture.service.respond({ requestId: request!.requestId, decision: "deny" });
       assert.deepStrictEqual(yield* module.receive, { type: "response", decision: "deny" });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("gives no reason while the thread's background command could have run the sudo", () =>
+    Effect.gen(function* () {
+      yield* setupRunningThread;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      yield* projections.apply({
+        id: EventId.make("elevation:provider-thread"),
+        type: "provider-thread.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: ProviderThreadId.make("provider-thread:elevation"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          providerInstanceId: instanceId,
+          providerSessionId: null,
+          appThreadId: threadId,
+          ownerNodeId: null,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          status: "active",
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 1,
+          handoffIds: [],
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          pendingBackgroundTasks: [{ taskId: "deploy", kind: "command", description: "deploy" }],
+        },
+      });
+      const fixture = yield* makeFixture({
+        providerProcesses: [{ pid: 300, startTime: 7, threadId, driver: "claudeAgent" }],
+      });
+      const module = yield* connectModule(fixture.socketPath);
+      // The script hides every call's text, so only the fallback could name a call.
+      yield* module.send({
+        ...hello([
+          chainEntry(510, ["python3", "deploy.py"]),
+          chainEntry(300, ["claude"]),
+          serverEntry,
+        ]),
+        argv: ["sudo", "python3", "deploy.py", "--wait"],
+      });
+      assert.deepStrictEqual(yield* module.receive, {
+        type: "hello_reply",
+        v: 1,
+        decision: "mine",
+      });
+      yield* module.send({ type: "request", payload: basic.payload });
+      const [request] = yield* firstPending(fixture.service);
+      assert.strictEqual(request?.threadId, threadId);
+      assert.isNull(request?.explanation);
+      assert.isUndefined(request?.agentCommand);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

@@ -32,6 +32,7 @@ const run = (
     explanation: command.explanation ?? null,
     finishedAt: command.finishedAt ?? null,
   })),
+  backgroundWork: false,
 });
 
 // Measured: Claude wraps each Bash call, and its bash stays as sudo's parent.
@@ -435,6 +436,41 @@ describe("attribute", () => {
     // Two running calls: either could have reached sudo.
     const two = attributeWith([call, { text: "pnpm dev", explanation: "Start the dev server" }]);
     expect(two.result).toEqual({ type: "mine", run: two.a, explanation: null });
+  });
+
+  it("gives no reason while a background command could be the one that ran sudo", () => {
+    // Measured: Claude's `run_in_background` deploy returned at once, then its script's
+    // second sudo arrived while a call waiting on the deploy's log was the only running one.
+    const deploy = "just darwin-macbook > deploy.log 2>&1; echo rc=$? >> deploy.log";
+    const a: LiveRun = {
+      ...run("a", [
+        {
+          text: "until grep -q ^rc= deploy.log; do sleep 5; done",
+          explanation: "Wait until the deploy command exits",
+        },
+        { text: deploy, explanation: "Deploy nix-darwin", finishedAt: now - 15_000 },
+      ]),
+      backgroundWork: true,
+    };
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "python3", "deploy.py", "_status-system", "darwin-7ede7e6d", "--wait"],
+          chain: [
+            entry(230, ["python3", "deploy.py", "_submit-system"]),
+            entry(210, ["just", "darwin-macbook"]),
+            entry(200, claudeBash(deploy)),
+            entry(150, ["claude"]),
+            serverEntry,
+          ],
+        },
+        server,
+        now,
+        liveRuns: [a],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "mine", run: a, explanation: null });
   });
 
   it("ignores a registered pid whose start time no longer matches", () => {
