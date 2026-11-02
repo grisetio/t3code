@@ -1347,7 +1347,9 @@ function renderFeedEntry(
       <ElevationRequestCard
         environmentId={props.environmentId}
         projectedItem={entry.activities[0]!.projectedItem}
+        command={entry.activities[0]!.elevationCommand}
         iconColor={iconSubtleColor}
+        themeAppearance={props.themeAppearance}
         runActive={props.unsettledTurnId !== null && entry.runId === props.unsettledTurnId}
       />
     );

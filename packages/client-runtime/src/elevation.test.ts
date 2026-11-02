@@ -6,6 +6,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import {
   decodeElevationRequestPayload,
   elevationAgent,
+  elevationCommandRows,
   elevationFailureMessage,
   elevationHeadline,
   elevationPasswordWords,
@@ -23,6 +24,7 @@ import {
   ElevationError,
   ProviderDriverKind,
   ProviderInstanceId,
+  type OrchestrationV2ProjectedTurnItem,
   type ServerProvider,
 } from "@t3tools/contracts";
 
@@ -566,5 +568,82 @@ describe("elevationNoticeText", () => {
       title: "Claude wants admin access",
       detail: "Killian's MacBook Pro · thread not found",
     });
+  });
+});
+
+describe("elevationCommandRows", () => {
+  // Only the fields the pairing reads.
+  const row = (item: Record<string, unknown>, sourceThreadId = "thread-a") =>
+    ({
+      visibility: "local",
+      sourceThreadId,
+      sourceItemId: item.id,
+      item,
+    }) as unknown as OrchestrationV2ProjectedTurnItem;
+  const command = (id: string, sourceThreadId?: string) =>
+    row({ id, type: "command_execution", status: "completed" }, sourceThreadId);
+  const request = (
+    id: string,
+    elevationStatus: string,
+    commandItemId?: string,
+    sourceThreadId?: string,
+  ) =>
+    row(
+      {
+        id,
+        type: "elevation_request",
+        elevationStatus,
+        ...(commandItemId === undefined ? {} : { commandItemId }),
+      },
+      sourceThreadId,
+    );
+
+  it("gives a settled request the command row it was linked to and hides that row", () => {
+    const cp = command("cmd-1");
+    const rows = elevationCommandRows([cp, request("el-1", "denied", "cmd-1")]);
+    expect([...rows.hidden]).toEqual(["thread-a:cmd-1"]);
+    expect(rows.commandFor.get("thread-a:el-1")).toBe(cp);
+  });
+
+  it("leaves both rows while the request waits", () => {
+    const rows = elevationCommandRows([command("cmd-1"), request("el-1", "pending", "cmd-1")]);
+    expect(rows.hidden.size).toBe(0);
+    expect(rows.commandFor.size).toBe(0);
+  });
+
+  it("keeps a request's own row when nothing links it or the command isn't loaded", () => {
+    const rows = elevationCommandRows([
+      command("cmd-1"),
+      request("el-1", "approved"),
+      request("el-2", "approved", "cmd-9"),
+    ]);
+    expect(rows.hidden.size).toBe(0);
+    expect(rows.commandFor.size).toBe(0);
+  });
+
+  it("merges only the first request of a call that ran sudo twice", () => {
+    const rows = elevationCommandRows([
+      command("cmd-1"),
+      request("el-1", "approved", "cmd-1"),
+      request("el-2", "approved", "cmd-1"),
+    ]);
+    expect([...rows.commandFor.keys()]).toEqual(["thread-a:el-1"]);
+  });
+
+  it("doesn't let a later request take a command whose first request still waits", () => {
+    const rows = elevationCommandRows([
+      command("cmd-1"),
+      request("el-1", "pending", "cmd-1"),
+      request("el-2", "approved", "cmd-1"),
+    ]);
+    expect(rows.commandFor.size).toBe(0);
+  });
+
+  it("matches the link within the request's own source thread", () => {
+    const rows = elevationCommandRows([
+      command("cmd-1", "thread-parent"),
+      request("el-1", "approved", "cmd-1", "thread-a"),
+    ]);
+    expect(rows.commandFor.size).toBe(0);
   });
 });

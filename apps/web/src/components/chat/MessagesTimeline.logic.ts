@@ -615,6 +615,7 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       projectedItem: OrchestrationV2ProjectedTurnItem;
+      elevationCommand?: OrchestrationV2ProjectedTurnItem;
       subagents?: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
       resourceSummary?: boolean;
     }
@@ -1878,6 +1879,9 @@ export function deriveMessagesTimelineRows(input: {
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         projectedItem: timelineEntry.projectedItem,
+        ...(timelineEntry.elevationCommand === undefined
+          ? {}
+          : { elevationCommand: timelineEntry.elevationCommand }),
       });
       continue;
     }
@@ -2293,6 +2297,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "event":
       return (
         a.projectedItem === (b as typeof a).projectedItem &&
+        a.elevationCommand === (b as typeof a).elevationCommand &&
         a.resourceSummary === (b as typeof a).resourceSummary &&
         Equal.equals(a.subagents, (b as typeof a).subagents)
       );

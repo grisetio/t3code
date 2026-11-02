@@ -1,4 +1,5 @@
 import {
+  ElevationRequestId,
   MessageId,
   RuntimeRequestId,
   CheckpointId,
@@ -1904,4 +1905,86 @@ it("renders automatic completion as a work entry instead of a user bubble", () =
       ],
     })[0]?.kind,
   ).toBe("message");
+});
+
+describe("one row per sudo", () => {
+  const runId = RunId.make("sudo-run");
+  const threadId = ThreadId.make("sudo-thread");
+  const at = (second: number) =>
+    DateTime.makeUnsafe(`2026-11-02T12:00:${String(second).padStart(2, "0")}.000Z`);
+  const base = (id: string, second: number) => ({
+    id: TurnItemId.make(id),
+    threadId,
+    runId,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: second,
+    status: "completed" as const,
+    title: null,
+    startedAt: at(second),
+    completedAt: at(second),
+    updatedAt: at(second),
+  });
+  const visible = (item: OrchestrationV2TurnItem): OrchestrationV2ProjectedTurnItem => ({
+    position: item.ordinal,
+    visibility: "local",
+    sourceThreadId: item.threadId,
+    sourceItemId: item.id,
+    item,
+  });
+  const command = visible({
+    ...base("cmd", 1),
+    status: "failed",
+    type: "command_execution",
+    input: "sudo systemctl reload nginx",
+    exitCode: 1,
+  });
+  const request = (elevationStatus: "pending" | "denied") =>
+    visible({
+      ...base("elevation", 2),
+      status: elevationStatus === "pending" ? "waiting" : "cancelled",
+      type: "elevation_request",
+      requestId: ElevationRequestId.make("request"),
+      kind: "sudo",
+      argv: ["sudo", "systemctl", "reload", "nginx"],
+      runAs: "root",
+      cwd: "/repo",
+      host: "box",
+      warnings: [],
+      explanation: null,
+      commandItemId: TurnItemId.make("cmd"),
+      payload: null,
+      elevationStatus,
+      resolvedBy: null,
+    });
+  const derive = (visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) =>
+    deriveTimelineEntriesFromVisibleTurnItems({ visibleTurnItems, optimisticMessages: [] });
+
+  it("shows a settled request as one row that carries the command it ran", () => {
+    const entries = derive([command, request("denied")]);
+    expect(entries.map((entry) => entry.id)).toEqual(["elevation"]);
+    const [entry] = entries;
+    expect(entry?.kind === "event" ? entry.elevationCommand : undefined).toBe(command);
+  });
+
+  it("keeps the command row above the card while the request waits", () => {
+    const entries = derive([command, request("pending")]);
+    expect(entries.map((entry) => [entry.id, entry.kind])).toEqual([
+      ["cmd", "work"],
+      ["elevation", "event"],
+    ]);
+  });
+
+  it("drops the command row when a settled request arrives as an appended item", () => {
+    const previous = deriveTimelineEntriesFromVisibleTurnItemsWithState({
+      visibleTurnItems: [command],
+      optimisticMessages: [],
+    });
+    const nextInput = { visibleTurnItems: [command, request("denied")], optimisticMessages: [] };
+    const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(nextInput, previous);
+    expect(next.entries.map((entry) => entry.id)).toEqual(["elevation"]);
+  });
 });

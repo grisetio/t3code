@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   decodeElevationRequestPayload,
+  elevationCommandFinished,
   elevationDecodeFailureMessage,
   elevationHeadline,
   elevationRequestFacts,
@@ -22,13 +23,14 @@ import type {
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { CheckIcon, ClockIcon, MinusIcon, ShieldIcon, XIcon } from "lucide-react";
-import { use, useState, type KeyboardEvent } from "react";
+import { use, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { elevation } from "../../state/elevation";
 import { useElevationAgent } from "../elevation/ElevationAgentMark";
 import { DisclosureChevron, ElevationPendingCard } from "../elevation/ElevationPendingCard";
 import { ElevationRequestFactLines } from "../elevation/ElevationRequestDetails";
 import { TimelineRowActivityCtx, TimelineRowCtx } from "./timelineRowContext";
+import { CommandItemOutput } from "./V2ItemInspector";
 import { WorkLogDetails, WorkLogRow } from "./WorkLog";
 
 const STATUS_ICONS = {
@@ -64,6 +66,8 @@ export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
   readonly item: ElevationRequestItem;
   readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];
+  /** The agent's command row this settled request stands in for, whose output it shows. */
+  readonly command?: OrchestrationV2ProjectedTurnItem | undefined;
 }) {
   const { item } = props;
   const { activeTurnInProgress, latestRunId } = use(TimelineRowActivityCtx);
@@ -75,7 +79,9 @@ export function ElevationRequestCard(props: {
       entry.environmentId === props.environmentId && entry.request.requestId === item.requestId,
   )?.request.series;
   const runActive = activeTurnInProgress && item.runId !== null && item.runId === latestRunId;
-  const status = elevationRequestStatusView(item, { finished: !runActive });
+  const status = elevationRequestStatusView(item, {
+    finished: props.command === undefined ? !runActive : elevationCommandFinished(props.command),
+  });
   const showCard = status.kind === "pending" && props.visibility === "local";
   // Only a row that replaced this card fades in; rows mounted by scrolling appear as they are.
   const [replacesCard] = useState(showCard);
@@ -130,6 +136,11 @@ export function ElevationRequestCard(props: {
         detail={status.kind === "pending" ? null : status.detail}
         facts={facts}
         warnings={view.warnings}
+        output={
+          props.command === undefined ? null : (
+            <CommandItemOutput projectedItem={props.command} environmentId={props.environmentId} />
+          )
+        }
       />
     </div>
   );
@@ -147,6 +158,7 @@ function ElevationRequestRow(props: {
   readonly detail: string | null;
   readonly facts: readonly ElevationRequestFact[];
   readonly warnings: readonly ElevationWarningView[];
+  readonly output: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const Icon = props.icon;
@@ -186,6 +198,7 @@ function ElevationRequestRow(props: {
             {props.how ? <p className="text-muted-foreground">{props.how}</p> : null}
             {props.detail ? <p className="text-muted-foreground">{props.detail}</p> : null}
             <ElevationRequestFactLines facts={props.facts} warnings={props.warnings} />
+            {props.output}
           </div>
         </WorkLogDetails>
       ) : null}
