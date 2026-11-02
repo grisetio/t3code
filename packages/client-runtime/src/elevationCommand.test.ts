@@ -94,10 +94,10 @@ describe("elevationCommandDisplay", () => {
       elevationCommandDisplay({ command: { argv: ["python3"] }, session: session(command) }).short;
     expect(
       short(
-        `sudo python3 ${deploy} _submit-system /Users/k/w/t3-device-approval /nix/store/q8v-nix-2.31/bin/nix darwin-7ede7e6d`,
+        `sudo python3 ${deploy} _submit-system /Users/k/w/t3-device-approval /nix/store/q8v0w8bwh4n1i1ymbib7pdqy2qkzl6sm-nix-2.31/bin/nix darwin-7ede7e6d`,
       ),
     ).toBe(
-      "python3 /Users/…/deploy.py _submit-system /Users/…/t3-device-approval /nix/…/nix darwin-7ede7e6d",
+      "python3 /Users/…/deploy.py _submit-system /Users/k/w/t3-device-approval /nix/…/nix darwin-7ede7e6d",
     );
     expect(short(`sudo python3 ${deploy} _status-system darwin-7ede7e6d --wait`)).toBe(
       "python3 /Users/…/deploy.py _status-system darwin-7ede7e6d --wait",
@@ -110,27 +110,78 @@ describe("elevationCommandDisplay", () => {
       }).lines,
     ).toEqual([`sudo python3 ${deploy} --wait`]);
     // Values after `=`, for options and variables alike.
-    expect(short("sudo --preserve-env=PATH nix --config=/etc/nix/conf.d/x.conf run")).toBe(
-      "nix --config=/etc/…/x.conf run",
-    );
+    expect(
+      short(
+        "sudo --preserve-env=PATH nix --config=/etc/nix/conf.d/machines/remote-builders/x.conf run",
+      ),
+    ).toBe("nix --config=/etc/…/x.conf run");
     expect(short("sudo NIX_CONF=/etc/nix/conf.d/x.conf nix run")).toBe("nix run");
     expect(
-      elevationCommandDisplay({ command: { argv: ["env", "CONF=./a/b/c.toml", "x"] } }).short,
+      elevationCommandDisplay({
+        command: { argv: ["env", "CONF=./config/environments/production/eu-west/c.toml", "x"] },
+      }).short,
     ).toBe("env CONF=./…/c.toml x");
-    // Where it acts stays readable; short paths stay whole; words with a slash aren't all paths.
-    expect(short("sudo rm -rf /usr/local/share/app")).toBe("rm -rf /usr/…/app");
-    expect(short("sudo rm -rf /usr/local/lib")).toBe("rm -rf /usr/local/lib");
+    // Where it acts stays readable; words with a slash aren't all paths.
+    expect(short("sudo rm -rf /usr/local/share/applications/vendor-name/app")).toBe(
+      "rm -rf /usr/…/app",
+    );
     expect(short("sudo rm -rf /etc")).toBe("rm -rf /etc");
     expect(short("sudo launchctl kickstart -k system/com.example.agent")).toBe(
       "launchctl kickstart -k system/com.example.agent",
     );
-    expect(short("sudo curl -o /tmp/x https://example.com/a/b/c")).toBe(
-      "curl -o /tmp/x https://example.com/a/b/c",
+    expect(short("sudo curl -o /tmp/x https://example.com/a/b/c/d/e/f/g/h/i/j/k")).toBe(
+      "curl -o /tmp/x https://example.com/a/b/c/d/e/f/g/h/i/j/k",
     );
     // Shortening happens before escaping, so the name still shows its control characters.
     expect(
-      elevationCommandDisplay({ command: { argv: ["cat", "/var/log/x/a\u202Eb.log"] } }).short,
+      elevationCommandDisplay({
+        command: { argv: ["cat", "/var/log/applications/vendor-name/a\u202Eb.log"] },
+      }).short,
     ).toBe("cat /var/…/a\\u{202E}b.log");
+  });
+
+  it("keeps paths up to a card row whole, where the middle directory is the difference", () => {
+    const short = (command: string) =>
+      elevationCommandDisplay({ command: { argv: ["ln"] }, session: session(command) }).short;
+    expect(
+      short("sudo ln -sf /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/app.conf"),
+    ).toBe("ln -sf /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/app.conf");
+    expect(short("sudo systemctl edit /etc/systemd/system/nginx.service")).toBe(
+      "systemctl edit /etc/systemd/system/nginx.service",
+    );
+    // A long source elides, keeping its start; the short target next to it stays whole.
+    expect(
+      short(
+        "sudo install -m 0644 /home/t3dev/project/deploy/nginx/sites/app.conf /etc/nginx/sites-available/app.conf",
+      ),
+    ).toBe("install -m 0644 /home/…/app.conf /etc/nginx/sites-available/app.conf");
+  });
+
+  it("keeps two long paths whole when shortening would make them read the same", () => {
+    const display = elevationCommandDisplay({
+      command: {
+        argv: [
+          "/usr/bin/cp",
+          "/var/lib/containers/storage/overlay/a1/diff/etc/app.conf",
+          "/var/lib/containers/storage/overlay/b2/diff/etc/app.conf",
+        ],
+      },
+    });
+    expect(display.short).toBe(
+      "cp /var/lib/containers/storage/overlay/a1/diff/etc/app.conf /var/lib/containers/storage/overlay/b2/diff/etc/app.conf",
+    );
+    // A path repeated as is still shortens.
+    expect(
+      elevationCommandDisplay({
+        command: {
+          argv: [
+            "diff",
+            "/var/lib/containers/storage/overlay/a1/diff/etc/app.conf",
+            "/var/lib/containers/storage/overlay/a1/diff/etc/app.conf",
+          ],
+        },
+      }).short,
+    ).toBe("diff /var/…/app.conf /var/…/app.conf");
   });
 
   it("lists the programs when the command runs several sudos", () => {

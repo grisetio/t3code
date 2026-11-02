@@ -548,9 +548,10 @@ function RootStackLayout(props: {
                 workspaceRouteKeys={workspaceLocation.routeKeys}
                 selectedPullRequestKey={selectedPullRequestKey(props.state)}
               >
-                {props.children}
+                <ElevationPendingBanner pathname={workspaceLocation.pathname}>
+                  {props.children}
+                </ElevationPendingBanner>
                 <HardwareKeyboardCommandOverlay />
-                <ElevationPendingBanner pathname={workspaceLocation.pathname} />
                 <ElevationApprovalHost pathname={workspaceLocation.pathname} />
                 <ElevationLockScreen />
               </AdaptiveWorkspaceLayout>

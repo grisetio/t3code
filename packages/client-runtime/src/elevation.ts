@@ -3,6 +3,7 @@ import {
   decodeElevationPayload,
   escapeElevationDisplayText,
   parseElevationEnrollCommand,
+  type ElevationEndedRequest,
   type ElevationPayload,
   type ElevationPayloadDecodeFailure,
   type ElevationRequestSeries,
@@ -202,16 +203,16 @@ export function elevationHeadline(input: {
   return `${input.agentName === null ? "An agent" : escapeElevationDisplayText(input.agentName)} wants admin access`;
 }
 
-/** "Approved · Restart audio": a resolved row's one line, the reason or else the programs. */
+/**
+ * "Approved · python3 /home/…/deploy.py --wait": a resolved row's one line, for its accessible
+ * name. The command, not the reason, because two requests with the same reason or program must
+ * still read apart; the reason stays in the expanded detail.
+ */
 export function elevationResolvedSummary(
   label: string,
-  explanation: string | null,
-  display: Pick<ElevationCommandDisplay, "programs" | "short">,
+  display: Pick<ElevationCommandDisplay, "short">,
 ): string {
-  const subject =
-    elevationReason(explanation) ??
-    (display.programs.length > 0 ? display.programs.join(", ") : display.short);
-  return subject === "" ? label : `${label} · ${subject}`;
+  return display.short === "" ? label : `${label} · ${display.short}`;
 }
 
 export interface ElevationRequestFact {
@@ -400,8 +401,8 @@ const ELEVATION_FAILURE_MESSAGES: Record<OrchestrationV2ElevationRequestFailure,
 export type ElevationRequestStatusView =
   | { readonly kind: "pending"; readonly label: string }
   | {
-      readonly kind: "approved" | "done" | "denied" | "expired" | "cancelled";
-      /** "Approved", "Done", "Denied", "Expired" or "Cancelled". */
+      readonly kind: "approved" | "denied" | "expired" | "cancelled";
+      /** "Approved", "Denied", "Expired" or "Cancelled". */
       readonly label: string;
       /** When it ended, for the collapsed row: "1:18 PM". */
       readonly time: string;
@@ -440,21 +441,14 @@ export function elevationRequestStatusView(
         : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
   switch (item.elevationStatus) {
     case "approved":
-      return options.finished
-        ? {
-            kind: "done",
-            label: "Done",
-            time,
-            how: `Approved${approvedOn} · ${time} · finished`,
-            detail,
-          }
-        : {
-            kind: "approved",
-            label: "Approved",
-            time,
-            how: `Approved${approvedOn} · ${time}`,
-            detail,
-          };
+      // "Approved" stays the status after the run ends; only the detail says it finished.
+      return {
+        kind: "approved",
+        label: "Approved",
+        time,
+        how: `Approved${approvedOn} · ${time}${options.finished ? " · finished" : ""}`,
+        detail,
+      };
     case "denied":
       return {
         kind: "denied",
@@ -473,6 +467,38 @@ export function elevationRequestStatusView(
       };
     case "cancelled":
       return { kind: "cancelled", label: "Cancelled", time, how: `Cancelled · ${time}`, detail };
+  }
+}
+
+export interface ElevationEndedView {
+  readonly kind: ElevationEndedRequest["elevationStatus"];
+  readonly text: string;
+}
+
+/**
+ * "Approved on Pixel": the last moment of a card whose request ended elsewhere, before it leaves.
+ * A request with no thread has no row to settle into, so this line is all that says how it went.
+ */
+export function elevationEndedLine(
+  ended: Pick<ElevationEndedRequest, "elevationStatus" | "resolvedBy">,
+  thisKeyId: string | null,
+): ElevationEndedView {
+  const { resolvedBy } = ended;
+  const on =
+    resolvedBy === null
+      ? ""
+      : resolvedBy.keyId !== undefined && resolvedBy.keyId === thisKeyId
+        ? " on this phone"
+        : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
+  switch (ended.elevationStatus) {
+    case "approved":
+      return { kind: "approved", text: `Approved${on}` };
+    case "denied":
+      return { kind: "denied", text: `Denied${on}` };
+    case "expired":
+      return { kind: "expired", text: "Expired" };
+    case "cancelled":
+      return { kind: "cancelled", text: "Cancelled" };
   }
 }
 

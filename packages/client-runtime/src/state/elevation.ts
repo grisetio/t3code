@@ -1,5 +1,6 @@
 import {
   WS_METHODS,
+  type ElevationEndedRequest,
   type ElevationPayloadDecodeFailure,
   type ElevationPendingRequest,
   type ElevationPendingRequests,
@@ -123,6 +124,20 @@ export function createElevationAtoms<R, E>(
     return previousPending;
   }).pipe(Atom.withLabel("environment-data:elevation:pending-across-environments"));
 
+  /** How requests that just left the pending set ended, by environment, for cards still showing them. */
+  const endedAcrossEnvironmentsAtom = Atom.make((get) => {
+    const ended = new Map<EnvironmentId, readonly ElevationEndedRequest[]>();
+    for (const [environmentId, config] of get(options.environmentServerConfigsAtom)) {
+      if (!environmentSupportsDeviceApproval(config)) continue;
+      const result = get(pendingRequests({ environmentId, input: {} }));
+      const value = Option.getOrNull(AsyncResult.value(result));
+      if (value?.ended !== undefined && value.ended.length > 0) {
+        ended.set(environmentId, value.ended);
+      }
+    }
+    return ended;
+  }).pipe(Atom.withLabel("environment-data:elevation:ended-across-environments"));
+
   const status = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:elevation:status",
     tag: WS_METHODS.elevationStatus,
@@ -141,6 +156,7 @@ export function createElevationAtoms<R, E>(
   return {
     pendingRequests,
     pendingAcrossEnvironmentsAtom,
+    endedAcrossEnvironmentsAtom,
     status,
     // One answer per request at a time; the server keeps the first answer.
     respond: createEnvironmentRpcCommand(runtime, {
