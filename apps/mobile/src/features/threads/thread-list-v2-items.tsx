@@ -1285,10 +1285,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </>
   );
 
-  const fadedCardContent = recede ? (
-    <View style={{ opacity: 0.55 }}>{cardContent}</View>
-  ) : (
-    cardContent
+  // One native view whatever the status. A wrapper that comes and goes lets React hand its view
+  // to the project line, flattening it, and Android's Fabric can lose a view that is flattened
+  // and then restored while the app is in the background: the next status change threw
+  // "Unable to find parentView" (a sudo approved from the lock screen).
+  const fadedCardContent = (
+    <View collapsable={false} style={{ opacity: recede ? 0.55 : 1 }}>
+      {cardContent}
+    </View>
   );
 
   const rowContent = (close: () => void) =>

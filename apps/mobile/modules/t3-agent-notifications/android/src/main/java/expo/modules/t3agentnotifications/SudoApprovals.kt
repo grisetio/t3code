@@ -18,6 +18,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.View
 import android.view.ViewGroup
 import androidx.core.app.NotificationCompat
 import java.security.KeyStore
@@ -166,6 +167,7 @@ object SudoApprovals {
   @Volatile var onLaunch: ((Launch) -> Unit)? = null
 
   const val EXTRA_LOCK_TOKEN = "expo.modules.t3agentnotifications.SUDO_APPROVAL_LOCK_TOKEN"
+  private const val ACTION_LOCK_SCREEN = "expo.modules.t3agentnotifications.SUDO_APPROVAL_LOCK_SCREEN"
 
   /** A lock-screen tap handed to the app: only the activity its launch intent reaches takes it. */
   private data class Armed(val token: String, val at: Long)
@@ -176,8 +178,8 @@ object SudoApprovals {
   /** Overridden in tests. */
   @Volatile var clock: () -> Long = { SystemClock.elapsedRealtime() }
 
-  /** The activity shown over the lock screen, and the cover that hides the app inside it. */
-  private class Shown(val activity: Activity, val cover: Dialog)
+  /** The activity shown over the lock screen, and the covers that hide the app inside it. */
+  private class Shown(val activity: Activity, val cover: Dialog, val shade: View)
 
   @Volatile private var shown: Shown? = null
   private var callbacksRegistered: Application? = null
@@ -195,10 +197,19 @@ object SudoApprovals {
       armed = token?.let { Armed(it, clock()) }
     }
     registerCallbacks(trampoline.application)
-    val intent = trampoline.packageManager.getLaunchIntentForPackage(trampoline.packageName)
+    val launcher = trampoline.packageManager.getLaunchIntentForPackage(trampoline.packageName)
       ?: return
+    // Reopened with its launcher intent, the system shows the app's last screen (its task
+    // snapshot) until the app draws, which would show it over the lock screen before the cover is
+    // up. With any other intent it waits for the app's own, covered, first frame.
+    val intent = if (token == null) {
+      launcher
+    } else {
+      Intent(ACTION_LOCK_SCREEN).setComponent(launcher.component)
+        .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        .putExtra(EXTRA_LOCK_TOKEN, token)
+    }
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-    if (token != null) intent.putExtra(EXTRA_LOCK_TOKEN, token)
     trampoline.startActivity(intent)
     onLaunch?.invoke(launch)
   }
@@ -252,15 +263,27 @@ object SudoApprovals {
     shown?.let { end(it.activity, leave = false) }
     // The app's own screen (threads, composer) must never show over the lock screen, and JS
     // can't render anything until the activity is visible. So an opaque window covers the
-    // activity and any dialog it already had open, from its first frame; the request's card
-    // opens as a newer window above it. Back on the cover returns to the lock screen.
-    val cover = Dialog(activity, android.R.style.Theme_DeviceDefault_NoActionBar).apply {
+    // activity and any dialog it already had open; the request's card opens as a newer window
+    // above it. Back on the cover returns to the lock screen. A window fades in by default, which
+    // would play the app's screen through it.
+    val cover = object : Dialog(activity, android.R.style.Theme_DeviceDefault_NoActionBar) {
+      // Cancelling would dismiss the cover before the lock screen is back.
+      @Deprecated("Also what the default back callback calls on Android 13+")
+      override fun onBackPressed() = end(activity, leave = true)
+    }.apply {
+      window?.setWindowAnimations(0)
       window?.setBackgroundDrawable(ColorDrawable(Color.BLACK))
       window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
       setCanceledOnTouchOutside(false)
-      setOnCancelListener { end(activity, leave = true) }
     }
-    shown = Shown(activity, cover)
+    // The cover is a separate window that can draw a frame after the activity's own; this black
+    // view inside the activity's window covers that frame.
+    val shade = View(activity).apply { setBackgroundColor(Color.BLACK) }
+    (activity.window.decorView as ViewGroup).addView(
+      shade,
+      ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    )
+    shown = Shown(activity, cover, shade)
     activity.setShowWhenLocked(true)
     cover.show()
   }
@@ -273,12 +296,17 @@ object SudoApprovals {
 
   /** Ends showing over the lock screen; [leave] returns to the lock screen if still locked. */
   fun end(activity: Activity, leave: Boolean) {
+    // Back to the lock screen with the covers still up; the app's own screen would otherwise show
+    // while the lock screen returns. Stopping ends the rest.
+    if (leave && isLocked(activity) && shown?.activity === activity && activity.moveTaskToBack(true)) {
+      return
+    }
     if (Build.VERSION.SDK_INT >= 27) activity.setShowWhenLocked(false)
     val current = shown
     if (current?.activity === activity) {
       shown = null
-      current.cover.setOnCancelListener(null)
       current.cover.dismiss()
+      (current.shade.parent as? ViewGroup)?.removeView(current.shade)
     }
     if (leave && isLocked(activity)) activity.moveTaskToBack(true)
   }

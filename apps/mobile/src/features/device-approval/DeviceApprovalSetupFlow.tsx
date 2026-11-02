@@ -5,14 +5,17 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import type { ElevationStatus, EnvironmentId } from "@t3tools/contracts";
+import * as Result from "effect/Result";
 import * as Clipboard from "expo-clipboard";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -26,6 +29,8 @@ import {
   deviceApprovalSignerErrorCode,
   deviceApprovalSignerErrorMessage,
 } from "./deviceApprovalSigner";
+import { useElevationPasswordWords } from "./ElevationApprovalCard";
+import { claimedElevationRequestAtom } from "./elevationApprovalTarget";
 import { useComparisonCode } from "./ElevationRequestDetails";
 import { approvalHaptic } from "./approvalHaptics";
 
@@ -34,9 +39,22 @@ type Step = "intro" | "approve" | "terminal" | "done";
 // Long enough to see "✓ Confirmed" before the password step slides in.
 const CONFIRMED_MS = 500;
 
+/** The "Add device" sudo for this phone's own new key, which only another phone can answer. */
+function isOwnEnrollRequest(entry: PendingElevationRequest, publicKey: Uint8Array) {
+  if (!Result.isSuccess(entry.decoded)) return false;
+  const enroll = entry.decoded.success.view.enroll;
+  return (
+    enroll !== null &&
+    enroll.publicKey.length === publicKey.length &&
+    enroll.publicKey.every((byte, index) => byte === publicKey[index])
+  );
+}
+
+const releaseClaim = () => appAtomRegistry.set(claimedElevationRequestAtom, null);
+
 /**
  * Setup from the phone (FLOW moment 4): the phone creates its key and the fingerprint proves it
- * can use it, the Mac password approves the first phone once, and an enrolled phone approves a
+ * can use it, the machine's password approves the first phone once, and an enrolled phone approves a
  * later one. No checks or paths here; Details has them.
  */
 export function DeviceApprovalSetupFlow(props: {
@@ -50,6 +68,7 @@ export function DeviceApprovalSetupFlow(props: {
   const enroll = useAtomCommand(elevation.enroll, "add device approval key");
   const canInstall = useAtomValue(elevation.install.permissionAtom(environmentId));
   const canEnroll = useAtomValue(elevation.enroll.permissionAtom(environmentId));
+  const words = useElevationPasswordWords(environmentId, machine);
   const installed = status.ownsApprovals || status.devices.length > 0;
   // A later phone is approved by one already set up; with none, only the password can.
   const otherPhoneApproves = installed && status.devices.length > 0;
@@ -63,6 +82,8 @@ export function DeviceApprovalSetupFlow(props: {
   const [terminalCommand, setTerminalCommand] = useState<string | null>(null);
   const comparisonCode = useComparisonCode(otherPhoneApproves ? (key?.publicKey ?? null) : null);
   const inFlight = useRef(false);
+  // Leaving mid-wait must not keep hiding the request from the banner.
+  useEffect(() => releaseClaim, []);
   const stepNumber = step === "intro" ? 1 : step === "done" ? 3 : 2;
 
   const guarded = async (action: () => Promise<void>) => {
@@ -149,17 +170,38 @@ export function DeviceApprovalSetupFlow(props: {
         await finish(key);
         return;
       }
-      const result = await enroll({
-        environmentId,
-        input: { device: key.device, ...(sudoPassword === null ? {} : { password: sudoPassword }) },
-      });
-      if (succeeded(result)) await finish(key);
+      // This phone asks; another one answers. Its own request shows here, not as a banner.
+      const { publicKey } = key;
+      if (sudoPassword === null && publicKey !== null) {
+        appAtomRegistry.set(claimedElevationRequestAtom, {
+          environmentId,
+          matches: (entry) => isOwnEnrollRequest(entry, publicKey),
+        });
+      }
+      try {
+        const result = await enroll({
+          environmentId,
+          input: {
+            device: key.device,
+            ...(sudoPassword === null ? {} : { password: sudoPassword }),
+          },
+        });
+        if (succeeded(result)) await finish(key);
+      } finally {
+        releaseClaim();
+      }
     });
 
   return (
     <View className="flex-1 gap-5 px-5 pt-4">
-      <View className="flex-row items-center justify-between">
-        <Button label="Cancel" tone="text" disabled={busy} onPress={close} />
+      {/* Tall enough for Cancel, so the step count stays put when Done drops it. */}
+      <View className="min-h-14 flex-row items-center justify-between">
+        {/* Done has nothing left to cancel; its own button closes. */}
+        {step === "done" ? (
+          <View />
+        ) : (
+          <Button label="Cancel" tone="text" disabled={busy} onPress={close} />
+        )}
         <Text className="text-sm text-foreground-muted">{stepNumber} of 3</Text>
       </View>
 
@@ -189,12 +231,12 @@ export function DeviceApprovalSetupFlow(props: {
       {step === "approve" && usePassword ? (
         <StepBody
           icon="laptopcomputer"
-          title="Enter your Mac password, once"
+          title={`Enter your ${words.password}, once`}
           body={`${machine} needs it one time to trust this phone.`}
         >
           <TextInput
-            accessibilityLabel="Mac password"
-            placeholder="Mac password"
+            accessibilityLabel={words.password}
+            placeholder={words.password}
             value={password}
             onChangeText={setPassword}
             editable={!busy}
@@ -205,11 +247,13 @@ export function DeviceApprovalSetupFlow(props: {
             textContentType="none"
             importantForAutofill="no"
           />
-          <Text className="text-xs text-foreground-muted">
-            If Touch ID appears on the Mac, choose Cancel. Setup continues here.
-          </Text>
+          {words.touchId ? (
+            <Text className="text-xs text-foreground-muted">
+              If Touch ID appears on the Mac, choose Cancel. Setup continues here.
+            </Text>
+          ) : null}
           <Button
-            label={busy ? "Checking with the Mac…" : "Continue"}
+            label={busy ? `Checking with ${words.machine}…` : "Continue"}
             tone="primary"
             fullWidth
             disabled={busy || password === ""}
@@ -243,7 +287,7 @@ export function DeviceApprovalSetupFlow(props: {
             onPress={() => void approve(null)}
           />
           <Button
-            label="Use your Mac password instead"
+            label={`Use your ${words.password} instead`}
             tone="text"
             disabled={busy}
             onPress={() => setUsePassword(true)}
@@ -254,8 +298,8 @@ export function DeviceApprovalSetupFlow(props: {
       {step === "terminal" && terminalCommand !== null ? (
         <StepBody
           icon="terminal"
-          title="Run this on the Mac"
-          body="Paste it into a terminal there. It asks for your Mac password once."
+          title={`Run this on ${words.machine}`}
+          body={`Paste it into a terminal there. It asks for your ${words.shortPassword} once.`}
         >
           <Text selectable className="font-mono text-sm text-foreground">
             {terminalCommand}

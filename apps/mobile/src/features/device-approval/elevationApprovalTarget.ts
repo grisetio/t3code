@@ -1,5 +1,5 @@
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
-import type { EnvironmentId, ElevationRequestId } from "@t3tools/contracts";
+import type { ElevationEndedRequest, EnvironmentId, ElevationRequestId } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -105,6 +105,39 @@ export function pendingRequestForNotificationIntent(
         entry.request.createdAt.epochMilliseconds <= intent.tappedAt,
     ) ?? null
   );
+}
+
+export type LockScreenRequestState =
+  | { readonly kind: "waiting" }
+  | { readonly kind: "pending"; readonly entry: PendingElevationRequest }
+  | {
+      readonly kind: "ended";
+      readonly entry: PendingElevationRequest;
+      readonly ended: ElevationEndedRequest;
+    }
+  | { readonly kind: "gone" };
+
+/**
+ * What the lock screen shows for the request it opened on. Only a list from the current session
+ * can say a request left: back from a long lock the app replaces its session, and the list is
+ * empty until the new one sends it.
+ */
+export function lockScreenRequestState(input: {
+  /** The request the card showed last. */
+  readonly shown: PendingElevationRequest | null;
+  readonly current: PendingElevationRequest | null;
+  /** The environment's list came from its current session. */
+  readonly live: boolean;
+  readonly ended: readonly ElevationEndedRequest[];
+}): LockScreenRequestState {
+  const { shown, current } = input;
+  if (current !== null) return { kind: "pending", entry: current };
+  // The push names only the thread, so a request that ended before the card saw it can't be
+  // matched to an ended entry; a fresh list without it is enough to stop waiting.
+  if (shown === null) return input.live ? { kind: "gone" } : { kind: "waiting" };
+  if (!input.live) return { kind: "pending", entry: shown };
+  const ended = input.ended.find((entry) => entry.requestId === shown.request.requestId);
+  return ended === undefined ? { kind: "gone" } : { kind: "ended", entry: shown, ended };
 }
 
 /**

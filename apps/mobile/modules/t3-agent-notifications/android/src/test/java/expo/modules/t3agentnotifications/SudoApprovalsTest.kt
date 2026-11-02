@@ -158,22 +158,35 @@ class SudoApprovalsTest {
   fun onlyTheLaunchedActivityShowsOverTheLockScreenBehindACover() {
     val launch = tapWhileLocked()
     assertEquals(SudoApprovals.Launch("/threads/env%201/thread", true), SudoApprovals.consume())
+    // Not the launcher intent, which would replay the app's last screen over the lock screen.
+    assertEquals(ComponentName(context, Activity::class.java), launch.component)
+    assertFalse(launch.action == Intent.ACTION_MAIN || launch.hasCategory(Intent.CATEGORY_LAUNCHER))
 
     // Another activity starting meanwhile isn't the tapped launch.
     val other = Robolectric.buildActivity(Activity::class.java).create().get()
     assertFalse(SudoApprovals.overLockScreen())
     assertNull(cover())
 
-    val app = Robolectric.buildActivity(Activity::class.java, launch).create().start().get()
+    val controller = Robolectric.buildActivity(Activity::class.java, launch).create().start()
+    val app = controller.get()
+    val decor = app.window.decorView as android.view.ViewGroup
     assertTrue(SudoApprovals.overLockScreen())
     assertTrue(shadowOf(app).showWhenLocked)
     assertTrue(cover()!!.isShowing)
+    val shades = decor.childCount
 
-    // Back on the cover returns to the lock screen.
-    cover()!!.cancel()
+    // Back on the cover returns to the lock screen, still covered until the app is gone.
+    @Suppress("DEPRECATION")
+    cover()!!.onBackPressed()
     shadowOf(android.os.Looper.getMainLooper()).idle()
+    assertTrue(shadowOf(app).isTaskMovedToBack)
+    assertTrue(cover()!!.isShowing)
+    assertEquals(shades, decor.childCount)
+
+    controller.stop()
     assertFalse(SudoApprovals.overLockScreen())
     assertFalse(cover()!!.isShowing)
+    assertEquals(shades - 1, decor.childCount)
     assertFalse(shadowOf(app).showWhenLocked)
     assertFalse(shadowOf(other).showWhenLocked)
   }

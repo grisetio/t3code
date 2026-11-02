@@ -4,7 +4,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
-import { prepareElevationSigning } from "./elevationApproval";
+import { prepareElevationSigning, removeThisPhoneMessage } from "./elevationApproval";
 
 const KEY_ID = "doBaY6aYDBgHVCShPzJ3LQ";
 const requestId = ElevationRequestId.make("request-1");
@@ -75,5 +75,19 @@ describe("prepareElevationSigning", () => {
       ok: false,
       blocker: "other_user",
     });
+  });
+});
+
+describe("removeThisPhoneMessage", () => {
+  it("says sudo falls back to the password only when no other key approves", () => {
+    expect(removeThisPhoneMessage("oracle", [])).toBe(
+      "Agents' sudo on oracle will ask for the password again.",
+    );
+    expect(removeThisPhoneMessage("oracle", ["Pixel 9"])).toBe(
+      "This phone stops approving sudo on oracle. Pixel 9 can still approve.",
+    );
+    expect(removeThisPhoneMessage("oracle", ["Pixel 9", "Fold"])).toBe(
+      "This phone stops approving sudo on oracle. Your 2 other phones can still approve.",
+    );
   });
 });

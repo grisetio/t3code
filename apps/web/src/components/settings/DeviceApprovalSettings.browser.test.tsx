@@ -1,3 +1,4 @@
+import { elevationPasswordWords } from "@t3tools/client-runtime/elevation";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -5,11 +6,19 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import { SudoConfirmForm } from "./DeviceApprovalSettings";
 
+const mac = elevationPasswordWords("darwin", "MacBook Pro");
+
 describe("SudoConfirmForm", () => {
   it("asks the phone when one is enrolled, and takes the password only on request", async () => {
     const run = vi.fn(async (_password: string | undefined) => AsyncResult.success(undefined));
     await using screen = await render(
-      <SudoConfirmForm actionLabel="Turn off" phoneFirst onCancel={() => {}} run={run} />,
+      <SudoConfirmForm
+        actionLabel="Turn off"
+        words={mac}
+        phoneFirst
+        onCancel={() => {}}
+        run={run}
+      />,
     );
     await expect.element(screen.getByText("Approve on your phone.")).toBeVisible();
     expect(screen.container.querySelector("input")).toBeNull();
@@ -28,6 +37,7 @@ describe("SudoConfirmForm", () => {
     await using screen = await render(
       <SudoConfirmForm
         actionLabel="Turn off"
+        words={elevationPasswordWords("linux", "oracle")}
         phoneFirst={false}
         passwordRequired
         onCancel={() => {}}
@@ -36,7 +46,7 @@ describe("SudoConfirmForm", () => {
     );
     const submit = screen.getByRole("button", { name: "Turn off" });
     await expect.element(submit).toBeDisabled();
-    await userEvent.type(screen.getByPlaceholder("Mac password"), "hunter2");
+    await userEvent.type(screen.getByPlaceholder("oracle password"), "hunter2");
     await userEvent.click(submit);
     expect(run).toHaveBeenLastCalledWith("hunter2");
   });

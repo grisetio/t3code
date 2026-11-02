@@ -7,6 +7,7 @@ import {
   elevationEndedLine,
   elevationFailureMessage,
   elevationHeadline,
+  elevationPasswordWords,
   elevationRequestFacts,
   elevationRequestSource,
   elevationSeriesLine,
@@ -137,6 +138,12 @@ export function useElevationRequestContext(
 }
 
 type ElevationRequestContext = ReturnType<typeof useElevationRequestContext>;
+
+/** "Mac password" on a Mac, "oracle password" elsewhere, from the platform the server reports. */
+export function useElevationPasswordWords(environmentId: EnvironmentId, machine: string) {
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  return elevationPasswordWords(configs.get(environmentId)?.environment.platform.os, machine);
+}
 
 function ElevationAgentMark(props: { readonly agent: ElevationAgent; readonly size: number }) {
   return (
@@ -363,7 +370,7 @@ export function ElevationApprovalCard(props: {
   /**
    * True once the fingerprint signed, false if the approval then failed to send. The request
    * can leave the pending list before the answer returns, so the parent keeps the card up
-   * from here while it shows "✓ Approved".
+   * from here until the answer returns and the card says "✓ Approved".
    */
   readonly onApproving?: (active: boolean) => void;
   /** How the request ended elsewhere, said in place of the buttons while the card settles. */
@@ -422,8 +429,6 @@ export function ElevationApprovalCard(props: {
           signing.payloadB64url,
           signing.prompt,
         );
-        approvalHaptic("approved");
-        setApproved(true);
         signed = true;
         // A plain `if`: the React Compiler cannot lower optional calls inside a try.
         if (props.onApproving !== undefined) props.onApproving(true);
@@ -434,16 +439,16 @@ export function ElevationApprovalCard(props: {
       }
     });
     if (sent) {
+      // Only now: the fingerprint prompt already confirmed the touch, and "Approved" before the
+      // server took it would be a claim the server can still refuse.
+      approvalHaptic("approved");
+      setApproved(true);
       props.onAnswered?.("approve");
       return;
     }
     if (signed) props.onApproving?.(false);
-    if (declined && !enroll) {
-      // Adding a device keeps Cancel as a plain cancel, like setup.
-      await deny();
-    } else {
-      setApproved(false);
-    }
+    // Adding a device keeps Cancel as a plain cancel, like setup.
+    if (declined && !enroll) await deny();
   };
 
   const ended = approved
