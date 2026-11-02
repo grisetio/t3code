@@ -73,3 +73,13 @@ export function elevationApprovalBlockerMessage(
       return `This phone's key isn't enrolled on ${host} anymore. Set it up again in Settings → Device approval.`;
   }
 }
+
+/** What changes for sudo on the machine once this phone stops approving there. */
+export function removeThisPhoneMessage(machine: string, otherApprovers: readonly string[]) {
+  if (otherApprovers.length === 0) {
+    return `Agents' sudo on ${machine} will ask for the password again.`;
+  }
+  const others =
+    otherApprovers.length === 1 ? otherApprovers[0] : `Your ${otherApprovers.length} other phones`;
+  return `This phone stops approving sudo on ${machine}. ${others} can still approve.`;
+}

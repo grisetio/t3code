@@ -70,7 +70,7 @@ import {
 } from "./deviceApprovalSigner";
 import { DeviceApprovalSetupFlow } from "./DeviceApprovalSetupFlow";
 import { useElevationPasswordWords } from "./ElevationApprovalCard";
-import { prepareElevationSigning } from "./elevationApproval";
+import { prepareElevationSigning, removeThisPhoneMessage } from "./elevationApproval";
 import { claimedElevationRequestAtom } from "./elevationApprovalTarget";
 import { formatDeviceUse } from "./settings-device-dates";
 import {
@@ -276,6 +276,9 @@ function DeviceApprovalGroup(props: {
   const removal = useRemoveThisPhone({
     environmentId,
     machine,
+    otherApprovers: status.devices
+      .filter((device) => device.keyId !== phoneRecord?.keyId)
+      .map((device) => device.label),
     record: phoneRecord,
     onRemoved: () => {
       setDetailsOpen(false);
@@ -739,6 +742,8 @@ function isOwnRevokeRequest(entry: PendingElevationRequest, user: string, keyId:
 function useRemoveThisPhone(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  /** Keys that still approve once this phone's is gone. */
+  readonly otherApprovers: readonly string[];
   readonly record: DeviceApprovalKeyRecord | null;
   readonly onRemoved: () => void;
 }) {
@@ -838,7 +843,7 @@ function useRemoveThisPhone(props: {
     confirm: () =>
       Dialog.confirm({
         title: "Remove this phone?",
-        message: `Agents' sudo on ${machine} will ask for the password again.`,
+        message: removeThisPhoneMessage(machine, props.otherApprovers),
         confirmText: "Remove",
         destructive: true,
         onConfirm: () => void remove(null),
