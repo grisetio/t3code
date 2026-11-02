@@ -143,18 +143,25 @@ export function useElevationPasswordWords(environmentId: EnvironmentId, machine:
   return elevationPasswordWords(configs.get(environmentId)?.environment.platform.os, machine);
 }
 
-function ElevationAgentMark(props: { readonly agent: ElevationAgent; readonly size: number }) {
+function ElevationAgentMark(props: {
+  readonly agent: ElevationAgent;
+  readonly size: number;
+  readonly named: boolean;
+}) {
   return (
     <View className="flex-row items-center gap-1.5">
       <ProviderIcon provider={props.agent.driver} iconUrl={props.agent.iconUrl} size={props.size} />
-      <Text className="text-sm text-foreground-muted">{props.agent.name}</Text>
+      {props.named ? (
+        <Text className="text-sm text-foreground-muted">{props.agent.name}</Text>
+      ) : null}
     </View>
   );
 }
 
 /**
- * "{mark} Claude · Killian's MacBook Pro", or "Killian's MacBook Pro · thread not found": the
- * same second line on every surface.
+ * "{icon} Claude · Killian's MacBook Pro" under a reason, "{icon} Killian's MacBook Pro" under a
+ * headline that names the agent, or "Killian's MacBook Pro · thread not found": the same second
+ * line on every surface.
  */
 function ElevationRequestMeta(props: {
   readonly context: ElevationRequestContext;
@@ -165,8 +172,8 @@ function ElevationRequestMeta(props: {
   if (mark === null && props.source.parts.length === 0) return null;
   return (
     <View className="flex-row items-center gap-1.5">
-      {mark ? <ElevationAgentMark agent={mark} size={14} /> : null}
-      {mark && props.source.parts.length > 0 ? (
+      {mark ? <ElevationAgentMark agent={mark} size={14} named={props.source.agentNamed} /> : null}
+      {mark && props.source.agentNamed && props.source.parts.length > 0 ? (
         <Text className="text-sm text-foreground-muted">·</Text>
       ) : null}
       {props.source.parts.length > 0 ? (
@@ -526,7 +533,7 @@ export function ElevationApprovalCard(props: {
     return (
       <View className="gap-4">
         <View className="gap-1">
-          {context.agent ? <ElevationAgentMark agent={context.agent} size={14} /> : null}
+          {context.agent ? <ElevationAgentMark agent={context.agent} size={14} named /> : null}
           <Text numberOfLines={2} className="font-t3-semibold text-lg text-foreground">
             Admin request on {context.machine}
           </Text>

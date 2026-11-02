@@ -121,6 +121,8 @@ function LockScreenRequest() {
                 decoded: match.decoded,
                 explanation: match.request.explanation,
                 changes: match.request.changes,
+                driver: match.request.driver,
+                raisedByT3: match.request.raisedByT3,
               }}
               {...(session.hideContent ? { hidden: { onUnlock: () => void unlock() } } : {})}
               ended={held === null && state.kind === "ended" ? state.ended : null}

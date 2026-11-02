@@ -323,24 +323,34 @@ const ELEVATION_T3_NAME = "T3 Code";
 const ELEVATION_THREAD_NOT_FOUND = "thread not found";
 
 /**
- * The quiet line under a card's headline. The agent's mark leads when the headline is its reason;
- * a headline that already names the agent doesn't repeat it. Agents always run in a thread, so a
- * request with none is one T3 couldn't place, and says so. Pass a null machine where a header
- * above already names it.
+ * The quiet line under a card's headline. An agent's icon leads it, with the agent's name only
+ * when the headline is the reason rather than a sentence naming the agent. Agents always run in a
+ * thread, so a request with none is one T3 couldn't place, and says so. Pass a null machine where
+ * a header above already names it.
  */
 export function elevationRequestSource(input: {
   readonly explanation: string | null;
   readonly threadId: string | null;
   readonly raisedByT3: boolean | undefined;
   readonly machine: string | null;
-}): { readonly agentMark: boolean; readonly parts: readonly string[] } {
+}): {
+  /** Lead with the agent's icon, when the agent is known. */
+  readonly agentMark: boolean;
+  /** Name the agent beside its icon. */
+  readonly agentNamed: boolean;
+  readonly parts: readonly string[];
+} {
   const byT3 = input.raisedByT3 === true;
   const parts = [
     ...(byT3 ? [ELEVATION_T3_NAME] : []),
     ...(input.machine === null ? [] : [input.machine]),
     ...(input.threadId === null && !byT3 ? [ELEVATION_THREAD_NOT_FOUND] : []),
   ];
-  return { agentMark: !byT3 && elevationReason(input.explanation) !== null, parts };
+  return {
+    agentMark: !byT3,
+    agentNamed: !byT3 && elevationReason(input.explanation) !== null,
+    parts,
+  };
 }
 
 function ordinal(value: number): string {

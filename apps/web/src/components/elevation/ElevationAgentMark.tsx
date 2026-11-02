@@ -67,11 +67,14 @@ export function ElevationAgentIcon(props: {
   );
 }
 
-export function ElevationAgentMark(props: { readonly agent: ElevationAgentView }) {
+export function ElevationAgentMark(props: {
+  readonly agent: ElevationAgentView;
+  readonly named: boolean;
+}) {
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
       <AgentIcon entry={props.agent.entry} />
-      <span className="truncate">{props.agent.name}</span>
+      {props.named ? <span className="truncate">{props.agent.name}</span> : null}
     </span>
   );
 }
