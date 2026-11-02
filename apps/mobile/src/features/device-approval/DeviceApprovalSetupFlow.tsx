@@ -83,6 +83,7 @@ export function DeviceApprovalSetupFlow(props: {
   const comparisonCode = useComparisonCode(otherPhoneApproves ? (key?.publicKey ?? null) : null);
   const inFlight = useRef(false);
   // Leaving mid-wait must not keep hiding the request from the banner.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the banner claim held in the app registry on unmount
   useEffect(() => releaseClaim, []);
   const stepNumber = step === "intro" ? 1 : step === "done" ? 3 : 2;
 
@@ -178,18 +179,19 @@ export function DeviceApprovalSetupFlow(props: {
           matches: (entry) => isOwnEnrollRequest(entry, publicKey),
         });
       }
+      const input = {
+        device: key.device,
+        ...(sudoPassword === null ? {} : { password: sudoPassword }),
+      };
+      // Released on both paths rather than in `finally`, which the React Compiler cannot lower.
       try {
-        const result = await enroll({
-          environmentId,
-          input: {
-            device: key.device,
-            ...(sudoPassword === null ? {} : { password: sudoPassword }),
-          },
-        });
+        const result = await enroll({ environmentId, input });
         if (succeeded(result)) await finish(key);
-      } finally {
+      } catch (cause) {
         releaseClaim();
+        throw cause;
       }
+      releaseClaim();
     });
 
   return (

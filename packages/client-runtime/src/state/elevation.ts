@@ -77,12 +77,9 @@ export type PendingElevationList = ElevationPendingRequests & { readonly live: b
 const NO_PENDING: PendingElevationList = { requests: [], live: false };
 
 /**
- * The server's list while the environment has a session, and none while it doesn't. The server
- * holds pending requests in memory and sends the whole list first on every subscribe, so a request
- * seen before a disconnect (answered elsewhere, expired, or lost to a server restart) never
- * outlives the connection: the next session's first list replaces it. Mobile replaces its session
- * whenever it returns from a long background, so a card that must not close on a request that is
- * only between sessions waits for a `live` list.
+ * The server's list while the environment has a session, none while it doesn't: every subscribe
+ * starts with the whole list, so a request seen before a disconnect never outlives it. Mobile
+ * replaces its session after a long background, so a card waits for a `live` list.
  */
 export function followPendingElevationRequests<E, R>(
   sessions: Stream.Stream<Option.Option<unknown>>,
