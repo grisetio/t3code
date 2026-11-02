@@ -160,8 +160,14 @@ export function DeviceApprovalSetupFlow(props: {
 
   return (
     <View className="flex-1 gap-5 px-5 pt-4">
-      <View className="flex-row items-center justify-between">
-        <Button label="Cancel" tone="text" disabled={busy} onPress={close} />
+      {/* Tall enough for Cancel, so the step count stays put when Done drops it. */}
+      <View className="min-h-14 flex-row items-center justify-between">
+        {/* Done has nothing left to cancel; its own button closes. */}
+        {step === "done" ? (
+          <View />
+        ) : (
+          <Button label="Cancel" tone="text" disabled={busy} onPress={close} />
+        )}
         <Text className="text-sm text-foreground-muted">{stepNumber} of 3</Text>
       </View>
 
