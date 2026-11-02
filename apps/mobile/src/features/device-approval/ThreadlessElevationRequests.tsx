@@ -139,6 +139,7 @@ function Highlight(props: { readonly onDone: () => void }) {
 /** Calls `onSettled(id)` once the card has said how its request ended for long enough to read. */
 function Settle(props: { readonly id: string; readonly onSettled: (id: string) => void }) {
   const { id, onSettled } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the timer that lets the card show how its request ended before it leaves
   useEffect(() => {
     const timer = setTimeout(() => onSettled(id), ELEVATION_SETTLE_MS);
     return () => clearTimeout(timer);

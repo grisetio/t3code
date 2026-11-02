@@ -55,6 +55,7 @@ function Leaving(props: {
   readonly children: ReactNode;
 }) {
   const { id, open, onGone } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the leave timer that removes the card once its fade and collapse have played
   useEffect(() => {
     if (open) return;
     const timer = setTimeout(() => onGone(id), FADE_MS + LEAVE_MS);
@@ -189,6 +190,7 @@ export function ThreadlessElevationRequests(props: { readonly onScreen: boolean 
 /** Calls `onSettled(id)` once the card has said how its request ended for long enough to read. */
 function Settle(props: { readonly id: string; readonly onSettled: (id: string) => void }) {
   const { id, onSettled } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the timer that lets the card show how its request ended before it leaves
   useEffect(() => {
     const timer = setTimeout(() => onSettled(id), SETTLE_MS);
     return () => clearTimeout(timer);

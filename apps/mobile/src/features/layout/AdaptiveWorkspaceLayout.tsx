@@ -3,7 +3,7 @@ import {
   WorkspacePresentationHostContext,
 } from "./workspace-presentation-context";
 import { useAndroidFloatingTabs } from "../settings/appearance/AppearancePreferencesProvider";
-import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaInsetsContext } from "react-native-safe-area-context";
 import { AdaptiveWorkspaceContext, useAdaptiveWorkspaceLayout } from "./adaptive-workspace-context";
 import { threadSelectionDeferral } from "./deferred-navigation";
 import { uuidv4 } from "../../lib/uuid";
@@ -188,7 +188,6 @@ function AdaptiveWorkspaceLayoutContent(
   const workspace = useWorkspaceTabs();
   // Settings and Usage occupy the workspace rather than a list/detail pair.
   const androidSettingsOpen = useAndroidWorkspaceRoot()?.settingsOpen ?? false;
-  const safeAreaInsets = useSafeAreaInsets();
   const workspacePage =
     Platform.OS === "android" && (androidSettingsOpen || workspace?.state.selectedTab === "usage");
   const navigation = useNavigation();
@@ -951,28 +950,34 @@ function AdaptiveWorkspaceLayoutContent(
             <WorkspaceSettledContentWidthContext
               value={Platform.OS === "android" && layout.usesSplitView ? contentTargetWidth : null}
             >
-              {/* Compact Settings keeps the bottom navigation under all of its pages. */}
-              <SafeAreaInsetsContext
-                value={
-                  floatingTabsEnabled &&
-                  (compactAndroidSettings || (layout.usesSplitView && workspacePage))
-                    ? {
-                        ...safeAreaInsets,
-                        bottom:
-                          safeAreaInsets.bottom +
-                          FLOATING_TABS.bottom +
-                          FLOATING_TABS.edge +
-                          floatingTabs.height,
-                      }
-                    : compactAndroidSettings
-                      ? { ...safeAreaInsets, bottom: 0 }
-                      : safeAreaInsets
-                }
-              >
-                <View className="flex-1">
-                  <SettingsWorkspaceLayout>{children}</SettingsWorkspaceLayout>
-                </View>
-              </SafeAreaInsetsContext>
+              {/* Compact Settings keeps the bottom navigation under all of its pages. Under Android's
+              presentation host the columns render inside the approval banner, which takes the top
+              inset while it shows, so this reads the insets here rather than the layout's. */}
+              <SafeAreaInsetsContext.Consumer>
+                {(insets) => (
+                  <SafeAreaInsetsContext
+                    value={
+                      floatingTabsEnabled &&
+                      (compactAndroidSettings || (layout.usesSplitView && workspacePage))
+                        ? {
+                            ...insets!,
+                            bottom:
+                              insets!.bottom +
+                              FLOATING_TABS.bottom +
+                              FLOATING_TABS.edge +
+                              floatingTabs.height,
+                          }
+                        : compactAndroidSettings
+                          ? { ...insets!, bottom: 0 }
+                          : insets
+                    }
+                  >
+                    <View className="flex-1">
+                      <SettingsWorkspaceLayout>{children}</SettingsWorkspaceLayout>
+                    </View>
+                  </SafeAreaInsetsContext>
+                )}
+              </SafeAreaInsetsContext.Consumer>
               {floatingTabsEnabled &&
               (compactAndroidSettings || (layout.usesSplitView && workspacePage)) ? (
                 <FloatingWorkspaceTabs
