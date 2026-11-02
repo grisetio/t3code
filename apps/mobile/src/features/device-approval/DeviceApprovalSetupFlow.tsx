@@ -5,14 +5,17 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import type { ElevationStatus, EnvironmentId } from "@t3tools/contracts";
+import * as Result from "effect/Result";
 import * as Clipboard from "expo-clipboard";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -27,6 +30,7 @@ import {
   deviceApprovalSignerErrorMessage,
 } from "./deviceApprovalSigner";
 import { useElevationPasswordWords } from "./ElevationApprovalCard";
+import { claimedElevationRequestAtom } from "./elevationApprovalTarget";
 import { useComparisonCode } from "./ElevationRequestDetails";
 import { approvalHaptic } from "./approvalHaptics";
 
@@ -34,6 +38,19 @@ type Step = "intro" | "approve" | "terminal" | "done";
 
 // Long enough to see "✓ Confirmed" before the password step slides in.
 const CONFIRMED_MS = 500;
+
+/** The "Add device" sudo for this phone's own new key, which only another phone can answer. */
+function isOwnEnrollRequest(entry: PendingElevationRequest, publicKey: Uint8Array) {
+  if (!Result.isSuccess(entry.decoded)) return false;
+  const enroll = entry.decoded.success.view.enroll;
+  return (
+    enroll !== null &&
+    enroll.publicKey.length === publicKey.length &&
+    enroll.publicKey.every((byte, index) => byte === publicKey[index])
+  );
+}
+
+const releaseClaim = () => appAtomRegistry.set(claimedElevationRequestAtom, null);
 
 /**
  * Setup from the phone (FLOW moment 4): the phone creates its key and the fingerprint proves it
@@ -65,6 +82,8 @@ export function DeviceApprovalSetupFlow(props: {
   const [terminalCommand, setTerminalCommand] = useState<string | null>(null);
   const comparisonCode = useComparisonCode(otherPhoneApproves ? (key?.publicKey ?? null) : null);
   const inFlight = useRef(false);
+  // Leaving mid-wait must not keep hiding the request from the banner.
+  useEffect(() => releaseClaim, []);
   const stepNumber = step === "intro" ? 1 : step === "done" ? 3 : 2;
 
   const guarded = async (action: () => Promise<void>) => {
@@ -151,11 +170,26 @@ export function DeviceApprovalSetupFlow(props: {
         await finish(key);
         return;
       }
-      const result = await enroll({
-        environmentId,
-        input: { device: key.device, ...(sudoPassword === null ? {} : { password: sudoPassword }) },
-      });
-      if (succeeded(result)) await finish(key);
+      // This phone asks; another one answers. Its own request shows here, not as a banner.
+      const { publicKey } = key;
+      if (sudoPassword === null && publicKey !== null) {
+        appAtomRegistry.set(claimedElevationRequestAtom, {
+          environmentId,
+          matches: (entry) => isOwnEnrollRequest(entry, publicKey),
+        });
+      }
+      try {
+        const result = await enroll({
+          environmentId,
+          input: {
+            device: key.device,
+            ...(sudoPassword === null ? {} : { password: sudoPassword }),
+          },
+        });
+        if (succeeded(result)) await finish(key);
+      } finally {
+        releaseClaim();
+      }
     });
 
   return (
