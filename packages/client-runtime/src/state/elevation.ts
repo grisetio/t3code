@@ -71,22 +71,31 @@ export function collectPendingElevationRequests(
   return next.length === 0 ? EMPTY_PENDING : next;
 }
 
-const NO_PENDING: ElevationPendingRequests = { requests: [] };
+/** `live` is false for the empty list held between sessions, which isn't the server's word. */
+export type PendingElevationList = ElevationPendingRequests & { readonly live: boolean };
+
+const NO_PENDING: PendingElevationList = { requests: [], live: false };
 
 /**
  * The server's list while the environment has a session, and none while it doesn't. The server
  * holds pending requests in memory and sends the whole list first on every subscribe, so a request
  * seen before a disconnect (answered elsewhere, expired, or lost to a server restart) never
- * outlives the connection: the next session's first list replaces it.
+ * outlives the connection: the next session's first list replaces it. Mobile replaces its session
+ * whenever it returns from a long background, so a card that must not close on a request that is
+ * only between sessions waits for a `live` list.
  */
 export function followPendingElevationRequests<E, R>(
   sessions: Stream.Stream<Option.Option<unknown>>,
   requests: Stream.Stream<ElevationPendingRequests, E, R>,
-): Stream.Stream<ElevationPendingRequests, E, R> {
+): Stream.Stream<PendingElevationList, E, R> {
   return sessions.pipe(
     Stream.map(Option.isSome),
     Stream.changes,
-    Stream.switchMap((connected) => (connected ? requests : Stream.succeed(NO_PENDING))),
+    Stream.switchMap((connected) =>
+      connected
+        ? requests.pipe(Stream.map((list): PendingElevationList => ({ ...list, live: true })))
+        : Stream.succeed(NO_PENDING),
+    ),
   );
 }
 
@@ -138,6 +147,20 @@ export function createElevationAtoms<R, E>(
     return ended;
   }).pipe(Atom.withLabel("environment-data:elevation:ended-across-environments"));
 
+  /**
+   * Environments whose pending list came from their current session. A request missing from any
+   * other environment's list may only be waiting on the reconnect.
+   */
+  const liveEnvironmentsAtom = Atom.make((get) => {
+    const live = new Set<EnvironmentId>();
+    for (const [environmentId, config] of get(options.environmentServerConfigsAtom)) {
+      if (!environmentSupportsDeviceApproval(config)) continue;
+      const result = get(pendingRequests({ environmentId, input: {} }));
+      if (Option.getOrNull(AsyncResult.value(result))?.live === true) live.add(environmentId);
+    }
+    return live;
+  }).pipe(Atom.withLabel("environment-data:elevation:live-environments"));
+
   const status = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:elevation:status",
     tag: WS_METHODS.elevationStatus,
@@ -157,6 +180,7 @@ export function createElevationAtoms<R, E>(
     pendingRequests,
     pendingAcrossEnvironmentsAtom,
     endedAcrossEnvironmentsAtom,
+    liveEnvironmentsAtom,
     status,
     // One answer per request at a time; the server keeps the first answer.
     respond: createEnvironmentRpcCommand(runtime, {

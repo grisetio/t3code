@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { BackHandler, Modal, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -14,6 +14,7 @@ import { ElevationApprovalCard } from "./ElevationApprovalCard";
 import { ELEVATION_SETTLE_MS } from "./elevationApproval";
 import {
   elevationLockScreenAtom,
+  lockScreenRequestState,
   openElevationApproval,
   pendingRequestForNotificationIntent,
 } from "./elevationApprovalTarget";
@@ -39,19 +40,30 @@ export function ElevationLockScreen() {
 function LockScreenRequest() {
   const session = useAtomValue(elevationLockScreenAtom);
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom);
+  const liveEnvironments = useAtomValue(elevation.liveEnvironmentsAtom);
+  const endedByEnvironment = useAtomValue(elevation.endedAcrossEnvironmentsAtom);
   const insets = useSafeAreaInsets();
   const [now] = useState(() => Date.now());
-  const shownRequest = useRef<string | null>(null);
   const [waitedOut, setWaitedOut] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setWaitedOut(true), ARRIVAL_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, []);
-  const current =
+  const found =
     session === null ? null : pendingRequestForNotificationIntent(session.intent, pending, now);
-  // Approved here: "✓ Approved" stays even once the request has left the list.
+  const current = found === "expired" ? null : found;
+  // The card keeps the request it showed until a fresh list says how it ended.
+  const [shown, setShown] = useState<PendingElevationRequest | null>(null);
+  if (current !== null && current !== shown) setShown(current);
+  const state = lockScreenRequestState({
+    shown,
+    current,
+    live: shown !== null && liveEnvironments.has(shown.environmentId),
+    ended: (shown && endedByEnvironment.get(shown.environmentId)) ?? [],
+  });
+  // Approved here: the card says "✓ Approved" itself, then leaves.
   const [held, setHeld] = useState<PendingElevationRequest | null>(null);
-  const match = held ?? current;
+  const match = held ?? (state.kind === "pending" || state.kind === "ended" ? state.entry : null);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -61,12 +73,13 @@ function LockScreenRequest() {
     return () => subscription.remove();
   }, []);
 
-  // Answered on another device, or expired: nothing is left to show.
-  const requestId = match !== null && match !== "expired" ? match.request.requestId : null;
+  // Answered on another device, or expired: the card says how for a moment, then leaves.
+  const endedElsewhere = held === null && state.kind === "ended";
   useEffect(() => {
-    if (requestId !== null) shownRequest.current = requestId;
-    else if (shownRequest.current !== null) leaveLockScreen();
-  }, [requestId]);
+    if (!endedElsewhere) return;
+    const timer = setTimeout(leaveLockScreen, ELEVATION_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [endedElsewhere]);
 
   if (session === null) return null;
 
@@ -74,7 +87,7 @@ function LockScreenRequest() {
     if (!(await androidLockScreen.requestUnlock())) return;
     appAtomRegistry.set(elevationLockScreenAtom, null);
     if (then) then();
-    else if (match !== null && match !== "expired") {
+    else if (match !== null) {
       openElevationApproval({
         environmentId: match.environmentId,
         requestId: match.request.requestId,
@@ -97,7 +110,7 @@ function LockScreenRequest() {
           <Text className="text-xs text-foreground-muted">Locked</Text>
         </View>
         <View className="gap-4 rounded-[20px] border border-border bg-card-alt p-4">
-          {match !== null && match !== "expired" ? (
+          {match !== null ? (
             <ElevationApprovalCard
               request={{
                 environmentId: match.environmentId,
@@ -108,6 +121,7 @@ function LockScreenRequest() {
                 changes: match.request.changes,
               }}
               {...(session.hideContent ? { hidden: { onUnlock: () => void unlock() } } : {})}
+              ended={held === null && state.kind === "ended" ? state.ended : null}
               onApproving={(active) => setHeld(active ? match : null)}
               onAnswered={(decision) => {
                 if (decision === "approve") setTimeout(leaveLockScreen, ELEVATION_SETTLE_MS);
@@ -118,7 +132,7 @@ function LockScreenRequest() {
           ) : (
             <>
               <Text className="text-base text-foreground">
-                {match === "expired" || waitedOut
+                {found === "expired" || state.kind === "gone" || waitedOut
                   ? "This request isn't waiting anymore."
                   : "Getting the request…"}
               </Text>

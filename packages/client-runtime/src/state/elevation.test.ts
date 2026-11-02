@@ -73,31 +73,32 @@ describe("followPendingElevationRequests", () => {
           return Stream.fromQueue(server);
         }),
       );
-      const seen = yield* Queue.unbounded<readonly string[]>();
+      const seen = yield* Queue.unbounded<{ ids: readonly string[]; live: boolean }>();
       const fiber = yield* followPendingElevationRequests(
         SubscriptionRef.changes(session),
         subscribe,
       ).pipe(
         Stream.runForEach((value) =>
-          Queue.offer(
-            seen,
-            value.requests.map((entry) => entry.requestId),
-          ),
+          Queue.offer(seen, {
+            ids: value.requests.map((entry) => entry.requestId),
+            live: value.live,
+          }),
         ),
         Effect.forkChild,
       );
       const first = yield* Queue.take(subscriptions);
       yield* Queue.offer(first, { requests: [request("a", 1, "t")] });
-      expect(yield* Queue.take(seen)).toEqual(["a"]);
+      expect(yield* Queue.take(seen)).toEqual({ ids: ["a"], live: true });
 
-      // The server restarts: the socket drops, and the request it held is gone.
+      // The server restarts: the socket drops, and the request it held is gone. The empty list
+      // says it isn't the server's, so a card can wait for the next session to tell.
       yield* SubscriptionRef.set(session, Option.none());
-      expect(yield* Queue.take(seen)).toEqual([]);
+      expect(yield* Queue.take(seen)).toEqual({ ids: [], live: false });
 
       yield* SubscriptionRef.set(session, Option.some("second"));
       const second = yield* Queue.take(subscriptions);
       yield* Queue.offer(second, { requests: [request("b", 2, "t")] });
-      expect(yield* Queue.take(seen)).toEqual(["b"]);
+      expect(yield* Queue.take(seen)).toEqual({ ids: ["b"], live: true });
       yield* Fiber.interrupt(fiber);
     }),
   );
