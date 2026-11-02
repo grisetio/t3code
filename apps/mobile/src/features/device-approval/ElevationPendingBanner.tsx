@@ -2,9 +2,17 @@ import { useAtomValue } from "@effect/atom-react";
 import { elevationHeadline, elevationNoticeText } from "@t3tools/client-runtime/elevation";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import * as Result from "effect/Result";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
-import Animated, { Keyframe, ReduceMotion } from "react-native-reanimated";
+import Animated, {
+  Easing,
+  Keyframe,
+  ReduceMotion,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ProviderIcon } from "../../components/ProviderIcon";
@@ -45,6 +53,12 @@ const BANNER_EXITING = new Keyframe({
   .reduceMotion(ReduceMotion.System);
 
 const BANNER_GAP = 8;
+// The keyframes above run linearly; the room moves with the banner, so it does too.
+const roomTiming = (duration: number) => ({
+  duration,
+  easing: Easing.linear,
+  reduceMotion: ReduceMotion.System,
+});
 
 /**
  * Pending sudo requests from every connected environment, so a request is
@@ -57,7 +71,8 @@ const BANNER_GAP = 8;
  * The banner waits until it's answered, so it takes its own room at the top
  * instead of covering the screen's header and first rows: the screen below
  * moves down and lays out as if the status bar were the banner's. The room
- * goes once the banner's exit has played.
+ * opens and closes with the banner's own enter and exit, so the two move
+ * together.
  */
 export function ElevationPendingBanner(props: {
   readonly pathname: string;
@@ -91,13 +106,35 @@ export function ElevationPendingBanner(props: {
   }
   // The slot's height, which holds while a leaving banner plays its exit.
   const [bannerHeight, setBannerHeight] = useState(0);
-  const reserved = bannerHeight > 0 ? insets.top + bannerHeight + BANNER_GAP : 0;
+  // The room below the status bar; it starts closing as the banner starts its exit.
+  const room = first !== undefined && bannerHeight > 0 ? bannerHeight + BANNER_GAP : 0;
+  // While any room shows, the screen pads below the status bar itself and sees no top inset.
+  // Handing the inset over at either end is the same layout, so nothing moves then.
+  const [roomOpen, setRoomOpen] = useState(false);
+  if (room > 0 && !roomOpen) setRoomOpen(true);
+  const roomHeight = useSharedValue(0);
+  useEffect(() => {
+    roomHeight.set(
+      withTiming(
+        room,
+        roomTiming(room > 0 ? MOBILE_MOTION.enter : MOBILE_MOTION.exit),
+        (finished) => {
+          if (finished && room === 0) runOnJS(setRoomOpen)(false);
+        },
+      ),
+    );
+  }, [room, roomHeight]);
+  const roomStyle = useAnimatedStyle(() => ({ paddingTop: roomHeight.get() }));
   return (
     <View className="flex-1 bg-header">
-      <View style={{ flex: 1, paddingTop: reserved }}>
-        <SafeAreaInsetsContext value={reserved > 0 ? { ...insets, top: 0 } : insets}>
-          {props.children}
-        </SafeAreaInsetsContext>
+      {/* The status bar padding is a plain style so it commits with the inset context below;
+          inside the animated style it lands a frame late and the screen jumps under the status bar. */}
+      <View style={{ flex: 1, paddingTop: roomOpen ? insets.top : 0 }}>
+        <Animated.View style={[{ flex: 1 }, roomStyle]}>
+          <SafeAreaInsetsContext value={roomOpen ? { ...insets, top: 0 } : insets}>
+            {props.children}
+          </SafeAreaInsetsContext>
+        </Animated.View>
       </View>
       {/* Stays mounted, so a banner's exit can play after the last request leaves. */}
       <View
