@@ -2,7 +2,9 @@ import { SymbolView, type AppSymbolName } from "./AppSymbol";
 import { Pressable } from "react-native";
 import { AppActivityIndicator } from "./AppActivityIndicator";
 import { AppText } from "./AppText";
+import { useAppearancePreferences } from "../../features/settings/appearance/AppearancePreferencesProvider";
 import { cn } from "../../lib/cn";
+import { themeColorWithContrast } from "../../lib/mobileTheme";
 
 export interface ButtonProps {
   readonly label: string;
@@ -12,7 +14,8 @@ export interface ButtonProps {
   readonly disabled?: boolean;
   readonly accessibilityHint?: string;
   readonly loading?: boolean;
-  readonly tone?: "primary" | "secondary" | "danger" | "text" | "contrast";
+  /** `destructive` is the final step of an irreversible action, filled like a dialog's. */
+  readonly tone?: "primary" | "secondary" | "danger" | "destructive" | "text" | "contrast";
   readonly fullWidth?: boolean;
 }
 
@@ -22,9 +25,29 @@ const TONE_CLASS_NAMES = {
   secondary: ["bg-secondary", "text-secondary-foreground"],
   danger: ["bg-danger", "text-danger-foreground"],
   text: ["bg-transparent", "text-primary-text"],
+  destructive: ["", "text-white"],
 } as const;
 
 export function Button(props: ButtonProps) {
+  return props.tone === "destructive" ? (
+    <DestructiveButton {...props} />
+  ) : (
+    <ButtonBody {...props} />
+  );
+}
+
+/** The danger color can be pastel in dark themes, so the fill darkens until white reads on it. */
+function DestructiveButton(props: ButtonProps) {
+  const { themeVariables } = useAppearancePreferences();
+  return (
+    <ButtonBody
+      {...props}
+      fill={themeColorWithContrast(themeVariables["--color-danger-foreground"], "#ffffff")}
+    />
+  );
+}
+
+function ButtonBody(props: ButtonProps & { readonly fill?: string }) {
   const [containerClassName, labelClassName] = TONE_CLASS_NAMES[props.tone ?? "secondary"];
   const disabled = Boolean(props.disabled || props.loading);
   return (
@@ -40,6 +63,7 @@ export function Button(props: ButtonProps) {
         props.fullWidth ? "w-full" : "self-start",
         disabled ? "bg-subtle-strong" : containerClassName,
       )}
+      style={disabled || props.fill === undefined ? undefined : { backgroundColor: props.fill }}
     >
       {props.loading ? (
         <AppActivityIndicator colorClassName="accent-foreground-muted" />

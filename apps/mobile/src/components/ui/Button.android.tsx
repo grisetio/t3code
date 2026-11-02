@@ -17,6 +17,7 @@ import { useControlTheme } from "./useControlTheme";
 import { useScaledTextRole } from "../../features/settings/appearance/useScaledTextRole";
 import type { ButtonProps } from "./Button";
 import { useAndroidControlSizing } from "./useAndroidControlSizing";
+import { themeColorWithContrast } from "../../lib/mobileTheme";
 
 export function Button(props: ButtonProps) {
   const { colors } = useControlTheme();
@@ -32,9 +33,11 @@ export function Button(props: ButtonProps) {
         ? colors["--color-primary"]
         : tone === "danger"
           ? colors["--color-danger"]
-          : tone === "text"
-            ? "#00000000"
-            : colors["--color-secondary"];
+          : tone === "destructive"
+            ? themeColorWithContrast(colors["--color-danger-foreground"], "#ffffff")
+            : tone === "text"
+              ? "#00000000"
+              : colors["--color-secondary"];
   const contentColor =
     tone === "contrast"
       ? colors["--color-screen"]
@@ -42,9 +45,11 @@ export function Button(props: ButtonProps) {
         ? colors["--color-primary-foreground"]
         : tone === "danger"
           ? colors["--color-danger-foreground"]
-          : tone === "text"
-            ? colors["--color-primary-text"]
-            : colors["--color-secondary-foreground"];
+          : tone === "destructive"
+            ? "#ffffff"
+            : tone === "text"
+              ? colors["--color-primary-text"]
+              : colors["--color-secondary-foreground"];
   return (
     <View
       accessible

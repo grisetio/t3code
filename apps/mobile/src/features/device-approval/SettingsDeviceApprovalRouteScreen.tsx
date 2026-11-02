@@ -31,7 +31,7 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useResolveClassNames } from "uniwind";
@@ -46,6 +46,7 @@ import { ListRowLayout } from "../../components/ui/ListRowLayout";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { Sheet } from "../../components/ui/Sheet";
+import { cn } from "../../lib/cn";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
 import { useEnvironments } from "../../state/environments";
@@ -705,6 +706,31 @@ const failureText = (result: AtomCommandResult<unknown, unknown>) =>
     ? null
     : elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong.");
 
+/**
+ * Android's titled Sheet adds an app bar with its own back arrow, a second tone and a second way
+ * out next to the grabber; a Material bottom sheet carries its heading in the content instead.
+ * iOS keeps the native header, whose close button is the sheet's only way out.
+ */
+function PasswordSheet(props: {
+  readonly title: string;
+  readonly onClose: () => void;
+  readonly children: ReactNode;
+}) {
+  const android = Platform.OS === "android";
+  return (
+    <Sheet title={android ? undefined : props.title} onClose={props.onClose}>
+      <View className={cn("gap-4 px-5 pb-8", android ? "pt-1" : "pt-3")}>
+        {android ? (
+          <Text accessibilityRole="header" className="text-xl font-t3-medium text-foreground">
+            {props.title}
+          </Text>
+        ) : null}
+        {props.children}
+      </View>
+    </Sheet>
+  );
+}
+
 function PasswordField(props: {
   readonly words: ElevationPasswordWords;
   readonly value: string;
@@ -868,35 +894,33 @@ function RemovePasswordSheet(props: {
 }) {
   const [password, setPassword] = useState("");
   return (
-    <Sheet title="Remove this phone" onClose={props.onClose}>
-      <View className="gap-4 px-5 pt-3 pb-8">
-        <Text className="text-sm text-foreground-muted">
-          No phone can approve this, so {props.machine} needs your {props.words.shortPassword}.
+    <PasswordSheet title="Remove this phone" onClose={props.onClose}>
+      <Text className="text-sm text-foreground-muted">
+        No phone can approve this, so {props.machine} needs your {props.words.shortPassword}.
+      </Text>
+      <PasswordField
+        words={props.words}
+        value={password}
+        onChange={setPassword}
+        editable={!props.busy}
+      />
+      {props.error !== null ? (
+        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+          {props.error}
         </Text>
-        <PasswordField
-          words={props.words}
-          value={password}
-          onChange={setPassword}
-          editable={!props.busy}
-        />
-        {props.error !== null ? (
-          <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-            {props.error}
-          </Text>
-        ) : null}
-        <Button
-          label="Remove"
-          tone="danger"
-          fullWidth
-          loading={props.busy}
-          disabled={props.busy || password === ""}
-          onPress={() => {
-            props.onSubmit(password);
-            setPassword("");
-          }}
-        />
-      </View>
-    </Sheet>
+      ) : null}
+      <Button
+        label="Remove"
+        tone="destructive"
+        fullWidth
+        loading={props.busy}
+        disabled={props.busy || password === ""}
+        onPress={() => {
+          props.onSubmit(password);
+          setPassword("");
+        }}
+      />
+    </PasswordSheet>
   );
 }
 
@@ -927,32 +951,25 @@ function TurnOffSheet(props: {
   };
 
   return (
-    <Sheet title="Turn off device approval" onClose={props.onClose}>
-      <View className="gap-4 px-5 pt-3 pb-8">
-        <Text className="text-sm text-foreground-muted">
-          {props.machine} needs your {props.words.shortPassword} to turn it off.
+    <PasswordSheet title="Turn off device approval" onClose={props.onClose}>
+      <Text className="text-sm text-foreground-muted">
+        {props.machine} needs your {props.words.shortPassword} to turn it off.
+      </Text>
+      <PasswordField words={props.words} value={password} onChange={setPassword} editable={!busy} />
+      {error !== null ? (
+        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+          {error}
         </Text>
-        <PasswordField
-          words={props.words}
-          value={password}
-          onChange={setPassword}
-          editable={!busy}
-        />
-        {error !== null ? (
-          <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-            {error}
-          </Text>
-        ) : null}
-        <Button
-          label="Turn off"
-          tone="danger"
-          fullWidth
-          loading={busy}
-          disabled={busy || password === ""}
-          onPress={() => void submit()}
-        />
-      </View>
-    </Sheet>
+      ) : null}
+      <Button
+        label="Turn off"
+        tone="destructive"
+        fullWidth
+        loading={busy}
+        disabled={busy || password === ""}
+        onPress={() => void submit()}
+      />
+    </PasswordSheet>
   );
 }
 
@@ -1078,28 +1095,26 @@ function KeySheetView(props: {
   };
 
   return (
-    <Sheet
+    <PasswordSheet
       title={sheet.kind === "fix" ? "Fix device approval" : "Set up this phone again"}
       onClose={close}
     >
-      <View className="gap-4 px-5 pt-3 pb-8">
-        <Text className="text-sm text-foreground-muted">{text.message}</Text>
-        <PasswordField words={words} value={password} onChange={setPassword} editable={!busy} />
-        {error !== null ? (
-          <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-            {error}
-          </Text>
-        ) : null}
-        <Button
-          label={text.action}
-          icon={FINGERPRINT}
-          tone="primary"
-          fullWidth
-          loading={busy}
-          disabled={busy || password === ""}
-          onPress={() => void submit()}
-        />
-      </View>
-    </Sheet>
+      <Text className="text-sm text-foreground-muted">{text.message}</Text>
+      <PasswordField words={words} value={password} onChange={setPassword} editable={!busy} />
+      {error !== null ? (
+        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+          {error}
+        </Text>
+      ) : null}
+      <Button
+        label={text.action}
+        icon={FINGERPRINT}
+        tone="primary"
+        fullWidth
+        loading={busy}
+        disabled={busy || password === ""}
+        onPress={() => void submit()}
+      />
+    </PasswordSheet>
   );
 }
