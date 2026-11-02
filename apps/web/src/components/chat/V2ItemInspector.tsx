@@ -196,11 +196,14 @@ export function FetchedToolOutput(props: {
 export function CommandItemOutput(props: {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
   readonly environmentId: EnvironmentId;
+  readonly source?: TurnItemSource | undefined;
 }) {
-  const streamsOutput = useCommandOutputStreaming(props.environmentId);
+  const environmentStreamsOutput = useCommandOutputStreaming(props.environmentId);
+  const streamsOutput = props.source !== undefined || environmentStreamsOutput;
   const { item, output } = useFetchedTurnItem(
     props.projectedItem,
     props.environmentId,
+    props.source,
     streamsOutput,
   );
   const exitCode = item.type === "command_execution" ? item.exitCode : undefined;
@@ -211,6 +214,7 @@ export function CommandItemOutput(props: {
           environmentId={props.environmentId}
           threadId={props.projectedItem.sourceThreadId}
           itemId={props.projectedItem.sourceItemId}
+          source={props.source?.commandOutput}
         />
       ) : (
         <ToolOutput {...output} />

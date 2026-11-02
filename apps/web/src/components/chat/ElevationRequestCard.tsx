@@ -71,7 +71,7 @@ export function ElevationRequestCard(props: {
 }) {
   const { item } = props;
   const { activeTurnInProgress, latestRunId } = use(TimelineRowActivityCtx);
-  const { workspaceRoot } = use(TimelineRowCtx);
+  const { workspaceRoot, turnItemSource } = use(TimelineRowCtx);
   const agent = useElevationAgent(props.environmentId, item.threadId);
   // The turn item doesn't carry how many requests came before; the pending request does.
   const series = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).find(
@@ -138,7 +138,11 @@ export function ElevationRequestCard(props: {
         warnings={view.warnings}
         output={
           props.command === undefined ? null : (
-            <CommandItemOutput projectedItem={props.command} environmentId={props.environmentId} />
+            <CommandItemOutput
+              projectedItem={props.command}
+              environmentId={props.environmentId}
+              source={turnItemSource}
+            />
           )
         }
       />

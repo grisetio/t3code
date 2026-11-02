@@ -105,6 +105,7 @@ export function ElevationPendingBanner(props: {
   const [roomOpen, setRoomOpen] = useState(false);
   if (room > 0 && !roomOpen) setRoomOpen(true);
   const roomHeight = useSharedValue(0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drives the room's UI-thread animation toward the banner's height
   useEffect(() => {
     roomHeight.set(
       withTiming(

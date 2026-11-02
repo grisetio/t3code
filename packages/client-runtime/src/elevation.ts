@@ -510,11 +510,9 @@ export function elevationCommandRowKey(row: OrchestrationV2ProjectedTurnItem): s
 }
 
 /**
- * One row per sudo: a settled request takes over the agent's command row the server linked it to
- * (`commandItemId`). The request's row stays where its card was, so the card hands over in place,
- * and the command row is hidden. A pending request keeps its card and leaves the command row
- * alone. Only the first request linked to a command merges: in `sudo a && sudo b` the second
- * keeps its own row rather than taking over a row that already speaks for the first.
+ * One row per sudo: a settled request takes over the command row the server linked it to
+ * (`commandItemId`), staying where its card was; a pending one leaves the command row alone.
+ * Only the first request linked to a command merges: in `sudo a && sudo b` the second keeps its own.
  */
 export function elevationCommandRows(
   rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
