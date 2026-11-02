@@ -469,7 +469,7 @@ describe("elevationAgent", () => {
 });
 
 describe("elevationRequestSource", () => {
-  it("says a request no thread claims wasn't placed, and leaves the agent to the headline", () => {
+  it("says a request no thread claims wasn't placed, its icon there when a driver names the agent", () => {
     expect(
       elevationRequestSource({
         explanation: null,
@@ -477,7 +477,11 @@ describe("elevationRequestSource", () => {
         raisedByT3: undefined,
         machine: "Killian's MacBook Pro",
       }),
-    ).toEqual({ agentMark: false, parts: ["Killian's MacBook Pro", "thread not found"] });
+    ).toEqual({
+      agentMark: true,
+      agentNamed: false,
+      parts: ["Killian's MacBook Pro", "thread not found"],
+    });
     // In the threads list the section header names the machine.
     expect(
       elevationRequestSource({
@@ -486,10 +490,19 @@ describe("elevationRequestSource", () => {
         raisedByT3: false,
         machine: null,
       }),
-    ).toEqual({ agentMark: false, parts: ["thread not found"] });
+    ).toEqual({ agentMark: true, agentNamed: false, parts: ["thread not found"] });
   });
 
-  it("leads with the agent's mark under its reason, and T3 for its own sudo", () => {
+  it("always leads with the agent's icon, naming it only under its reason", () => {
+    // "Claude wants admin access" already names it.
+    expect(
+      elevationRequestSource({
+        explanation: null,
+        threadId: "thread:a",
+        raisedByT3: undefined,
+        machine: "mac",
+      }),
+    ).toEqual({ agentMark: true, agentNamed: false, parts: ["mac"] });
     expect(
       elevationRequestSource({
         explanation: "Deploy",
@@ -497,7 +510,10 @@ describe("elevationRequestSource", () => {
         raisedByT3: undefined,
         machine: "mac",
       }),
-    ).toEqual({ agentMark: true, parts: ["mac"] });
+    ).toEqual({ agentMark: true, agentNamed: true, parts: ["mac"] });
+  });
+
+  it("says T3 for its own sudo, without an agent", () => {
     expect(
       elevationRequestSource({
         explanation: "Test device approval",
@@ -505,7 +521,7 @@ describe("elevationRequestSource", () => {
         raisedByT3: true,
         machine: "mac",
       }),
-    ).toEqual({ agentMark: false, parts: ["T3 Code", "mac"] });
+    ).toEqual({ agentMark: false, agentNamed: false, parts: ["T3 Code", "mac"] });
   });
 });
 

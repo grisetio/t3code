@@ -32,6 +32,7 @@ const run = (
     explanation: command.explanation ?? null,
     finishedAt: command.finishedAt ?? null,
   })),
+  backgroundWork: false,
 });
 
 // Measured: Claude wraps each Bash call, and its bash stays as sudo's parent.
@@ -171,18 +172,19 @@ describe("attribute", () => {
   });
 
   it("lends a finished call only to a sudo of its program that follows it closely", () => {
+    // Only sudo's own argv can match: the wrapper's argv is unreadable.
     const hello = {
       argv: ["sudo", "-u", "root", "cat", "/dev/null"],
-      chain: [
-        entry(200, claudeBash("sleep 1; sudo -u root cat /dev/null")),
-        entry(150, ["claude"]),
-        serverEntry,
-      ],
+      chain: [entry(200, null), entry(150, ["claude"]), serverEntry],
     };
-    const attributeTo = (finishedAt: number, text = "sleep 1; sudo -u root cat /dev/null") => {
+    const attributeTo = (
+      finishedAt: number,
+      text = "sleep 1; sudo -u root cat /dev/null",
+      chain = hello.chain,
+    ) => {
       const background = run("a", [{ text, explanation: "Run a test request", finishedAt }]);
       return attribute({
-        hello,
+        hello: { ...hello, chain },
         server,
         now,
         liveRuns: [background],
@@ -194,10 +196,95 @@ describe("attribute", () => {
     // Too old: the thread still owns it, without the call's text or reason.
     expect(attributeTo(now - 2001)).toMatchObject({ type: "mine", explanation: null });
     expect(attributeTo(now - 2001)).not.toHaveProperty("command");
-    // The call's text has to name the program sudo runs; this one is in the shell's argv.
-    expect(attributeTo(now - 100, "sleep 1")).toMatchObject({
-      explanation: null,
-    });
+    // A script's argv holding the call's text lends it only to a sudo of a program it names.
+    const script = [entry(210, ["/bin/sh", "./check.sh"]), ...hello.chain];
+    expect(attributeTo(now - 100, "./check.sh", script)).toMatchObject({ explanation: null });
+  });
+
+  it("credits a finished call of any age whose text a parent shell still runs", () => {
+    // Measured: Claude's background `just darwin-macbook` returned 34 ms after it started, and
+    // its deploy script's sudo arrived 15 s later. The same text ran once before, 3 minutes ago.
+    const hello = {
+      argv: ["sudo", "python3", "/Users/k/nix-hosts/deploy.py", "_submit-system", "macbook"],
+      chain: [
+        entry(230, ["python3", "/Users/k/nix-hosts/deploy.py", "_submit-system", "macbook"]),
+        entry(210, ["just", "darwin-macbook"]),
+        entry(200, claudeBash("just darwin-macbook")),
+        entry(150, ["claude"]),
+        serverEntry,
+      ],
+    };
+    const attributeAt = (finishedAt: number) => {
+      const a: LiveRun = {
+        ...run("a", [
+          {
+            text: "just darwin-macbook",
+            explanation: "Resubmit the nix-darwin deployment and wait",
+            finishedAt,
+          },
+          {
+            text: "just darwin-macbook",
+            explanation: "Submit the nix-darwin deployment and wait",
+            finishedAt: now - 180_000,
+          },
+          // Matches sudo's own argv within the window, but the shell names the deploy.
+          {
+            text: "sudo python3 /Users/k/nix-hosts/deploy.py _submit-system macbook",
+            explanation: "Submit by hand",
+            finishedAt: now - 500,
+          },
+        ]),
+        backgroundWork: true,
+      };
+      return {
+        a,
+        result: attribute({
+          hello,
+          server,
+          now,
+          liveRuns: [a],
+          providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
+          serverSudos: [],
+        }),
+      };
+    };
+    for (const finishedAt of [now - 15_000, now - 256]) {
+      const { a, result } = attributeAt(finishedAt);
+      expect(result).toEqual({
+        type: "mine",
+        run: a,
+        explanation: "Resubmit the nix-darwin deployment and wait",
+        command: "just darwin-macbook",
+      });
+    }
+  });
+
+  it("credits an old finished call only when a parent shell runs exactly its text", () => {
+    // A background script from an earlier run: its call isn't in this run, but the
+    // run's old `pwd` and `make` calls appear inside the chain's argv.
+    const a = run("a", [
+      { text: "pwd", explanation: "Show the directory", finishedAt: now - 60_000 },
+      { text: "make", explanation: "Build", finishedAt: now - 60_000 },
+    ]);
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "make", "install"],
+          chain: [
+            entry(220, ["make", "install"]),
+            entry(210, ["/bin/sh", "-c", "make install"]),
+            entry(200, claudeBash("./build.sh")),
+            entry(150, ["claude"]),
+            serverEntry,
+          ],
+        },
+        server,
+        now,
+        liveRuns: [a],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "mine", run: a, explanation: null });
   });
 
   it("finds the program sudo runs past its options", () => {
@@ -435,6 +522,48 @@ describe("attribute", () => {
     // Two running calls: either could have reached sudo.
     const two = attributeWith([call, { text: "pnpm dev", explanation: "Start the dev server" }]);
     expect(two.result).toEqual({ type: "mine", run: two.a, explanation: null });
+  });
+
+  it("gives no reason while a background command could be the one that ran sudo", () => {
+    // Measured: Claude's `run_in_background` deploy returned at once, then its script's
+    // second sudo arrived while a call waiting on the deploy's log was the only running one.
+    const deploy = "just darwin-macbook > deploy.log 2>&1; echo rc=$? >> deploy.log";
+    const a: LiveRun = {
+      ...run("a", [
+        {
+          text: "until grep -q ^rc= deploy.log; do sleep 5; done",
+          explanation: "Wait until the deploy command exits",
+        },
+        { text: deploy, explanation: "Deploy nix-darwin", finishedAt: now - 15_000 },
+      ]),
+      backgroundWork: true,
+    };
+    const attributeUnder = (wrapperArgv: ReadonlyArray<string> | null) =>
+      attribute({
+        hello: {
+          argv: ["sudo", "python3", "deploy.py", "_status-system", "darwin-7ede7e6d", "--wait"],
+          chain: [
+            entry(230, ["python3", "deploy.py", "_submit-system"]),
+            entry(210, ["just", "darwin-macbook"]),
+            entry(200, wrapperArgv),
+            entry(150, ["claude"]),
+            serverEntry,
+          ],
+        },
+        server,
+        now,
+        liveRuns: [a],
+        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
+        serverSudos: [],
+      });
+    expect(attributeUnder(null)).toEqual({ type: "mine", run: a, explanation: null });
+    // With the wrapper readable, the deploy's own shell names its call.
+    expect(attributeUnder(claudeBash(deploy))).toEqual({
+      type: "mine",
+      run: a,
+      explanation: "Deploy nix-darwin",
+      command: deploy,
+    });
   });
 
   it("ignores a registered pid whose start time no longer matches", () => {

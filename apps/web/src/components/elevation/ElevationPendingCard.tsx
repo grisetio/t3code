@@ -135,8 +135,10 @@ export function ElevationPendingCard(props: {
       </div>
       {mark !== null || source.parts.length > 0 ? (
         <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {mark !== null ? <ElevationAgentMark agent={mark} /> : null}
-          {mark !== null && source.parts.length > 0 ? <span aria-hidden>·</span> : null}
+          {mark !== null ? <ElevationAgentMark agent={mark} named={source.agentNamed} /> : null}
+          {mark !== null && source.agentNamed && source.parts.length > 0 ? (
+            <span aria-hidden>·</span>
+          ) : null}
           {source.parts.length > 0 ? (
             <span className="truncate">{source.parts.join(" · ")}</span>
           ) : null}

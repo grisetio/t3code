@@ -385,9 +385,14 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     const threadIds = yield* projections.listLiveRunThreadIds();
     const runs = yield* Effect.forEach(threadIds, (threadId) =>
       Effect.gen(function* () {
-        const { runs } = yield* projections.getThreadRecords(threadId, ["runs"], {
-          messageRoles: [],
-        });
+        const { runs, providerThreads } = yield* projections.getThreadRecords(
+          threadId,
+          ["runs", "providerThreads"],
+          { messageRoles: [] },
+        );
+        const backgroundWork = providerThreads.some(
+          (thread) => (thread.pendingBackgroundTasks?.length ?? 0) > 0,
+        );
         const live = runs.flatMap((run) =>
           LIVE_RUN_STATUSES.has(run.status) && run.rootNodeId !== null
             ? [{ ...run, rootNodeId: run.rootNodeId }]
@@ -436,6 +441,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
                     ]
                   : [],
               ),
+            backgroundWork,
           };
         });
       }),

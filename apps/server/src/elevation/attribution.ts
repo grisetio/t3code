@@ -24,6 +24,11 @@ export interface LiveRun {
      */
     readonly finishedAt: number | null;
   }>;
+  /**
+   * The provider reports background work for this thread. Claude's background
+   * commands keep running after their call finished, so any sudo could be theirs.
+   */
+  readonly backgroundWork: boolean;
 }
 
 /** A sudo the server spawned itself, such as the setup test or a helper call. */
@@ -73,7 +78,28 @@ function containsSequence(haystack: ReadonlyArray<string>, needle: ReadonlyArray
   return false;
 }
 
+const sameTokens = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
+  left.length === right.length && left.every((token, index) => token === right[index]);
+
 const basename = (path: string | undefined) => path?.split("/").at(-1);
+
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+
+/**
+ * The scripts a `sh -c` process runs: its command string and each `eval '…'` word in it
+ * (Claude's wrapper). A finished call needs one of them to be its whole text, since a token
+ * search would find a call like `pwd` or `true` inside any Claude wrapper.
+ */
+function shellScripts(argv: ReadonlyArray<string>): ReadonlyArray<ReadonlyArray<string>> {
+  if (!SHELLS.has(basename(argv[0])?.replace(/^-/, "") ?? "")) return [];
+  const index = argv.findIndex((arg, position) => position > 0 && !arg.startsWith("-"));
+  if (index === -1 || !argv.slice(1, index).some((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg))) {
+    return [];
+  }
+  const script = argv[index]!;
+  const evaluated = [...script.matchAll(/\beval\s+('(?:[^']|'\\'')*')/g)].map((match) => match[1]!);
+  return [script, ...evaluated].map(tokens);
+}
 
 // A finished call stands in only for a sudo that follows it closely, so a
 // later background sudo can't borrow an old call's text and reason.
@@ -161,45 +187,84 @@ function attributeThread(input: AttributionInput): Attribution {
   // (the shell) must contain the command text.
   const belowServer = hello.chain.slice(0, serverIndex);
   const levels = [hello.argv, ...belowServer.map((entry) => entry.argv)];
+  type Command = LiveRun["commands"][number];
+  type Level = { readonly level: number; readonly argv: ReadonlyArray<string> };
+  const runsCall = ({ level, argv }: Level, command: Command) => {
+    const processTokens = tokens(argv.join(" "));
+    const commandTokens = tokens(command.text);
+    return level === 0
+      ? containsSequence(commandTokens, processTokens)
+      : containsSequence(processTokens, commandTokens);
+  };
+  // The nearest level whose matches all belong to one thread.
+  const matchOneThread = (keep: (at: Level, command: Command) => boolean) => {
+    for (const [level, argv] of levels.entries()) {
+      if (argv === null) continue;
+      const matches = input.liveRuns.flatMap((run) =>
+        run.commands
+          .filter((command) => keep({ level, argv }, command))
+          .map((command) => ({ run, command })),
+      );
+      const first = matches[0];
+      if (
+        first !== undefined &&
+        matches.every((match) => match.run.threadId === first.run.threadId)
+      )
+        return { level, matches, first };
+    }
+    return null;
+  };
+  const credit = (found: NonNullable<ReturnType<typeof matchOneThread>>): Attribution => {
+    const { level, matches, first } = found;
+    const explained = matches.find((match) => match.command.explanation !== null) ?? first;
+    return {
+      type: "mine",
+      run: first.run,
+      explanation: explained.command.explanation,
+      command: explained.command.text,
+      ...(level === 0 && matches.length === 1 ? { commandItemId: first.command.id } : {}),
+    };
+  };
+
+  const running = matchOneThread(
+    (at, command) => command.finishedAt === null && runsCall(at, command),
+  );
+  if (running !== null) return credit(running);
   // Finished calls only after every level missed, so an old `sudo x` item
   // can't take the place of the running script that runs it.
   const program = sudoProgram(hello.argv);
-  const eligible = (command: LiveRun["commands"][number], running: boolean) =>
-    running
-      ? command.finishedAt === null
-      : command.finishedAt !== null &&
-        input.now - command.finishedAt <= FINISHED_CALL_WINDOW_MS &&
-        program !== null &&
-        command.text.split(/[\s;&|()<>'"`\\]+/).some((word) => basename(word) === program);
-  for (const running of [true, false]) {
-    for (const [level, argv] of levels.entries()) {
-      if (argv === null) continue;
-      const processTokens = tokens(argv.join(" "));
-      const matches = input.liveRuns.flatMap((run) =>
-        run.commands
-          .filter((command) => {
-            if (!eligible(command, running)) return false;
-            const commandTokens = tokens(command.text);
-            return level === 0
-              ? containsSequence(commandTokens, processTokens)
-              : containsSequence(processTokens, commandTokens);
-          })
-          .map((command) => ({ run, command })),
-      );
-      const threads = new Set(matches.map((match) => match.run.threadId));
-      const first = matches[0];
-      if (threads.size === 1 && first !== undefined) {
-        const explained = matches.find((match) => match.command.explanation !== null) ?? first;
-        return {
-          type: "mine",
-          run: first.run,
-          explanation: explained.command.explanation,
-          command: explained.command.text,
-          ...(level === 0 && matches.length === 1 ? { commandItemId: first.command.id } : {}),
-        };
-      }
+  const recent = matchOneThread(
+    (at, command) =>
+      command.finishedAt !== null &&
+      input.now - command.finishedAt <= FINISHED_CALL_WINDOW_MS &&
+      program !== null &&
+      command.text.split(/[\s;&|()<>'"`\\]+/).some((word) => basename(word) === program) &&
+      runsCall(at, command),
+  );
+  // A shell still running a finished call's text is that call's background
+  // work, however long ago the call returned, so it outranks a recent call.
+  const background = matchOneThread(
+    ({ level, argv }, command) =>
+      level > 0 &&
+      command.finishedAt !== null &&
+      shellScripts(argv).some((script) => sameTokens(script, tokens(command.text))),
+  );
+  if (background !== null) {
+    const newest = background.matches.reduce((left, right) =>
+      (right.command.finishedAt ?? 0) > (left.command.finishedAt ?? 0) ? right : left,
+    );
+    // The recent rule found the same call through its own text, which links it.
+    if (recent?.matches.length === 1 && recent.first.command.id === newest.command.id) {
+      return credit(recent);
     }
+    return {
+      type: "mine",
+      run: newest.run,
+      explanation: newest.command.explanation,
+      command: newest.command.text,
+    };
   }
+  if (recent !== null) return credit(recent);
 
   const providerProcessAt = (entry: (typeof belowServer)[number]) =>
     input.providerProcesses.find(isProcessAt(entry));
@@ -210,10 +275,10 @@ function attributeThread(input: AttributionInput): Attribution {
     const run = input.liveRuns.find((candidate) => candidate.threadId === process.threadId);
     if (run === undefined) return { type: "mine", run: null, explanation: null };
     // A script between the call and sudo can hide the call's text from every
-    // level. The thread's only running call is still the one that ran it;
-    // with several, guessing could show the wrong reason.
+    // level. The thread's only running call is still the one that ran it,
+    // unless background work could have; guessing could show the wrong reason.
     const running = run.commands.filter((command) => command.finishedAt === null);
-    const only = running.length === 1 ? running[0] : undefined;
+    const only = running.length === 1 && !run.backgroundWork ? running[0] : undefined;
     return only === undefined
       ? { type: "mine", run, explanation: null }
       : { type: "mine", run, explanation: only.explanation, command: only.text };
