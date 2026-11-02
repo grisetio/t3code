@@ -39,6 +39,7 @@ import type {
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "@t3tools/client-runtime/state/shell";
 import { threadRuntimeHasInterruptibleRun } from "@t3tools/client-runtime/state/thread-execution";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
+import { elevationCommandRowKey, elevationCommandRows } from "@t3tools/client-runtime/elevation";
 
 import {
   isImageAttachment,
@@ -154,6 +155,8 @@ export type TimelineEntry = (
       readonly kind: "event";
       readonly createdAt: string;
       readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+      /** The agent's command row a settled sudo request shows as one row with. */
+      readonly elevationCommand?: OrchestrationV2ProjectedTurnItem;
     }
 ) & {
   readonly attempt?: TimelineAttempt;
@@ -593,6 +596,7 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
     return undefined;
   };
 
+  const elevationCommands = elevationCommandRows(input.visibleTurnItems);
   const foldedAnswerMessageIds = new Set(
     input.visibleTurnItems.flatMap(({ item }) =>
       item.type === "user_input_request" && item.questionAnswer
@@ -611,6 +615,7 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
     )
       continue;
     if (item.type === "user_message" && foldedAnswerMessageIds.has(item.messageId)) continue;
+    if (elevationCommands.hidden.has(elevationCommandRowKey(row))) continue;
     const createdAt = projectedItemCreatedAt(row);
     const attempt = resolveAttempt(item);
     const attemptMetadata = attempt === undefined ? {} : { attempt };
@@ -732,11 +737,16 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
     }
 
     if (STANDALONE_V2_ITEM_TYPES.has(item.type)) {
+      const elevationCommand =
+        item.type === "elevation_request"
+          ? elevationCommands.commandFor.get(elevationCommandRowKey(row))
+          : undefined;
       entries.push({
         id: item.id,
         kind: "event",
         createdAt,
         projectedItem: row,
+        ...(elevationCommand === undefined ? {} : { elevationCommand }),
         ...attemptMetadata,
       });
       continue;
@@ -949,7 +959,8 @@ function reuseTimelineEntries(
   ) {
     return null;
   }
-  // Answer rows can replace a message already present in the retained prefix.
+  // Answer rows can replace a message already present in the retained prefix, and a settled
+  // sudo request can take over a command row there.
   if (
     appended &&
     input.visibleTurnItems
@@ -957,7 +968,10 @@ function reuseTimelineEntries(
       .some(
         ({ item }) =>
           (item.type === "user_input_request" && item.questionAnswer !== undefined) ||
-          (item.type === "user_message" && item.messageId.startsWith("async-answer:")),
+          (item.type === "user_message" && item.messageId.startsWith("async-answer:")) ||
+          (item.type === "elevation_request" &&
+            item.commandItemId !== undefined &&
+            item.elevationStatus !== "pending"),
       )
   )
     return null;

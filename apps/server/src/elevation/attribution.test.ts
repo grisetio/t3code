@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { NodeId, RunId, ThreadId } from "@t3tools/contracts";
+import { NodeId, RunId, ThreadId, TurnItemId } from "@t3tools/contracts";
 
 import { attribute, sudoProgram, type LiveRun } from "./attribution.ts";
 import type { ChainEntry } from "./protocol.ts";
@@ -26,7 +26,8 @@ const run = (
   threadId: ThreadId.make(`thread:${name}`),
   runId: RunId.make(`run:${name}`),
   rootNodeId: NodeId.make(`node:${name}`),
-  commands: commands.map((command) => ({
+  commands: commands.map((command, index) => ({
+    id: TurnItemId.make(`item:${name}:${index}`),
     text: command.text,
     explanation: command.explanation ?? null,
     finishedAt: command.finishedAt ?? null,
@@ -107,6 +108,7 @@ describe("attribute", () => {
       run: a,
       explanation: "Free disk space",
       command: "sudo nix-collect-garbage -d",
+      commandItemId: TurnItemId.make("item:a:0"),
     });
   });
 
@@ -141,6 +143,7 @@ describe("attribute", () => {
       run: background,
       explanation: "Run a test request",
       command: "sleep 1; sudo cat /dev/null",
+      commandItemId: TurnItemId.make("item:a:0"),
     });
     // A running call wins over a finished one with the same sudo.
     const script = run("a", [
@@ -224,6 +227,7 @@ describe("attribute", () => {
       run: b,
       explanation: "Refresh packages",
       command: "sudo apt-get update",
+      commandItemId: TurnItemId.make("item:b:0"),
     });
   });
 
@@ -250,6 +254,32 @@ describe("attribute", () => {
       run: a,
       explanation: null,
       command: "sudo systemctl restart nginx && curl localhost",
+      commandItemId: TurnItemId.make("item:a:0"),
+    });
+  });
+
+  it("links no call when two calls of the thread could be the one running the sudo", () => {
+    const a = run("a", [
+      { text: "sudo apt-get update", explanation: "Refresh packages" },
+      { text: "sleep 5; sudo apt-get update" },
+    ]);
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "apt-get", "update"],
+          chain: [entry(300, ["codex", "app-server"]), serverEntry],
+        },
+        server,
+        now,
+        liveRuns: [a],
+        providerProcesses: [{ pid: 300, startTime: 6000, threadId: null, driver: null }],
+        serverSudos: [],
+      }),
+    ).toEqual({
+      type: "mine",
+      run: a,
+      explanation: "Refresh packages",
+      command: "sudo apt-get update",
     });
   });
 
@@ -338,6 +368,7 @@ describe("attribute", () => {
       run: a,
       explanation: "List the databases",
       command: "sudo ls /var/db",
+      commandItemId: TurnItemId.make("item:a:0"),
       driver: "claudeAgent",
     });
   });

@@ -12,6 +12,7 @@ import {
   type EnvironmentId,
   type ExecutionEnvironmentPlatformOs,
   type OrchestrationV2ElevationRequestFailure,
+  type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2TurnItem,
   type ProviderDriverKind,
   type ServerProvider,
@@ -490,6 +491,64 @@ export function elevationRequestStatusView(
     case "cancelled":
       return { kind: "cancelled", label: "Cancelled", time, how: `Cancelled · ${time}`, detail };
   }
+}
+
+const projectedItemKey = (
+  row: Pick<OrchestrationV2ProjectedTurnItem, "sourceThreadId">,
+  id: string,
+) => `${row.sourceThreadId}:${id}`;
+
+export interface ElevationCommandRows {
+  /** The agent's command row each settled request takes over, by `elevationCommandRowKey`. */
+  readonly commandFor: ReadonlyMap<string, OrchestrationV2ProjectedTurnItem>;
+  /** `elevationCommandRowKey` of each command row a request took over. */
+  readonly hidden: ReadonlySet<string>;
+}
+
+export function elevationCommandRowKey(row: OrchestrationV2ProjectedTurnItem): string {
+  return projectedItemKey(row, row.sourceItemId);
+}
+
+/**
+ * One row per sudo: a settled request takes over the agent's command row the server linked it to
+ * (`commandItemId`). The request's row stays where its card was, so the card hands over in place,
+ * and the command row is hidden. A pending request keeps its card and leaves the command row
+ * alone. Only the first request linked to a command merges: in `sudo a && sudo b` the second
+ * keeps its own row rather than taking over a row that already speaks for the first.
+ */
+export function elevationCommandRows(
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): ElevationCommandRows {
+  const commandFor = new Map<string, OrchestrationV2ProjectedTurnItem>();
+  const hidden = new Set<string>();
+  let commands: Map<string, OrchestrationV2ProjectedTurnItem> | null = null;
+  const claimed = new Set<string>();
+  for (const row of rows) {
+    const { item } = row;
+    if (item.type !== "elevation_request" || item.commandItemId === undefined) continue;
+    const commandKey = projectedItemKey(row, item.commandItemId);
+    if (claimed.has(commandKey)) continue;
+    claimed.add(commandKey);
+    if (item.elevationStatus === "pending") continue;
+    commands ??= new Map(
+      rows.flatMap((candidate) =>
+        candidate.item.type === "command_execution"
+          ? [[elevationCommandRowKey(candidate), candidate] as const]
+          : [],
+      ),
+    );
+    const command = commands.get(commandKey);
+    if (command === undefined) continue;
+    commandFor.set(elevationCommandRowKey(row), command);
+    hidden.add(commandKey);
+  }
+  return { commandFor, hidden };
+}
+
+/** The merged command has returned, so an approved request's row can say it finished. */
+export function elevationCommandFinished(command: OrchestrationV2ProjectedTurnItem): boolean {
+  const { status } = command.item;
+  return status !== "pending" && status !== "running" && status !== "waiting";
 }
 
 export interface ElevationEndedView {

@@ -38,6 +38,7 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
         environmentId={ctx.activeThreadEnvironmentId}
         item={item}
         visibility={visibility}
+        command={row.elevationCommand}
       />
     );
   }

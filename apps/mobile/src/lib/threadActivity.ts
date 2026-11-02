@@ -3,6 +3,7 @@ import type {
   ThreadPendingUserInput,
 } from "@t3tools/client-runtime/state/thread-requests";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
+import { elevationCommandRowKey, elevationCommandRows } from "@t3tools/client-runtime/elevation";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -127,6 +128,8 @@ export interface ThreadFeedActivity {
   /** Lone calls carry the group header's label and id until a second call joins. */
   readonly groupStandIn?: { readonly groupId: string; readonly label: string };
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+  /** The agent's command row a settled sudo request shows as one row with. */
+  readonly elevationCommand?: OrchestrationV2ProjectedTurnItem;
 }
 
 export interface ThreadFeedMessage {
@@ -306,6 +309,7 @@ const projectedEntriesCache = new WeakMap<
   {
     readonly attemptId: RunAttemptId | null;
     readonly entry: RawThreadFeedEntry;
+    readonly elevationCommand?: OrchestrationV2ProjectedTurnItem | undefined;
   }
 >();
 const localMessageEntriesCache = new WeakMap<
@@ -1924,6 +1928,7 @@ interface ThreadFeedBuild {
   readonly nodes: ReadonlyArray<OrchestrationV2ExecutionNode> | undefined;
   readonly checkpointSummaries: ReadonlyArray<ThreadCheckpointSummary> | undefined;
   readonly foldedAnswerMessageIds: ReadonlySet<string>;
+  readonly elevationCommandRows: ReadonlySet<string>;
   readonly delegatedChildrenByRun: ReadonlyMap<RunId, ReadonlySet<string>>;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   /** Grouping is empty before `row`: the rows before it produced `feed.slice(0, feedLength)`. */
@@ -2038,6 +2043,9 @@ export function buildThreadFeed(
     }
   }
 
+  // A request that settles hides a command row above it, so the hidden set is thread-wide too.
+  const elevationCommands = elevationCommandRows(visibleTurnItems);
+
   const cache = options?.cache;
   const previous = cache?.feedBuild ?? null;
   let restartIndex = -1;
@@ -2048,6 +2056,7 @@ export function buildThreadFeed(
     previous.nodes === options?.nodes &&
     checkpointSummariesEqual(previous.checkpointSummaries, options?.checkpointSummaries) &&
     setsEqual(previous.foldedAnswerMessageIds, foldedAnswerMessageIds) &&
+    setsEqual(previous.elevationCommandRows, elevationCommands.hidden) &&
     setMapsEqual(previous.delegatedChildrenByRun, delegatedChildrenByRun)
   ) {
     const firstChanged = firstChangedIndex(previous.rows, visibleTurnItems);
@@ -2095,9 +2104,12 @@ export function buildThreadFeed(
     ) {
       continue;
     }
+    const rowKey = elevationCommandRowKey(row);
+    if (elevationCommands.hidden.has(rowKey)) continue;
+    const elevationCommand = elevationCommands.commandFor.get(rowKey);
     const attemptId = resolveAttemptId(item);
     const cached = projectedEntriesCache.get(row);
-    if (cached?.attemptId === attemptId) {
+    if (cached?.attemptId === attemptId && cached.elevationCommand === elevationCommand) {
       entries.push(cached.entry);
       entryRows.push(index);
       continue;
@@ -2182,9 +2194,9 @@ export function buildThreadFeed(
       id: activity.id,
       createdAt,
       runId: item.runId,
-      activity,
+      activity: elevationCommand === undefined ? activity : { ...activity, elevationCommand },
     };
-    projectedEntriesCache.set(row, { attemptId, entry });
+    projectedEntriesCache.set(row, { attemptId, entry, elevationCommand });
     entries.push(entry);
     entryRows.push(index);
   }
@@ -2259,6 +2271,7 @@ export function buildThreadFeed(
             nodes: options?.nodes,
             checkpointSummaries: options?.checkpointSummaries,
             foldedAnswerMessageIds,
+            elevationCommandRows: elevationCommands.hidden,
             delegatedChildrenByRun,
             feed,
             restarts,

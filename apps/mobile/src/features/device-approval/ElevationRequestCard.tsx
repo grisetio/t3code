@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   decodeElevationRequestPayload,
+  elevationCommandFinished,
   elevationHeadline,
   elevationRequestFacts,
   elevationRequestFallbackView,
@@ -8,6 +9,7 @@ import {
   elevationResolvedSummary,
 } from "@t3tools/client-runtime/elevation";
 import { elevationCommandDisplay } from "@t3tools/client-runtime/elevation-command";
+import { turnItemOutputText } from "@t3tools/client-runtime/work-log/item-detail";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +28,8 @@ import Animated, {
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { elevation } from "../../state/elevation";
 import { AppText as Text } from "../../components/ui/AppText";
+import { useTurnItemDetail } from "../../state/queries";
+import { ThreadCommandOutput, useCommandOutputStreaming } from "../threads/thread-command-output";
 import {
   THREAD_DISCLOSURE_TRANSITION_MS,
   ThreadDisclosureChevron,
@@ -66,7 +70,10 @@ const ROW_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+  /** The agent's command row this settled request stands in for, whose output it shows. */
+  readonly command?: OrchestrationV2ProjectedTurnItem | undefined;
   readonly iconColor: ColorValue;
+  readonly themeAppearance: "light" | "dark";
   /** The item's run is still going, so an approved command may not have finished yet. */
   readonly runActive: boolean;
 }) {
@@ -121,8 +128,13 @@ export function ElevationRequestCard(props: {
       environmentId={props.environmentId}
       item={item}
       decoded={decoded}
+      command={props.command}
       iconColor={props.iconColor}
-      runActive={props.runActive}
+      themeAppearance={props.themeAppearance}
+      // The linked command says when the approved command itself returned; without one, the run.
+      runActive={
+        props.command === undefined ? props.runActive : !elevationCommandFinished(props.command)
+      }
     />
   );
   if (!showCard && !collapsing) return row;
@@ -197,7 +209,9 @@ function ResolvedElevationRow(props: {
   readonly environmentId: EnvironmentId;
   readonly item: ElevationItem;
   readonly decoded: ReturnType<typeof decodeElevationRequestPayload> | null;
+  readonly command: OrchestrationV2ProjectedTurnItem | undefined;
   readonly iconColor: ColorValue;
+  readonly themeAppearance: "light" | "dark";
   readonly runActive: boolean;
 }) {
   const { item } = props;
@@ -291,9 +305,61 @@ function ResolvedElevationRow(props: {
               facts={elevationRequestFacts(view, { cwd: context.checkout })}
               warnings={view.warnings}
             />
+            {props.command === undefined ? null : (
+              <ElevationCommandOutput
+                environmentId={props.environmentId}
+                command={props.command}
+                themeAppearance={props.themeAppearance}
+              />
+            )}
           </Animated.View>
         ) : null}
       </Animated.View>
     </WorkLogBlock>
+  );
+}
+
+/** The merged command's own output under the request's details, as its command row showed it. */
+function ElevationCommandOutput(props: {
+  readonly environmentId: EnvironmentId;
+  readonly command: OrchestrationV2ProjectedTurnItem;
+  readonly themeAppearance: "light" | "dark";
+}) {
+  const streams = useCommandOutputStreaming(props.environmentId);
+  const fetched = useTurnItemDetail(
+    streams ? null : { environmentId: props.environmentId, row: props.command },
+  );
+  const item = fetched.data?.item ?? props.command.item;
+  const exitCode = item.type === "command_execution" ? item.exitCode : undefined;
+  const text = streams
+    ? null
+    : (turnItemOutputText(item) ??
+      (fetched.error
+        ? `Couldn't load output: ${fetched.error}`
+        : fetched.data === null
+          ? "Loading output…"
+          : fetched.data.item === null
+            ? "Output is no longer available."
+            : "No output."));
+  return (
+    <View>
+      {streams ? (
+        <ThreadCommandOutput
+          environmentId={props.environmentId}
+          threadId={props.command.sourceThreadId}
+          itemId={props.command.sourceItemId}
+          themeAppearance={props.themeAppearance}
+        />
+      ) : (
+        <Text selectable className="pt-1.5 font-mono text-2xs leading-normal text-foreground-muted">
+          {text}
+        </Text>
+      )}
+      {exitCode ? (
+        <Text className="mt-1.5 font-mono text-2xs leading-normal text-danger-foreground">
+          exit {exitCode}
+        </Text>
+      ) : null}
+    </View>
   );
 }

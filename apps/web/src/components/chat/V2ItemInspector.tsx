@@ -192,6 +192,36 @@ export function FetchedToolOutput(props: {
   );
 }
 
+/** A command's output and failing exit code, under a row that already shows the command. */
+export function CommandItemOutput(props: {
+  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+  readonly environmentId: EnvironmentId;
+}) {
+  const streamsOutput = useCommandOutputStreaming(props.environmentId);
+  const { item, output } = useFetchedTurnItem(
+    props.projectedItem,
+    props.environmentId,
+    streamsOutput,
+  );
+  const exitCode = item.type === "command_execution" ? item.exitCode : undefined;
+  return (
+    <div className={cn("space-y-1.5", monoClassName)}>
+      {streamsOutput ? (
+        <CommandOutputPanel
+          environmentId={props.environmentId}
+          threadId={props.projectedItem.sourceThreadId}
+          itemId={props.projectedItem.sourceItemId}
+        />
+      ) : (
+        <ToolOutput {...output} />
+      )}
+      {exitCode !== undefined && exitCode !== 0 ? (
+        <div className="text-destructive">exit {exitCode}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function ToolCallBody(
   props: ToolOutputState & {
     readonly command?: string;

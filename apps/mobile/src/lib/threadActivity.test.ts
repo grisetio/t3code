@@ -1,4 +1,5 @@
 import {
+  ElevationRequestId,
   MessageId,
   CheckpointId,
   CheckpointRef,
@@ -1787,5 +1788,74 @@ describe("streamed feed updates", () => {
       );
     expect(showsDelegation(steps[2]!)).toBe(true);
     expect(showsDelegation(steps[3]!)).toBe(false);
+  });
+});
+
+describe("one row per sudo", () => {
+  const sudoCommand = (status: "running" | "failed") =>
+    projected(
+      {
+        ...base("sudo-command", "2026-06-20T00:00:02.000Z", 1),
+        status,
+        completedAt: null,
+        type: "command_execution",
+        input: "sudo systemctl reload nginx",
+        ...(status === "failed" ? { exitCode: 1 } : {}),
+      },
+      1,
+    );
+  const request = (elevationStatus: "pending" | "denied") =>
+    projected(
+      {
+        ...base("sudo-request", "2026-06-20T00:00:03.000Z", 2),
+        status: elevationStatus === "pending" ? "waiting" : "cancelled",
+        type: "elevation_request",
+        requestId: ElevationRequestId.make("request"),
+        kind: "sudo",
+        argv: ["sudo", "systemctl", "reload", "nginx"],
+        runAs: "root",
+        cwd: "/repo",
+        host: "box",
+        warnings: [],
+        explanation: null,
+        commandItemId: TurnItemId.make("sudo-command"),
+        payload: null,
+        elevationStatus,
+        resolvedBy: null,
+      },
+      2,
+    );
+  const activities = (entries: ReadonlyArray<ThreadFeedEntry>) =>
+    entries.flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []));
+
+  it("keeps the command row above the card while the request waits", () => {
+    const feed = buildThreadFeed([sudoCommand("running"), request("pending")]);
+    expect(activities(feed).map((activity) => activity.projectedItem.item.id)).toEqual([
+      "sudo-command",
+      "sudo-request",
+    ]);
+  });
+
+  it("shows a settled request as one row carrying the command, also from a cached build", () => {
+    const cache = createThreadFeedCache();
+    buildThreadFeed([sudoCommand("running"), request("pending")], { cache });
+    const command = sudoCommand("failed");
+    for (const feed of [
+      buildThreadFeed([command, request("denied")], { cache }),
+      buildThreadFeed([command, request("denied")]),
+    ]) {
+      const rows = activities(feed);
+      expect(rows.map((activity) => activity.projectedItem.item.id)).toEqual(["sudo-request"]);
+      expect(rows[0]?.elevationCommand).toBe(command);
+    }
+  });
+
+  it("gives the settled row the command's later update", () => {
+    const cache = createThreadFeedCache();
+    const settled = request("denied");
+    buildThreadFeed([sudoCommand("running"), settled], { cache });
+    const finished = sudoCommand("failed");
+    const [row] = activities(buildThreadFeed([finished, settled], { cache }));
+    expect(row?.elevationCommand).toBe(finished);
   });
 });

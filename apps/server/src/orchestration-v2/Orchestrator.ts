@@ -8552,6 +8552,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           warnings: command.warnings,
           explanation: command.explanation,
           ...(command.agentCommand === undefined ? {} : { agentCommand: command.agentCommand }),
+          ...(command.commandItemId === undefined ? {} : { commandItemId: command.commandItemId }),
           ...(command.changes === undefined ? {} : { changes: command.changes }),
           payload: command.payload,
           elevationStatus: command.elevationStatus,
