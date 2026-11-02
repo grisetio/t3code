@@ -8,6 +8,7 @@ import {
   elevationAgent,
   elevationFailureMessage,
   elevationHeadline,
+  elevationPasswordWords,
   elevationNoticeText,
   elevationRequestSource,
   elevationSeriesLine,
@@ -303,6 +304,23 @@ describe("elevationRequestStatusView", () => {
       time,
       how: `Cancelled · ${time}`,
       detail: "Too long to approve on a device; use the terminal.",
+    });
+  });
+});
+
+describe("elevationPasswordWords", () => {
+  it("names the Mac password and Touch ID only on macOS", () => {
+    expect(elevationPasswordWords("darwin", "Killian's MacBook Pro")).toEqual({
+      password: "Mac password",
+      shortPassword: "Mac password",
+      machine: "the Mac",
+      touchId: true,
+    });
+    expect(elevationPasswordWords("linux", "oracle")).toEqual({
+      password: "oracle password",
+      shortPassword: "password",
+      machine: "oracle",
+      touchId: false,
     });
   });
 });

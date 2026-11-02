@@ -26,6 +26,7 @@ import {
   deviceApprovalSignerErrorCode,
   deviceApprovalSignerErrorMessage,
 } from "./deviceApprovalSigner";
+import { useElevationPasswordWords } from "./ElevationApprovalCard";
 import { useComparisonCode } from "./ElevationRequestDetails";
 import { approvalHaptic } from "./approvalHaptics";
 
@@ -36,7 +37,7 @@ const CONFIRMED_MS = 500;
 
 /**
  * Setup from the phone (FLOW moment 4): the phone creates its key and the fingerprint proves it
- * can use it, the Mac password approves the first phone once, and an enrolled phone approves a
+ * can use it, the machine's password approves the first phone once, and an enrolled phone approves a
  * later one. No checks or paths here; Details has them.
  */
 export function DeviceApprovalSetupFlow(props: {
@@ -50,6 +51,7 @@ export function DeviceApprovalSetupFlow(props: {
   const enroll = useAtomCommand(elevation.enroll, "add device approval key");
   const canInstall = useAtomValue(elevation.install.permissionAtom(environmentId));
   const canEnroll = useAtomValue(elevation.enroll.permissionAtom(environmentId));
+  const words = useElevationPasswordWords(environmentId, machine);
   const installed = status.ownsApprovals || status.devices.length > 0;
   // A later phone is approved by one already set up; with none, only the password can.
   const otherPhoneApproves = installed && status.devices.length > 0;
@@ -189,12 +191,12 @@ export function DeviceApprovalSetupFlow(props: {
       {step === "approve" && usePassword ? (
         <StepBody
           icon="laptopcomputer"
-          title="Enter your Mac password, once"
+          title={`Enter your ${words.password}, once`}
           body={`${machine} needs it one time to trust this phone.`}
         >
           <TextInput
-            accessibilityLabel="Mac password"
-            placeholder="Mac password"
+            accessibilityLabel={words.password}
+            placeholder={words.password}
             value={password}
             onChangeText={setPassword}
             editable={!busy}
@@ -205,11 +207,13 @@ export function DeviceApprovalSetupFlow(props: {
             textContentType="none"
             importantForAutofill="no"
           />
-          <Text className="text-xs text-foreground-muted">
-            If Touch ID appears on the Mac, choose Cancel. Setup continues here.
-          </Text>
+          {words.touchId ? (
+            <Text className="text-xs text-foreground-muted">
+              If Touch ID appears on the Mac, choose Cancel. Setup continues here.
+            </Text>
+          ) : null}
           <Button
-            label={busy ? "Checking with the Mac…" : "Continue"}
+            label={busy ? `Checking with ${words.machine}…` : "Continue"}
             tone="primary"
             fullWidth
             disabled={busy || password === ""}
@@ -243,7 +247,7 @@ export function DeviceApprovalSetupFlow(props: {
             onPress={() => void approve(null)}
           />
           <Button
-            label="Use your Mac password instead"
+            label={`Use your ${words.password} instead`}
             tone="text"
             disabled={busy}
             onPress={() => setUsePassword(true)}
@@ -254,8 +258,8 @@ export function DeviceApprovalSetupFlow(props: {
       {step === "terminal" && terminalCommand !== null ? (
         <StepBody
           icon="terminal"
-          title="Run this on the Mac"
-          body="Paste it into a terminal there. It asks for your Mac password once."
+          title={`Run this on ${words.machine}`}
+          body={`Paste it into a terminal there. It asks for your ${words.shortPassword} once.`}
         >
           <Text selectable className="font-mono text-sm text-foreground">
             {terminalCommand}

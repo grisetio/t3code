@@ -1,5 +1,7 @@
 import type { ElevationCheck, ElevationStatus } from "@t3tools/contracts";
 
+import type { ElevationPasswordWords } from "./elevation.ts";
+
 // Settings → Device approval: one state, one Fix. T3 repairs a part itself when
 // it knows the cause and the repair lasts; anything else, or anything a repair
 // didn't fix, goes to an agent with the diagnosis (FLOW moment 5).
@@ -82,7 +84,7 @@ function deviceApprovalFixBy(
 
 export type DeviceApprovalFixPlan =
   | { readonly kind: "none" }
-  /** T3 repairs with the Mac password, then re-checks; `agentAfter` continues into an agent. */
+  /** T3 repairs with the machine's password, then re-checks; `agentAfter` continues into an agent. */
   | {
       readonly kind: "repair";
       readonly install: boolean;
@@ -122,17 +124,18 @@ export function planDeviceApprovalFix(
 export function deviceApprovalFixSheetText(
   plan: Extract<DeviceApprovalFixPlan, { kind: "repair" }>,
   machine: string,
+  words: ElevationPasswordWords,
 ): { readonly message: string; readonly action: string } {
   if (plan.agentAfter) {
     return {
       message: plan.install
-        ? "Your Mac password lets T3 repair its part. An agent fixes the rest next."
-        : "Your Mac password adds this phone back. An agent fixes the sudo setup next.",
+        ? `Your ${words.password} lets T3 repair its part. An agent fixes the rest next.`
+        : `Your ${words.password} adds this phone back. An agent fixes the sudo setup next.`,
       action: "Fix and continue",
     };
   }
   return {
-    message: `Enter your Mac password to repair device approval on ${machine}.`,
+    message: `Enter your ${words.shortPassword} to repair device approval on ${machine}.`,
     action: "Fix",
   };
 }

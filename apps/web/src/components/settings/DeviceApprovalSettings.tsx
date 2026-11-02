@@ -2,6 +2,8 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_TOUCH_ID_HINT,
   elevationFailureMessage,
+  elevationPasswordWords,
+  type ElevationPasswordWords,
   elevationSudoApproval,
 } from "@t3tools/client-runtime/elevation";
 import {
@@ -63,6 +65,10 @@ export function DeviceApprovalSettings() {
             key={environment.environmentId}
             environmentId={environment.environmentId}
             machine={environment.label}
+            words={elevationPasswordWords(
+              environment.serverConfig?.environment.platform.os,
+              environment.label,
+            )}
           />
         ))
       )}
@@ -73,6 +79,7 @@ export function DeviceApprovalSettings() {
 function EnvironmentDeviceApproval(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  readonly words: ElevationPasswordWords;
 }) {
   const status = useEnvironmentQuery(
     elevation.status({ environmentId: props.environmentId, input: {} }),
@@ -95,6 +102,7 @@ function EnvironmentDeviceApproval(props: {
         <DeviceApprovalStatus
           environmentId={props.environmentId}
           machine={props.machine}
+          words={props.words}
           status={status.data}
         />
       )}
@@ -111,6 +119,7 @@ const STATE_BADGES = {
 function DeviceApprovalStatus(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  readonly words: ElevationPasswordWords;
   readonly status: ElevationStatus;
 }) {
   const { status } = props;
@@ -201,6 +210,7 @@ function DeviceApprovalStatus(props: {
               environmentId={props.environmentId}
               device={device}
               revocable={status.helperInstalled}
+              words={props.words}
             />
           ))
         : null}
@@ -208,6 +218,7 @@ function DeviceApprovalStatus(props: {
         <TurnOffRow
           environmentId={props.environmentId}
           machine={props.machine}
+          words={props.words}
           phoneFirst={status.devices.length > 0}
           passwordRequired={approval.passwordRequired}
         />
@@ -266,6 +277,7 @@ function DeviceRow(props: {
   readonly environmentId: EnvironmentId;
   readonly device: ElevationDevice;
   readonly revocable: boolean;
+  readonly words: ElevationPasswordWords;
 }) {
   const { device } = props;
   const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
@@ -293,6 +305,7 @@ function DeviceRow(props: {
       {confirming ? (
         <SudoConfirmForm
           actionLabel="Revoke"
+          words={props.words}
           phoneFirst
           onCancel={() => setConfirming(false)}
           run={(password) =>
@@ -310,6 +323,7 @@ function DeviceRow(props: {
 function TurnOffRow(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  readonly words: ElevationPasswordWords;
   readonly phoneFirst: boolean;
   readonly passwordRequired: boolean;
 }) {
@@ -336,6 +350,7 @@ function TurnOffRow(props: {
       {confirming ? (
         <SudoConfirmForm
           actionLabel="Turn off"
+          words={props.words}
           phoneFirst={props.phoneFirst}
           passwordRequired={props.passwordRequired}
           onCancel={() => setConfirming(false)}
@@ -359,6 +374,7 @@ function TurnOffRow(props: {
  */
 export function SudoConfirmForm(props: {
   readonly actionLabel: string;
+  readonly words: ElevationPasswordWords;
   readonly phoneFirst: boolean;
   readonly passwordRequired?: boolean;
   readonly onCancel: () => void;
@@ -388,10 +404,10 @@ export function SudoConfirmForm(props: {
       {usePassword ? (
         <label htmlFor={inputId} className="text-xs text-muted-foreground">
           {props.passwordRequired
-            ? "No phone is enrolled to approve this, so enter the Mac password."
-            : "Approve on your phone, or enter the Mac password."}{" "}
-          The password goes through the T3 server to sudo once and is never stored.{" "}
-          {ELEVATION_TOUCH_ID_HINT}
+            ? `No phone is enrolled to approve this, so enter the ${props.words.password}.`
+            : `Approve on your phone, or enter the ${props.words.password}.`}{" "}
+          The password goes through the T3 server to sudo once and is never stored.
+          {props.words.touchId ? ` ${ELEVATION_TOUCH_ID_HINT}` : null}
         </label>
       ) : (
         <p className="text-xs text-muted-foreground">Approve on your phone.</p>
@@ -402,7 +418,9 @@ export function SudoConfirmForm(props: {
             id={inputId}
             type="password"
             autoComplete="off"
-            placeholder={props.passwordRequired ? "Mac password" : "Mac password (optional)"}
+            placeholder={
+              props.passwordRequired ? props.words.password : `${props.words.password} (optional)`
+            }
             value={password}
             disabled={submitting}
             onChange={(event) => setPassword(event.currentTarget.value)}
@@ -433,7 +451,7 @@ export function SudoConfirmForm(props: {
             disabled={submitting}
             onClick={() => setUsePassword(true)}
           >
-            Use the Mac password instead
+            Use the {props.words.password} instead
           </Button>
         )}
       </div>

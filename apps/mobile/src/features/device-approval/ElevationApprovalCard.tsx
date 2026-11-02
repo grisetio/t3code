@@ -7,6 +7,7 @@ import {
   elevationEndedLine,
   elevationFailureMessage,
   elevationHeadline,
+  elevationPasswordWords,
   elevationRequestFacts,
   elevationRequestSource,
   elevationSeriesLine,
@@ -135,6 +136,12 @@ export function useElevationRequestContext(
 }
 
 type ElevationRequestContext = ReturnType<typeof useElevationRequestContext>;
+
+/** "Mac password" on a Mac, "oracle password" elsewhere, from the platform the server reports. */
+export function useElevationPasswordWords(environmentId: EnvironmentId, machine: string) {
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  return elevationPasswordWords(configs.get(environmentId)?.environment.platform.os, machine);
+}
 
 function ElevationAgentMark(props: { readonly agent: ElevationAgent; readonly size: number }) {
   return (

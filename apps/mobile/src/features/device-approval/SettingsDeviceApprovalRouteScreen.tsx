@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_CANT_APPROVE_HERE,
   elevationFailureMessage,
+  type ElevationPasswordWords,
 } from "@t3tools/client-runtime/elevation";
 import {
   deviceApprovalCheckOwner,
@@ -68,6 +69,7 @@ import {
   deviceApprovalSignerErrorMessage,
 } from "./deviceApprovalSigner";
 import { DeviceApprovalSetupFlow } from "./DeviceApprovalSetupFlow";
+import { useElevationPasswordWords } from "./ElevationApprovalCard";
 import { prepareElevationSigning } from "./elevationApproval";
 import { claimedElevationRequestAtom } from "./elevationApprovalTarget";
 import { formatDeviceUse } from "./settings-device-dates";
@@ -256,6 +258,7 @@ function DeviceApprovalGroup(props: {
   const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(environmentId));
   const rekeyRequested = useAtomValue(deviceApprovalRekeyAtom) === environmentId;
   const signerPresent = deviceApprovalSigner.isPresent();
+  const words = useElevationPasswordWords(environmentId, machine);
 
   const phoneRecord = record && record.user === status.user ? record : null;
   const phone = { keyId: phoneRecord?.keyId ?? null };
@@ -540,6 +543,7 @@ function DeviceApprovalGroup(props: {
         <KeySheetView
           environmentId={environmentId}
           machine={machine}
+          words={words}
           user={status.user}
           status={status}
           record={phoneRecord}
@@ -559,6 +563,7 @@ function DeviceApprovalGroup(props: {
       {removal.needsPassword && phoneRecord !== null ? (
         <RemovePasswordSheet
           machine={machine}
+          words={words}
           busy={removal.phase === "waiting"}
           error={removal.error}
           onClose={removal.dismissPassword}
@@ -569,6 +574,7 @@ function DeviceApprovalGroup(props: {
         <TurnOffSheet
           environmentId={environmentId}
           machine={machine}
+          words={words}
           onClose={() => setTurningOff(false)}
           onTurnedOff={() => {
             setTurningOff(false);
@@ -696,14 +702,15 @@ const failureText = (result: AtomCommandResult<unknown, unknown>) =>
     : elevationFailureMessage(squashAtomCommandFailure(result), "Something went wrong.");
 
 function PasswordField(props: {
+  readonly words: ElevationPasswordWords;
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly editable: boolean;
 }) {
   return (
     <TextInput
-      accessibilityLabel="Mac password"
-      placeholder="Mac password"
+      accessibilityLabel={props.words.password}
+      placeholder={props.words.password}
       value={props.value}
       onChangeText={props.onChange}
       editable={props.editable}
@@ -727,7 +734,7 @@ function isOwnRevokeRequest(entry: PendingElevationRequest, user: string, keyId:
 /**
  * Remove this phone: the confirm, then the fingerprint, then "Removed". Revoking runs the helper
  * through sudo, which this phone approves with the key it is removing; the request is claimed so
- * it doesn't also show as a banner. Without a phone to approve, the Mac password does.
+ * it doesn't also show as a banner. Without a phone to approve, the machine's password does.
  */
 function useRemoveThisPhone(props: {
   readonly environmentId: EnvironmentId;
@@ -847,6 +854,7 @@ function useRemoveThisPhone(props: {
 /** Only when no phone can approve the removal; the confirm already happened. */
 function RemovePasswordSheet(props: {
   readonly machine: string;
+  readonly words: ElevationPasswordWords;
   readonly busy: boolean;
   readonly error: string | null;
   readonly onClose: () => void;
@@ -857,9 +865,14 @@ function RemovePasswordSheet(props: {
     <Sheet title="Remove this phone" onClose={props.onClose}>
       <View className="gap-4 px-5 pt-3 pb-8">
         <Text className="text-sm text-foreground-muted">
-          No phone can approve this, so {props.machine} needs your Mac password.
+          No phone can approve this, so {props.machine} needs your {props.words.shortPassword}.
         </Text>
-        <PasswordField value={password} onChange={setPassword} editable={!props.busy} />
+        <PasswordField
+          words={props.words}
+          value={password}
+          onChange={setPassword}
+          editable={!props.busy}
+        />
         {props.error !== null ? (
           <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
             {props.error}
@@ -881,10 +894,11 @@ function RemovePasswordSheet(props: {
   );
 }
 
-/** Turn off what T3 installed, with the Mac password; the machine's sudo goes back to normal. */
+/** Turn off what T3 installed, with the machine's password; the machine's sudo goes back to normal. */
 function TurnOffSheet(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  readonly words: ElevationPasswordWords;
   readonly onClose: () => void;
   readonly onTurnedOff: () => void;
 }) {
@@ -910,9 +924,14 @@ function TurnOffSheet(props: {
     <Sheet title="Turn off device approval" onClose={props.onClose}>
       <View className="gap-4 px-5 pt-3 pb-8">
         <Text className="text-sm text-foreground-muted">
-          {props.machine} needs your Mac password to turn it off.
+          {props.machine} needs your {props.words.shortPassword} to turn it off.
         </Text>
-        <PasswordField value={password} onChange={setPassword} editable={!busy} />
+        <PasswordField
+          words={props.words}
+          value={password}
+          onChange={setPassword}
+          editable={!busy}
+        />
         {error !== null ? (
           <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
             {error}
@@ -932,7 +951,7 @@ function TurnOffSheet(props: {
 }
 
 /**
- * A new key from this phone, approved by the Mac password. Fix uses `install` when T3's config
+ * A new key from this phone, approved by the machine's password. Fix uses `install` when T3's config
  * parts need rewriting (it adds the key it is given) or `enroll` when only the key is missing;
  * "Set up again" replaces the key the same way. The fingerprint proves the new key first, and the
  * previous key, if the machine still lists it, is revoked so it doesn't linger.
@@ -940,6 +959,7 @@ function TurnOffSheet(props: {
 function KeySheetView(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
+  readonly words: ElevationPasswordWords;
   readonly user: string;
   readonly status: ElevationStatus;
   readonly record: DeviceApprovalKeyRecord | null;
@@ -953,7 +973,7 @@ function KeySheetView(props: {
     repair: DeviceApprovalRepairAttempt,
   ) => void;
 }) {
-  const { environmentId, machine, status, sheet } = props;
+  const { environmentId, machine, status, sheet, words } = props;
   const install = useAtomCommand(elevation.install, "repair device approval");
   const enroll = useAtomCommand(elevation.enroll, "add device approval key");
   const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
@@ -966,9 +986,9 @@ function KeySheetView(props: {
   const useInstall = sheet.kind === "fix" && sheet.plan.install;
   const text =
     sheet.kind === "fix"
-      ? deviceApprovalFixSheetText(sheet.plan, machine)
+      ? deviceApprovalFixSheetText(sheet.plan, machine, words)
       : {
-          message: `Enter your Mac password to set this phone up again for ${machine}.`,
+          message: `Enter your ${words.shortPassword} to set this phone up again for ${machine}.`,
           action: "Set up again",
         };
 
@@ -1003,7 +1023,7 @@ function KeySheetView(props: {
         ? await install({ environmentId, input: { password, device: key.device } })
         : await enroll({ environmentId, input: { device: key.device, password } });
       if (failureReason(result) === "wrong_password") {
-        setError("The Mac password was not accepted.");
+        setError(`The ${words.password} was not accepted.`);
         return;
       }
       confirmedKey.current = null;
@@ -1058,7 +1078,7 @@ function KeySheetView(props: {
     >
       <View className="gap-4 px-5 pt-3 pb-8">
         <Text className="text-sm text-foreground-muted">{text.message}</Text>
-        <PasswordField value={password} onChange={setPassword} editable={!busy} />
+        <PasswordField words={words} value={password} onChange={setPassword} editable={!busy} />
         {error !== null ? (
           <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
             {error}

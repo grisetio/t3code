@@ -10,6 +10,7 @@ import {
   type ElevationStatus,
   type ElevationWarning,
   type EnvironmentId,
+  type ExecutionEnvironmentPlatformOs,
   type OrchestrationV2ElevationRequestFailure,
   type OrchestrationV2TurnItem,
   type ProviderDriverKind,
@@ -39,6 +40,27 @@ export const ELEVATION_CANT_APPROVE_HERE =
 /** pam_tid sits before the password in a nix-darwin or Apple sudo stack; no sudo option skips it. */
 export const ELEVATION_TOUCH_ID_HINT =
   "On a Mac that uses Touch ID for sudo, a Touch ID prompt may appear there first; Cancel continues with the password.";
+
+export interface ElevationPasswordWords {
+  /** On its own, in titles, fields and buttons: "Mac password", "oracle password". */
+  readonly password: string;
+  /** In a sentence that already names the machine: "oracle needs your password". */
+  readonly shortPassword: string;
+  /** "the Mac", or the machine's name. */
+  readonly machine: string;
+  /** Only a Mac puts Touch ID in front of sudo's password. */
+  readonly touchId: boolean;
+}
+
+/** What the machine's sudo password is called, from the platform its server reports. */
+export function elevationPasswordWords(
+  os: ExecutionEnvironmentPlatformOs | null | undefined,
+  machine: string,
+): ElevationPasswordWords {
+  return os === "darwin"
+    ? { password: "Mac password", shortPassword: "Mac password", machine: "the Mac", touchId: true }
+    : { password: `${machine} password`, shortPassword: "password", machine, touchId: false };
+}
 
 export interface ElevationWarningView {
   readonly code: string;
