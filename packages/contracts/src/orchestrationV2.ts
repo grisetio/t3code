@@ -1390,6 +1390,11 @@ const OrchestrationV2ElevationRequestFields = {
   explanation: Schema.NullOr(Schema.String),
   /** The agent's shell command line from its tool call; unverified. */
   agentCommand: Schema.optionalKey(Schema.String),
+  /**
+   * The agent's `command_execution` item that runs this sudo itself, so a settled request can
+   * show as that one row. Absent when no call's own text matched, and from older servers.
+   */
+  commandItemId: Schema.optionalKey(TurnItemId),
   /** Absent when the checkout is clean or isn't a git repository. */
   changes: Schema.optionalKey(OrchestrationV2ElevationChanges),
   /** The exact signed bytes, null when the module could not build them (see `failure`). */
@@ -3182,6 +3187,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     warnings: Schema.Array(ElevationWarning),
     explanation: Schema.NullOr(Schema.String),
     agentCommand: Schema.optionalKey(Schema.String),
+    commandItemId: Schema.optionalKey(TurnItemId),
     changes: Schema.optionalKey(OrchestrationV2ElevationChanges),
     payload: Schema.NullOr(ElevationBase64Url),
     elevationStatus: Schema.Literals(["pending", "cancelled"]),

@@ -405,6 +405,8 @@ describe("ElevationService", () => {
           assert.strictEqual(recorded.turnItemId, request.turnItemId);
           assert.deepStrictEqual(recorded.argv, basic.decoded.argv);
           assert.strictEqual(recorded.agentCommand, commandText);
+          // The call's own text runs this sudo, so clients can show the two as one row.
+          assert.strictEqual(recorded.commandItemId, TurnItemId.make("turn-item:command"));
         }
 
         const signature = sign(vectorsJson.keys.enrolled.pkcs8Der, payloadBytes);

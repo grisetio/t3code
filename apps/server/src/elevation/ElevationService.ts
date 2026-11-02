@@ -360,13 +360,14 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       readonly warnings: ElevationPayload["command"]["warnings"];
       readonly explanation: string | null;
       readonly agentCommand: string | undefined;
+      readonly commandItemId: TurnItemId | undefined;
       readonly changes: OrchestrationV2ElevationChanges | null;
       readonly payload: string | null;
       readonly elevationStatus: "pending" | "cancelled";
       readonly failure?: OrchestrationV2ElevationRequestFailure;
     },
   ) => {
-    const { agentCommand, changes, ...rest } = fields;
+    const { agentCommand, commandItemId, changes, ...rest } = fields;
     return orchestrator.dispatch({
       type: "elevation_request.record",
       commandId: CommandId.make(`elevation:${turnItemId}:record`),
@@ -377,6 +378,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       kind: "sudo",
       ...rest,
       ...(agentCommand === undefined ? {} : { agentCommand }),
+      ...(commandItemId === undefined ? {} : { commandItemId }),
       ...(changes === null ? {} : { changes }),
     });
   };
@@ -426,6 +428,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
                 (RUNNING_ITEM_STATUSES.has(item.status) || FINISHED_ITEM_STATUSES.has(item.status))
                   ? [
                       {
+                        id: item.id,
                         text: item.input,
                         explanation: item.description ?? reasonFor(item.nativeItemRef),
                         finishedAt: RUNNING_ITEM_STATUSES.has(item.status)
@@ -571,6 +574,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           warnings: [],
           explanation: attribution.explanation,
           agentCommand: attribution.command,
+          commandItemId: attribution.commandItemId,
           changes: null,
           payload: null,
           elevationStatus: "cancelled",
@@ -601,6 +605,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         warnings: payload.success.command.warnings,
         explanation: attribution.explanation,
         agentCommand: attribution.command,
+        commandItemId: attribution.commandItemId,
         changes: requestChanges,
         payload: message.payload,
         elevationStatus: "pending",

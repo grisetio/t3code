@@ -110,6 +110,7 @@ const record = (orchestrator: Orchestrator.OrchestratorV2["Service"]) =>
     host: "macbook",
     warnings: [],
     explanation: "Free disk space.",
+    commandItemId: TurnItemId.make("turn-item:command"),
     payload: "e30",
     elevationStatus: "pending",
   });
@@ -168,6 +169,8 @@ it.effect("a recorded request waits in the thread, then resolves with who answer
       keyId: "AAAAAAAAAAAAAAAAAAAAAA",
     });
     assert.isNotNull(approved.completedAt);
+    // Clients merge the settled request into this command's row.
+    assert.strictEqual(approved.commandItemId, TurnItemId.make("turn-item:command"));
     assert.deepStrictEqual(yield* pendingRequests(), [null, null]);
   }).pipe(Effect.provide(layerTest)),
 );

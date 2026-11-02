@@ -4,7 +4,7 @@
  * the same uid as every agent, and the phone's signature is what authorizes.
  */
 import type { ProviderProcess } from "@t3tools/shared/ProviderProcesses";
-import type { NodeId, RunId, ThreadId } from "@t3tools/contracts";
+import type { NodeId, RunId, ThreadId, TurnItemId } from "@t3tools/contracts";
 
 import type { Hello } from "./protocol.ts";
 
@@ -14,6 +14,7 @@ export interface LiveRun {
   readonly rootNodeId: NodeId;
   /** This run's command items, newest first. */
   readonly commands: ReadonlyArray<{
+    readonly id: TurnItemId;
     readonly text: string;
     readonly explanation: string | null;
     /**
@@ -39,6 +40,11 @@ export type Attribution =
       readonly explanation: string | null;
       /** The matched tool call's command line. */
       readonly command?: string;
+      /**
+       * The tool call whose own text runs this sudo, so clients can show the two as one row.
+       * Unset when only a wrapper or script matched, or when several calls could be it.
+       */
+      readonly commandItemId?: TurnItemId;
       /** The driver of the provider process the sudo runs under, when one is registered. */
       readonly driver?: string;
       /** Set when the sudo is one this server spawned. */
@@ -189,6 +195,7 @@ function attributeThread(input: AttributionInput): Attribution {
           run: first.run,
           explanation: explained.command.explanation,
           command: explained.command.text,
+          ...(level === 0 && matches.length === 1 ? { commandItemId: first.command.id } : {}),
         };
       }
     }
