@@ -75,9 +75,16 @@ describe("lockScreenRequestState", () => {
     });
   });
 
-  it("waits for the request before anything was shown", () => {
-    expect(lockScreenRequestState({ shown: null, current: null, live: true, ended: [] })).toEqual({
+  it("waits for the request while the list is between sessions", () => {
+    expect(lockScreenRequestState({ shown: null, current: null, live: false, ended: [] })).toEqual({
       kind: "waiting",
+    });
+  });
+
+  it("is gone at once when a fresh list never had it", () => {
+    // Answered elsewhere during the lock: nothing will arrive, so the card says so instead of waiting.
+    expect(lockScreenRequestState({ shown: null, current: null, live: true, ended: [] })).toEqual({
+      kind: "gone",
     });
   });
 });

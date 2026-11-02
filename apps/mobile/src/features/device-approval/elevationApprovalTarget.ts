@@ -132,7 +132,9 @@ export function lockScreenRequestState(input: {
 }): LockScreenRequestState {
   const { shown, current } = input;
   if (current !== null) return { kind: "pending", entry: current };
-  if (shown === null) return { kind: "waiting" };
+  // The push names only the thread, so a request that ended before the card saw it can't be
+  // matched to an ended entry; a fresh list without it is enough to stop waiting.
+  if (shown === null) return input.live ? { kind: "gone" } : { kind: "waiting" };
   if (!input.live) return { kind: "pending", entry: shown };
   const ended = input.ended.find((entry) => entry.requestId === shown.request.requestId);
   return ended === undefined ? { kind: "gone" } : { kind: "ended", entry: shown, ended };

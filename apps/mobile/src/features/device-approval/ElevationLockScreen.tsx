@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
+import { EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 import { BackHandler, Modal, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -58,7 +59,8 @@ function LockScreenRequest() {
   const state = lockScreenRequestState({
     shown,
     current,
-    live: shown !== null && liveEnvironments.has(shown.environmentId),
+    live:
+      session !== null && liveEnvironments.has(EnvironmentId.make(session.intent.environmentId)),
     ended: (shown && endedByEnvironment.get(shown.environmentId)) ?? [],
   });
   // Approved here: the card says "✓ Approved" itself, then leaves.
