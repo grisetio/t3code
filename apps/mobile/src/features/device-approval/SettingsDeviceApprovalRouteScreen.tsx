@@ -442,9 +442,7 @@ function DeviceApprovalGroup(props: {
   // Removing runs the root-owned helper; without it the helper check in Details says why.
   const canRemove =
     status.helperInstalled && thisDevice !== undefined && phoneRecord !== null && signerPresent;
-  const devices = [...status.devices].sort(
-    (a, b) => Number(b.keyId === thisDevice?.keyId) - Number(a.keyId === thisDevice?.keyId),
-  );
+  const otherDevices = status.devices.filter((device) => device.keyId !== thisDevice?.keyId);
 
   return (
     <>
@@ -492,17 +490,34 @@ function DeviceApprovalGroup(props: {
           </>
         )}
       </SettingsSection>
-      {state === "off" || devices.length === 0 ? null : (
-        <SettingsSection title="Phones">
-          {devices.map((device) =>
-            device.keyId === thisDevice?.keyId ? (
-              <ListRowLayout
-                key={device.keyId}
-                icon="iphone"
-                label="This phone"
-                description={formatDeviceUse(device, now)}
+      {state === "off" || thisDevice === undefined ? null : (
+        // Remove sits with the row it removes, apart from the phones it leaves approving.
+        <SettingsSection title="This phone">
+          <ListRowLayout
+            icon="iphone"
+            label={thisDevice.label}
+            description={formatDeviceUse(thisDevice, now)}
+          />
+          {canRemove ? (
+            removal.phase === "removed" ? (
+              <ListRowLayout icon="checkmark" label="Removed" />
+            ) : (
+              <ListActionRow
+                icon="trash"
+                label="Remove this phone"
+                tone="danger"
+                disabled={!canRevoke || busy !== null}
+                loading={removal.phase === "waiting" && !removal.needsPassword}
+                onPress={removal.confirm}
               />
-            ) : status.helperInstalled ? (
+            )
+          ) : null}
+        </SettingsSection>
+      )}
+      {state === "off" || otherDevices.length === 0 ? null : (
+        <SettingsSection title={thisDevice === undefined ? "Phones" : "Other phones"}>
+          {otherDevices.map((device) =>
+            status.helperInstalled ? (
               <ListActionRow
                 key={device.keyId}
                 icon="iphone"
@@ -521,20 +536,6 @@ function DeviceApprovalGroup(props: {
               />
             ),
           )}
-          {canRemove ? (
-            removal.phase === "removed" ? (
-              <ListRowLayout icon="checkmark" label="Removed" />
-            ) : (
-              <ListActionRow
-                icon="trash"
-                label="Remove this phone"
-                tone="danger"
-                disabled={!canRevoke || busy !== null}
-                loading={removal.phase === "waiting" && !removal.needsPassword}
-                onPress={removal.confirm}
-              />
-            )
-          ) : null}
         </SettingsSection>
       )}
       {(error ?? removal.error) !== null && !removal.needsPassword ? (
