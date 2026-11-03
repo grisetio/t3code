@@ -268,16 +268,22 @@ function ElevationCommandLine(props: {
   readonly warnings: readonly ElevationWarningView[];
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Only a tap eases the line. A card mounting over the lock screen settles its frame after the
+  // first commit, and the transition slid the command up from behind the buttons.
+  const [toggled, setToggled] = useState(false);
   const { display } = props;
   return (
-    <Animated.View layout={DISCLOSURE_LAYOUT}>
+    <Animated.View layout={toggled ? DISCLOSURE_LAYOUT : undefined}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Command, ${display.short}`}
         accessibilityState={{ expanded }}
         accessibilityHint={expanded ? "Hides the full command" : "Shows the full command"}
         className="min-h-9 flex-row items-center gap-1.5 self-start"
-        onPress={() => setExpanded((current) => !current)}
+        onPress={() => {
+          setToggled(true);
+          setExpanded((current) => !current);
+        }}
       >
         <Text numberOfLines={2} className="min-w-0 shrink font-mono text-sm text-foreground-muted">
           {display.short}

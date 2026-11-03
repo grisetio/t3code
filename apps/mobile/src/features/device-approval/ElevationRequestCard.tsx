@@ -13,16 +13,19 @@ import { turnItemOutputText } from "@t3tools/client-runtime/work-log/item-detail
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { View, type ColorValue, type LayoutChangeEvent } from "react-native";
+import {
+  Easing,
+  Animated as NativeAnimated,
+  useAnimatedValue,
+  View,
+  type ColorValue,
+  type LayoutChangeEvent,
+} from "react-native";
 import Animated, {
   FadeIn,
   FadeOut,
   LinearTransition,
-  ReduceMotion,
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
+  useReducedMotion,
 } from "react-native-reanimated";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
@@ -66,6 +69,10 @@ const ROW_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
  * A request in its thread: the card while it waits here, then its resolved row. The card hands
  * over to the row in place: its height eases down to the row's while it fades, so nothing below
  * jumps. Approving here holds "✓ Approved" for a moment first.
+ *
+ * The height eases on the JS driver, not Reanimated: the feed re-pins its end from JS, and
+ * Reanimated's per-frame layout commits starve those, so the rows above lagged and then caught up
+ * in jumps once the ease ended.
  */
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -109,17 +116,19 @@ export function ElevationRequestCard(props: {
   // Only a card seen leaving animates; history mounts straight as rows.
   const [shownAsCard, setShownAsCard] = useState(showCard);
   const [collapsing, setCollapsing] = useState(false);
+  // Once a card, the row keeps the card's wrapper, so ending the collapse doesn't remount it.
+  const [wasCard, setWasCard] = useState(showCard);
   if (shownAsCard !== showCard) {
     setShownAsCard(showCard);
     setCollapsing(!showCard);
+    if (showCard) setWasCard(true);
   }
 
+  const reduceMotion = useReducedMotion();
   const [cardHeight, setCardHeight] = useState(0);
-  const height = useSharedValue(0);
-  const animating = useSharedValue(false);
-  const cardOpacity = useSharedValue(1);
-  const heightStyle = useAnimatedStyle(() => (animating.get() ? { height: height.get() } : {}));
-  const cardStyle = useAnimatedStyle(() => ({ opacity: cardOpacity.get() }));
+  const height = useAnimatedValue(0);
+  const cardOpacity = useAnimatedValue(1);
+  const collapseStarted = useRef(false);
 
   if (item.type !== "elevation_request") return null;
 
@@ -137,62 +146,70 @@ export function ElevationRequestCard(props: {
       }
     />
   );
-  if (!showCard && !collapsing) return row;
+  if (!showCard && !collapsing && !wasCard) return row;
 
   const onCardLayout = (event: LayoutChangeEvent) => {
     if (collapsing) return;
     const measured = event.nativeEvent.layout.height;
-    height.set(measured);
+    height.setValue(measured);
     setCardHeight(measured);
   };
   const onRowLayout = (event: LayoutChangeEvent) => {
+    if (!collapsing || collapseStarted.current) return;
+    collapseStarted.current = true;
     const target = event.nativeEvent.layout.height;
-    if (animating.get()) return;
-    animating.set(true);
-    const reduceMotion = ReduceMotion.System;
-    cardOpacity.set(withTiming(0, { duration: CARD_FADE_MS, reduceMotion }));
-    height.set(
-      withTiming(target, { duration: ELEVATION_CARD_COLLAPSE_MS, reduceMotion }, (finished) => {
-        if (finished) runOnJS(setCollapsing)(false);
-      }),
-    );
+    NativeAnimated.timing(cardOpacity, {
+      toValue: 0,
+      duration: reduceMotion ? 0 : CARD_FADE_MS,
+      useNativeDriver: true,
+    }).start();
+    NativeAnimated.timing(height, {
+      toValue: target,
+      duration: reduceMotion ? 0 : ELEVATION_CARD_COLLAPSE_MS,
+      easing: Easing.inOut(Easing.quad),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) setCollapsing(false);
+    });
   };
 
   return (
-    <Animated.View
-      className="overflow-hidden"
-      style={[collapsing ? { height: cardHeight } : null, heightStyle]}
-    >
-      {collapsing ? (
+    <NativeAnimated.View style={[{ overflow: "hidden" }, collapsing ? { height } : null]}>
+      {showCard ? null : (
         <View key="row" onLayout={onRowLayout}>
           {row}
         </View>
+      )}
+      {showCard || collapsing ? (
+        <NativeAnimated.View
+          key="card"
+          onLayout={onCardLayout}
+          pointerEvents={collapsing ? "none" : "auto"}
+          style={[
+            { opacity: cardOpacity },
+            collapsing ? { position: "absolute", top: 0, left: 0, right: 0 } : null,
+          ]}
+        >
+          <View className="mb-3 rounded-[20px] border border-border bg-card-alt p-4">
+            <ElevationApprovalCard
+              request={{
+                environmentId: props.environmentId,
+                requestId: item.requestId,
+                threadId: item.threadId,
+                decoded: decoded!,
+                explanation: item.explanation,
+                changes: item.changes,
+                series,
+              }}
+              onApproving={setHeld}
+              onAnswered={(decision) => {
+                if (decision === "approve") setSettled(true);
+              }}
+            />
+          </View>
+        </NativeAnimated.View>
       ) : null}
-      <Animated.View
-        key="card"
-        onLayout={onCardLayout}
-        pointerEvents={collapsing ? "none" : "auto"}
-        style={[cardStyle, collapsing ? { position: "absolute", top: 0, left: 0, right: 0 } : null]}
-      >
-        <View className="mb-3 rounded-[20px] border border-border bg-card-alt p-4">
-          <ElevationApprovalCard
-            request={{
-              environmentId: props.environmentId,
-              requestId: item.requestId,
-              threadId: item.threadId,
-              decoded: decoded!,
-              explanation: item.explanation,
-              changes: item.changes,
-              series,
-            }}
-            onApproving={setHeld}
-            onAnswered={(decision) => {
-              if (decision === "approve") setSettled(true);
-            }}
-          />
-        </View>
-      </Animated.View>
-    </Animated.View>
+    </NativeAnimated.View>
   );
 }
 

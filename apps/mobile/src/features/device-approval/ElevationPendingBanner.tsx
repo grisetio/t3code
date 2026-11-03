@@ -8,12 +8,11 @@ import Animated, {
   Easing,
   Keyframe,
   ReduceMotion,
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -63,8 +62,8 @@ const roomTiming = (duration: number) => ({
 /**
  * Pending sudo requests from every connected environment, hidden while their thread or (for
  * requests no thread claims) a threads list is on screen. An answered request's banner leaves.
- * It takes its own room at the top instead of covering the header: the screen below lays out as
- * if the status bar were the banner's, and the room opens and closes with the banner's motion.
+ * It takes its own room at the top instead of covering the header and keeps the screen's status
+ * bar inset. Only the eased room moves the screen: a stepped resize lands late and shows a dip.
  */
 export function ElevationPendingBanner(props: {
   readonly pathname: string;
@@ -98,37 +97,19 @@ export function ElevationPendingBanner(props: {
   }
   // The slot's height, which holds while a leaving banner plays its exit.
   const [bannerHeight, setBannerHeight] = useState(0);
-  // The room below the status bar; it starts closing as the banner starts its exit.
+  // The room above the screen; it starts closing as the banner starts its exit.
   const room = first !== undefined && bannerHeight > 0 ? bannerHeight + BANNER_GAP : 0;
-  // While any room shows, the screen pads below the status bar itself and sees no top inset.
-  // Handing the inset over at either end is the same layout, so nothing moves then.
-  const [roomOpen, setRoomOpen] = useState(false);
-  if (room > 0 && !roomOpen) setRoomOpen(true);
   const roomHeight = useSharedValue(0);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drives the room's UI-thread animation toward the banner's height
   useEffect(() => {
     roomHeight.set(
-      withTiming(
-        room,
-        roomTiming(room > 0 ? MOBILE_MOTION.enter : MOBILE_MOTION.exit),
-        (finished) => {
-          if (finished && room === 0) runOnJS(setRoomOpen)(false);
-        },
-      ),
+      withTiming(room, roomTiming(room > 0 ? MOBILE_MOTION.enter : MOBILE_MOTION.exit)),
     );
   }, [room, roomHeight]);
   const roomStyle = useAnimatedStyle(() => ({ paddingTop: roomHeight.get() }));
   return (
     <View className="flex-1 bg-header">
-      {/* The status bar padding is a plain style so it commits with the inset context below;
-          inside the animated style it lands a frame late and the screen jumps under the status bar. */}
-      <View style={{ flex: 1, paddingTop: roomOpen ? insets.top : 0 }}>
-        <Animated.View style={[{ flex: 1 }, roomStyle]}>
-          <SafeAreaInsetsContext value={roomOpen ? { ...insets, top: 0 } : insets}>
-            {props.children}
-          </SafeAreaInsetsContext>
-        </Animated.View>
-      </View>
+      <Animated.View style={[{ flex: 1 }, roomStyle]}>{props.children}</Animated.View>
       {/* Stays mounted, so a banner's exit can play after the last request leaves. */}
       <View
         className="absolute inset-x-3 z-[100]"
