@@ -66,13 +66,10 @@ const CARD_FADE_MS = 140;
 const ROW_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 
 /**
- * A request in its thread: the card while it waits here, then its resolved row. The card hands
- * over to the row in place: its height eases down to the row's while it fades, so nothing below
- * jumps. Approving here holds "✓ Approved" for a moment first.
- *
- * The height eases on the JS driver, not Reanimated: the feed re-pins its end from JS, and
- * Reanimated's per-frame layout commits starve those, so the rows above lagged and then caught up
- * in jumps once the ease ended.
+ * A request in its thread: the card while it waits here, then its resolved row, handed over in
+ * place as the card fades and its height eases to the row's. Approving here holds "✓ Approved" a
+ * moment first. The height eases on the JS driver, not Reanimated: the feed re-pins its end from
+ * JS, and Reanimated's per-frame layout commits starve that, so the rows above caught up in jumps.
  */
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -125,7 +122,6 @@ export function ElevationRequestCard(props: {
   }
 
   const reduceMotion = useReducedMotion();
-  const [cardHeight, setCardHeight] = useState(0);
   const height = useAnimatedValue(0);
   const cardOpacity = useAnimatedValue(1);
   const collapseStarted = useRef(false);
@@ -150,9 +146,7 @@ export function ElevationRequestCard(props: {
 
   const onCardLayout = (event: LayoutChangeEvent) => {
     if (collapsing) return;
-    const measured = event.nativeEvent.layout.height;
-    height.setValue(measured);
-    setCardHeight(measured);
+    height.setValue(event.nativeEvent.layout.height);
   };
   const onRowLayout = (event: LayoutChangeEvent) => {
     if (!collapsing || collapseStarted.current) return;
