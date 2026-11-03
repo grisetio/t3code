@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { elevationCommandRowKey } from "@t3tools/client-runtime/elevation";
 import type { OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Animated as NativeAnimated, useAnimatedValue } from "react-native";
 import { useReducedMotion } from "react-native-reanimated";
 
@@ -56,7 +56,12 @@ export function ElevationCommandRowExit(props: {
 }) {
   const commandKey = elevationCommandRowKey(props.commandRow);
   const phase = useAtomValue(elevationCommandPhaseAtom(commandKey));
-  const leaving = phase === "leaving" || phase === "left";
+  // A row that has left stays at no height once its entry is dropped: the feed's rebuild without it
+  // can land a frame after this row hears the drop, and the row must not show again meanwhile.
+  const [gone, setGone] = useState(false);
+  if (phase === "left" && !gone) setGone(true);
+  if (phase === "held" && gone) setGone(false);
+  const leaving = phase === "leaving" || phase === "left" || gone;
   const reduceMotion = useReducedMotion();
   const opacity = useAnimatedValue(1);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the native-driver fade as the row starts leaving
@@ -72,7 +77,7 @@ export function ElevationCommandRowExit(props: {
     // A row that mounts already leaving was never seen: it starts at no height and leaves at once.
     <FeedRowHeight
       height={leaving ? 0 : null}
-      onEased={leaving ? () => setElevationHandover(commandKey, "left") : undefined}
+      onEased={phase === "leaving" ? () => setElevationHandover(commandKey, "left") : undefined}
     >
       <NativeAnimated.View style={{ opacity }}>{props.children}</NativeAnimated.View>
     </FeedRowHeight>
