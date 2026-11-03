@@ -2085,8 +2085,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // A width change re-wraps every row at once, and LegendList re-measures them over the next
   // commits. Its end threshold and MVCP only see the new geometry, so the reader's place is
   // taken before any row lands: the end while following, otherwise the row under the header.
-  // On iOS, LegendList keeps that place in the same commit as every re-measure. Android's
-  // list moves only while its MVCP is on, which following turns off, so it restores after.
+  // On iOS, LegendList keeps that place in the same commit as every re-measure. Android
+  // pins the end the same way while following, but restores a reader's line after the reflow.
   // undefined: no reflow. null: a reflow with nothing to restore.
   const reflowAnchorRef = useRef<ThreadFeedReflowAnchor | null | undefined>(undefined);
   const reflowAnchorsSizeChanges = Platform.OS === "ios";
@@ -2670,6 +2670,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ? resolveThreadFeedReflowOffset(anchor, list.getState(), reflowLayout())
       : undefined;
   };
+  // maintainScrollAtEnd scrolls a frame after a size change, and only for one over 5 px, so a
+  // growing row slid the rows below it down before everything jumped up. Following, the end is
+  // kept in the same pass that moves the rows, for every size change.
+  const anchorSizeChange = () => {
+    const reflowOffset = reflowAnchorsSizeChanges ? holdReflowAnchor() : undefined;
+    if (reflowOffset !== undefined) return reflowOffset;
+    if (!endFollowEnabledRef.current || disclosureToggleSettling) return undefined;
+    if (loadedListKeyRef.current !== listMountKey) return undefined;
+    return listRef.current?.getState().isWithinMaintainScrollAtEndThreshold
+      ? Number.POSITIVE_INFINITY
+      : undefined;
+  };
 
   const handleViewportLayout = (event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -3063,7 +3075,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // A reflow grows every visible row at once, well past the near-end threshold
             // that otherwise lets a status-bar tap leave the end.
             maintainScrollAtEndThreshold={reflowFollowsEnd ? Number.POSITIVE_INFINITY : undefined}
-            sizeChangeAnchor={reflowAnchorsSizeChanges ? holdReflowAnchor : undefined}
+            sizeChangeAnchor={anchorSizeChange}
             maintainVisibleContentPosition={
               endFollowEnabled && !disclosureToggleSettling ? false : maintainVisibleContentPosition
             }
