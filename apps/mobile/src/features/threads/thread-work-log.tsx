@@ -105,6 +105,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useAssetUrl } from "../../state/assets";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+import { ElevationCommandRowExit } from "../device-approval/elevationHandover";
 
 const SHIMMER_WIDTH = 72;
 const SHIMMER_SWEEP_MS = 1_350;
@@ -439,7 +440,7 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): WorkContentIcon {
 // Entering fades only for rows created moments ago: rows remount whenever the
 // list scrolls them back into view, and old rows must not replay an entrance.
 const FRESH_ROW_WINDOW_MS = 3_000;
-function isFreshRow(createdAt: string): boolean {
+export function isFreshRow(createdAt: string): boolean {
   const timestamp = Date.parse(createdAt);
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ROW_WINDOW_MS;
 }
@@ -501,23 +502,34 @@ interface ThreadWorkLogProps {
 }
 
 export function ThreadWorkLog(props: ThreadWorkLogProps) {
-  const renderRow = (row: ThreadFeedActivity) => (
-    <ThreadWorkLogRow
-      key={row.id}
-      row={row}
-      anchorKey={props.anchorKey}
-      copied={props.copiedRowId === row.id}
-      expanded={props.expandedRows[row.id] ?? false}
-      environmentId={props.environmentId}
-      iconSubtleColor={props.iconSubtleColor}
-      onCopyRow={props.onCopyRow}
-      onToggleRow={props.onToggleRow}
-      renderImage={props.renderImage}
-      renderReasoning={props.renderReasoning}
-      onPressPreview={props.onPressPreview}
-      themeAppearance={props.themeAppearance}
-    />
-  );
+  const renderRow = (row: ThreadFeedActivity) => {
+    const workRow = (
+      <ThreadWorkLogRow
+        key={row.id}
+        row={row}
+        anchorKey={props.anchorKey}
+        copied={props.copiedRowId === row.id}
+        expanded={props.expandedRows[row.id] ?? false}
+        environmentId={props.environmentId}
+        iconSubtleColor={props.iconSubtleColor}
+        onCopyRow={props.onCopyRow}
+        onToggleRow={props.onToggleRow}
+        renderImage={props.renderImage}
+        renderReasoning={props.renderReasoning}
+        onPressPreview={props.onPressPreview}
+        themeAppearance={props.themeAppearance}
+      />
+    );
+    // A command row may be one a sudo request stands in for, which eases out as the request
+    // settles.
+    return row.projectedItem.item.type === "command_execution" ? (
+      <ElevationCommandRowExit key={row.id} commandRow={row.projectedItem}>
+        {workRow}
+      </ElevationCommandRowExit>
+    ) : (
+      workRow
+    );
+  };
 
   if (props.activities.length === 0) {
     return null;

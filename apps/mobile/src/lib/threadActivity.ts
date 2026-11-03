@@ -2036,6 +2036,8 @@ export function buildThreadFeed(
     readonly attempts?: ReadonlyArray<OrchestrationV2RunAttempt>;
     readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
     readonly checkpointSummaries?: ReadonlyArray<ThreadCheckpointSummary>;
+    /** Command rows a sudo card still stands beside; see `elevationCommandRows`. */
+    readonly elevationCommandsBesideCards?: ReadonlySet<string>;
     readonly cache?: ThreadFeedCache;
   },
 ): ThreadFeedEntry[] {
@@ -2075,7 +2077,10 @@ export function buildThreadFeed(
   }
 
   // A request that settles hides a command row above it, so the hidden set is thread-wide too.
-  const elevationCommands = elevationCommandRows(visibleTurnItems);
+  const elevationCommands = elevationCommandRows(
+    visibleTurnItems,
+    options?.elevationCommandsBesideCards,
+  );
 
   const cache = options?.cache;
   const previous = cache?.feedBuild ?? null;

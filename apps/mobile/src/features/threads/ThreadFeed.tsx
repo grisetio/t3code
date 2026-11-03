@@ -14,6 +14,7 @@ import { ThreadContextDivider } from "./thread-context-divider";
 import { ThreadHandoffDivider, ThreadHandoffRow } from "./thread-handoff-row";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { ElevationRequestCard } from "../device-approval/ElevationRequestCard";
+import { elevationHandoverKeysAtom } from "../device-approval/elevationHandover";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
   WorktreeWorkingHeader,
@@ -21,8 +22,10 @@ import {
   type WorktreeSetupCardProps,
 } from "./worktree-setup-card";
 import * as Haptics from "expo-haptics";
+import { useAtomValue } from "@effect/atom-react";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
+import { elevationCommandRowKey } from "@t3tools/client-runtime/elevation";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
@@ -2046,6 +2049,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     baseFontSize: appearance.baseFontSize,
     fontScale,
   });
+  const elevationHandoverKeys = useAtomValue(elevationHandoverKeysAtom);
+  const elevationHandoverRows =
+    elevationHandoverKeys === "" ? null : new Set(elevationHandoverKeys.split("\n"));
   const previousTextSize = useRef(workRowSizing.textSizeKey);
   useLayoutEffect(() => {
     if (previousTextSize.current === workRowSizing.textSizeKey) {
@@ -2898,6 +2904,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           return undefined;
         }
         if (isContextCompactionActivityGroup(entry) || isContextHandoffActivityGroup(entry)) {
+          return undefined;
+        }
+        // A command row a sudo request stands beside eases out, so LegendList has to measure it.
+        if (
+          entry.activities.some((activity) =>
+            elevationHandoverRows?.has(elevationCommandRowKey(activity.projectedItem)),
+          )
+        ) {
           return undefined;
         }
         if (

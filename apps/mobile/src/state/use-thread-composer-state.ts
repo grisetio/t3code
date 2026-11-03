@@ -105,6 +105,7 @@ import {
   useSelectedThreadProjection,
   useSelectedThreadVisibleTurnItems,
 } from "../state/use-thread-detail";
+import { elevationHandoverKeysAtom } from "../features/device-approval/elevationHandover";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
@@ -249,6 +250,10 @@ export function useThreadComposerState() {
   // cannot be an either/or with the loaded messages.
   const pendingCreationMessage = selectedThreadCreation?.message ?? null;
   const [feedCache] = useState(createThreadFeedCache);
+  const elevationHandoverKeys = useAtomValue(elevationHandoverKeysAtom);
+  const elevationCommandsBesideCards = new Set(
+    elevationHandoverKeys === "" ? [] : elevationHandoverKeys.split("\n"),
+  );
   const selectedThreadFeed = (() => {
     const pendingCreation =
       pendingCreationMessage !== null &&
@@ -260,6 +265,7 @@ export function useThreadComposerState() {
       attempts: selectedThreadAttempts,
       nodes: selectedThreadNodes,
       checkpointSummaries,
+      elevationCommandsBesideCards,
       cache: feedCache,
     });
     const pendingAcknowledgments = acknowledgedMessages.filter(

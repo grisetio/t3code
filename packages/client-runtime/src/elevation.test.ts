@@ -655,6 +655,16 @@ describe("elevationCommandRows", () => {
     expect(rows.commandFor.size).toBe(0);
   });
 
+  it("keeps a settled request's command row while its card is still on screen", () => {
+    const cp = command("cmd-1");
+    const rows = elevationCommandRows(
+      [cp, request("el-1", "approved", "cmd-1")],
+      new Set(["thread-a:cmd-1"]),
+    );
+    expect(rows.hidden.size).toBe(0);
+    expect(rows.commandFor.get("thread-a:el-1")).toBe(cp);
+  });
+
   it("matches the link within the request's own source thread", () => {
     const rows = elevationCommandRows([
       command("cmd-1", "thread-parent"),
