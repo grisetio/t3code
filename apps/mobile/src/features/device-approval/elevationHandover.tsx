@@ -9,12 +9,16 @@ import { useReducedMotion } from "react-native-reanimated";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { FeedRowHeight } from "../threads/feed-row-height";
 
+type ElevationHandover = "held" | "leaving" | "left";
+
 /**
  * Command rows a sudo request still stands beside, by `elevationCommandRowKey`: "held" while the
- * request waits or its card shows, "leaving" while the row eases out. The feed keeps these rows,
- * so a row leaves at no height instead of dropping out of the list in one frame.
+ * request waits or its card shows, "leaving" while the row eases out, "left" once it has no
+ * height. The feed keeps these rows, so a row leaves at no height instead of dropping out of the
+ * list in one frame. The request's card drops the entry only after its own collapse has ended:
+ * dropping it rebuilds the feed, which must not land while the card's height is still easing.
  */
-export const elevationHandoversAtom = Atom.make<ReadonlyMap<string, "held" | "leaving">>(
+export const elevationHandoversAtom = Atom.make<ReadonlyMap<string, ElevationHandover>>(
   new Map(),
 ).pipe(Atom.keepAlive);
 
@@ -23,13 +27,20 @@ export const elevationHandoverKeysAtom = Atom.make((get) =>
   [...get(elevationHandoversAtom).keys()].join("\n"),
 );
 
-const elevationCommandLeavingAtom = Atom.family((commandKey: string) =>
-  Atom.make((get) => get(elevationHandoversAtom).get(commandKey) === "leaving"),
+const elevationCommandPhaseAtom = Atom.family((commandKey: string) =>
+  Atom.make((get) => get(elevationHandoversAtom).get(commandKey) ?? null),
 );
 
-export function setElevationHandover(commandKey: string, phase: "held" | "leaving" | null) {
+/** The command row linked to this request has eased out to no height. */
+export function useElevationCommandLeft(commandKey: string | null): boolean {
+  return useAtomValue(elevationCommandPhaseAtom(commandKey ?? "")) === "left";
+}
+
+export function setElevationHandover(commandKey: string, phase: ElevationHandover | null) {
   const current = appAtomRegistry.get(elevationHandoversAtom);
-  if ((current.get(commandKey) ?? null) === phase) return;
+  const previous = current.get(commandKey) ?? null;
+  // The card keeps asking for "leaving" until it has collapsed; a row already gone stays gone.
+  if (previous === phase || (phase === "leaving" && previous === "left")) return;
   const next = new Map(current);
   if (phase === null) next.delete(commandKey);
   else next.set(commandKey, phase);
@@ -38,13 +49,14 @@ export function setElevationHandover(commandKey: string, phase: "held" | "leavin
 
 const FADE_MS = 140;
 
-/** An agent's command row a sudo request stands in for: it fades and eases to no height, then the feed drops it. */
+/** An agent's command row a sudo request stands in for: it fades and eases to no height, then the feed drops it once the card has collapsed. */
 export function ElevationCommandRowExit(props: {
   readonly commandRow: OrchestrationV2ProjectedTurnItem;
   readonly children: ReactNode;
 }) {
   const commandKey = elevationCommandRowKey(props.commandRow);
-  const leaving = useAtomValue(elevationCommandLeavingAtom(commandKey));
+  const phase = useAtomValue(elevationCommandPhaseAtom(commandKey));
+  const leaving = phase === "leaving" || phase === "left";
   const reduceMotion = useReducedMotion();
   const opacity = useAnimatedValue(1);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the native-driver fade as the row starts leaving
@@ -60,7 +72,7 @@ export function ElevationCommandRowExit(props: {
     // A row that mounts already leaving was never seen: it starts at no height and leaves at once.
     <FeedRowHeight
       height={leaving ? 0 : null}
-      onEased={leaving ? () => setElevationHandover(commandKey, null) : undefined}
+      onEased={leaving ? () => setElevationHandover(commandKey, "left") : undefined}
     >
       <NativeAnimated.View style={{ opacity }}>{props.children}</NativeAnimated.View>
     </FeedRowHeight>

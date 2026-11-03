@@ -54,7 +54,7 @@ import {
   useElevationRequestContext,
 } from "./ElevationApprovalCard";
 import { ELEVATION_SETTLE_MS } from "./elevationApproval";
-import { setElevationHandover } from "./elevationHandover";
+import { setElevationHandover, useElevationCommandLeft } from "./elevationHandover";
 import { wasDeniedHere } from "./elevationApprovalTarget";
 
 const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
@@ -135,13 +135,18 @@ export function ElevationRequestCard(props: {
     if (showCard) setWasCard(true);
   }
 
-  // The feed keeps the command row this request stands in for while the request is live here, and
-  // drops it once the row has eased out as the request settles or its card leaves.
+  // The feed keeps the command row this request stands in for while the request is live here. As
+  // the request settles or its card leaves, the row eases out; the feed drops it once both the row
+  // and this card's collapse have ended, so the rebuild that drops it never cuts the collapse short.
   const pending = item.type === "elevation_request" && item.elevationStatus === "pending";
   const [seenPending, setSeenPending] = useState(pending);
   if (pending && !seenPending) setSeenPending(true);
   const commandKey = elevationLinkedCommandKey(props.projectedItem);
-  const handover = showCard || pending ? "held" : seenPending || wasCard ? "leaving" : null;
+  const commandLeft = useElevationCommandLeft(commandKey);
+  const [handedOver, setHandedOver] = useState(false);
+  if (commandLeft && !showCard && !pending && !collapsing && !handedOver) setHandedOver(true);
+  const handover =
+    showCard || pending ? "held" : (seenPending || wasCard) && !handedOver ? "leaving" : null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps this request's entry in the handover registry the feed reads
   useEffect(() => {
     if (commandKey !== null) setElevationHandover(commandKey, handover);
