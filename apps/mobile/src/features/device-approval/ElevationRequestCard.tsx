@@ -124,7 +124,6 @@ export function ElevationRequestCard(props: {
   }
 
   const reduceMotion = useReducedMotion();
-  const [cardHeight, setCardHeight] = useState(0);
   const height = useAnimatedValue(0);
   const cardOpacity = useAnimatedValue(1);
   const collapseStarted = useRef(false);
@@ -151,7 +150,6 @@ export function ElevationRequestCard(props: {
     if (collapsing) return;
     const measured = event.nativeEvent.layout.height;
     height.setValue(measured);
-    setCardHeight(measured);
   };
   const onRowLayout = (event: LayoutChangeEvent) => {
     if (!collapsing || collapseStarted.current) return;
