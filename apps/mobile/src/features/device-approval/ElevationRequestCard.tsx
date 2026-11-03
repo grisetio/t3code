@@ -100,13 +100,16 @@ export function ElevationRequestCard(props: {
     return () => clearTimeout(timer);
   }, [settled]);
 
-  // The turn item doesn't carry how many requests came before; the pending request does.
-  const series = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).find(
+  // The turn item doesn't carry how many requests came before; the pending request does. The card
+  // keeps the last one it saw, so its "2nd request" line doesn't drop out as the request settles.
+  const pendingSeries = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).find(
     (entry) =>
       entry.environmentId === props.environmentId &&
       item.type === "elevation_request" &&
       entry.request.requestId === item.requestId,
   )?.request.series;
+  const [series, setSeries] = useState(pendingSeries);
+  if (pendingSeries !== undefined && pendingSeries !== series) setSeries(pendingSeries);
 
   const showCard =
     item.type === "elevation_request" &&
