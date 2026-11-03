@@ -519,13 +519,23 @@ export function elevationCommandRowKey(row: OrchestrationV2ProjectedTurnItem): s
   return projectedItemKey(row, row.sourceItemId);
 }
 
+/** `elevationCommandRowKey` of the command row the server linked this request to, if any. */
+export function elevationLinkedCommandKey(row: OrchestrationV2ProjectedTurnItem): string | null {
+  const { item } = row;
+  return item.type === "elevation_request" && item.commandItemId !== undefined
+    ? projectedItemKey(row, item.commandItemId)
+    : null;
+}
+
 /**
  * One row per sudo: a settled request takes over the command row the server linked it to
  * (`commandItemId`), staying where its card was; a pending one leaves the command row alone.
  * Only the first request linked to a command merges: in `sudo a && sudo b` the second keeps its own.
+ * `besideCards` holds command rows whose card is still on screen, so both can ease out together.
  */
 export function elevationCommandRows(
   rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  besideCards: ReadonlySet<string> = new Set(),
 ): ElevationCommandRows {
   const commandFor = new Map<string, OrchestrationV2ProjectedTurnItem>();
   const hidden = new Set<string>();
@@ -533,11 +543,10 @@ export function elevationCommandRows(
   const claimed = new Set<string>();
   for (const row of rows) {
     const { item } = row;
-    if (item.type !== "elevation_request" || item.commandItemId === undefined) continue;
-    const commandKey = projectedItemKey(row, item.commandItemId);
-    if (claimed.has(commandKey)) continue;
+    const commandKey = elevationLinkedCommandKey(row);
+    if (commandKey === null || claimed.has(commandKey)) continue;
     claimed.add(commandKey);
-    if (item.elevationStatus === "pending") continue;
+    if (item.type !== "elevation_request" || item.elevationStatus === "pending") continue;
     commands ??= new Map(
       rows.flatMap((candidate) =>
         candidate.item.type === "command_execution"
@@ -548,7 +557,7 @@ export function elevationCommandRows(
     const command = commands.get(commandKey);
     if (command === undefined) continue;
     commandFor.set(elevationCommandRowKey(row), command);
-    hidden.add(commandKey);
+    if (!besideCards.has(commandKey)) hidden.add(commandKey);
   }
   return { commandFor, hidden };
 }

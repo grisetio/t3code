@@ -21,6 +21,7 @@ import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestSha
 import { LinkRequestCard } from "./LinkRequestCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { ElevationRequestCard } from "../device-approval/ElevationRequestCard";
+import { elevationHandoverKeysAtom } from "../device-approval/elevationHandover";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
   WorktreeWorkingHeader,
@@ -28,8 +29,10 @@ import {
   type WorktreeSetupCardProps,
 } from "./worktree-setup-card";
 import * as Haptics from "expo-haptics";
+import { useAtomValue } from "@effect/atom-react";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
+import { elevationCommandRowKey } from "@t3tools/client-runtime/elevation";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import {
@@ -2206,6 +2209,9 @@ export const ThreadFeed = memo(function ThreadFeed({
     baseFontSize: appearance.baseFontSize,
     fontScale,
   });
+  const elevationHandoverKeys = useAtomValue(elevationHandoverKeysAtom);
+  const elevationHandoverRows =
+    elevationHandoverKeys === "" ? null : new Set(elevationHandoverKeys.split("\n"));
   const settledPaneWidth = useWorkspaceSettledContentWidth();
   const [measuredViewportWidth, setViewportWidth] = useState(() =>
     props.layoutVariant === "split" ? 0 : windowWidth,
@@ -2231,8 +2237,8 @@ export const ThreadFeed = memo(function ThreadFeed({
     setEndFollow(resolveThreadFeedLiveFollow(endFollowEnabledRef.current, event));
   };
   // Capture the reader's anchor before width reflow; LegendList thresholds see only new geometry.
-  // iOS preserves it during re-measures. Android restores after because following disables MVCP.
-  // undefined means no reflow; null means reflow with nothing to restore.
+  // iOS preserves it during re-measures. Android pins the end the same way while following, but
+  // restores a reader's line after. undefined means no reflow; null means nothing to restore.
   const reflowAnchorRef = useRef<ThreadFeedReflowAnchor | null | undefined>(undefined);
   const reflowAnchorsSizeChanges = Platform.OS === "ios";
   const [reflowFollowsEnd, setReflowFollowsEnd] = useState(false);
@@ -2901,6 +2907,18 @@ export const ThreadFeed = memo(function ThreadFeed({
       ? resolveThreadFeedReflowOffset(anchor, list.getState(), reflowLayout())
       : undefined;
   };
+  // maintainScrollAtEnd scrolls a frame after a size change, and only for one over 5 px, so a
+  // growing row slid the rows below it down before everything jumped up. Following, the end is
+  // kept in the same pass that moves the rows, for every size change.
+  const anchorSizeChange = () => {
+    const reflowOffset = reflowAnchorsSizeChanges ? holdReflowAnchor() : undefined;
+    if (reflowOffset !== undefined) return reflowOffset;
+    if (!endFollowEnabledRef.current || disclosureToggleSettling) return undefined;
+    if (loadedListKeyRef.current !== listMountKey) return undefined;
+    return listRef.current?.getState().isWithinMaintainScrollAtEndThreshold
+      ? Number.POSITIVE_INFINITY
+      : undefined;
+  };
 
   const handleViewportLayout = (event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -3107,6 +3125,14 @@ export const ThreadFeed = memo(function ThreadFeed({
         if (isContextCompactionActivityGroup(entry) || isContextHandoffActivityGroup(entry)) {
           return undefined;
         }
+        // A command row a sudo request stands beside eases out, so LegendList has to measure it.
+        if (
+          entry.activities.some((activity) =>
+            elevationHandoverRows?.has(elevationCommandRowKey(activity.projectedItem)),
+          )
+        ) {
+          return undefined;
+        }
         if (
           entry.activities[0]?.groupedToolDetail &&
           entry.activities.every((activity) => activity.workEntry.itemType === "reasoning")
@@ -3272,7 +3298,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             // A reflow grows every visible row at once, well past the near-end threshold
             // that otherwise lets a status-bar tap leave the end.
             maintainScrollAtEndThreshold={reflowFollowsEnd ? Number.POSITIVE_INFINITY : undefined}
-            sizeChangeAnchor={reflowAnchorsSizeChanges ? holdReflowAnchor : undefined}
+            sizeChangeAnchor={anchorSizeChange}
             maintainVisibleContentPosition={
               followsEnd && !disclosureToggleSettling ? false : maintainVisibleContentPosition
             }

@@ -165,7 +165,7 @@ import {
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
-import { ELEVATION_CARD_COLLAPSE_MS } from "../device-approval/ElevationRequestCard";
+import { FEED_ROW_EASE_MS } from "./feed-row-height";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ComposerFeedback } from "./ComposerFeedback";
@@ -1040,7 +1040,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
       key: pendingElevationKey,
     };
     if (previous.threadKey !== selectedThreadKey || previous.key === pendingElevationKey) return;
-    scheduleOverlayRepin(ELEVATION_CARD_COLLAPSE_MS + 60);
+    scheduleOverlayRepin(FEED_ROW_EASE_MS + 60);
   }, [pendingElevationKey, scheduleOverlayRepin, selectedThreadKey]);
   const handleToggleUserInputCollapsed = () => {
     if (activeUserInputRequestId === null) {

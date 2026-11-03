@@ -502,34 +502,39 @@ export function ElevationApprovalCard(props: {
       </View>
     </View>
   );
-  const actions = ended ? (
-    // Over the buttons, kept at their size but unseen, so nothing moves until the card settles.
+  // One tree either way: remounting the buttons under the ended line laid them out short for a
+  // frame, and the card's height dipped by a button row.
+  const actions = (
     <View>
       <View
-        className="opacity-0"
-        pointerEvents="none"
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
+        className={ended ? "opacity-0" : undefined}
+        pointerEvents={ended ? "none" : "auto"}
+        accessibilityElementsHidden={ended !== null}
+        importantForAccessibility={ended ? "no-hide-descendants" : "auto"}
       >
         {buttons}
       </View>
-      <View
-        accessibilityRole="text"
-        accessibilityLiveRegion="polite"
-        className="absolute inset-0 flex-row items-center justify-center gap-2"
-      >
-        <SymbolView
-          name={ENDED_SYMBOL[ended.kind]}
-          size={16}
-          tintColorClassName="accent-foreground"
-        />
-        <Text numberOfLines={1} className="min-w-0 shrink font-t3-medium text-base text-foreground">
-          {ended.text}
-        </Text>
-      </View>
+      {ended ? (
+        // Over the buttons, kept at their size but unseen, so nothing moves until the card settles.
+        <View
+          accessibilityRole="text"
+          accessibilityLiveRegion="polite"
+          className="absolute inset-0 flex-row items-center justify-center gap-2"
+        >
+          <SymbolView
+            name={ENDED_SYMBOL[ended.kind]}
+            size={16}
+            tintColorClassName="accent-foreground"
+          />
+          <Text
+            numberOfLines={1}
+            className="min-w-0 shrink font-t3-medium text-base text-foreground"
+          >
+            {ended.text}
+          </Text>
+        </View>
+      ) : null}
     </View>
-  ) : (
-    buttons
   );
 
   const errorLine =

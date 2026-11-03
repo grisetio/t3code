@@ -3,6 +3,7 @@ import {
   decodeElevationRequestPayload,
   elevationCommandFinished,
   elevationHeadline,
+  elevationLinkedCommandKey,
   elevationRequestFacts,
   elevationRequestFallbackView,
   elevationRequestStatusView,
@@ -11,10 +12,10 @@ import {
 import { elevationCommandDisplay } from "@t3tools/client-runtime/elevation-command";
 import { turnItemOutputText } from "@t3tools/client-runtime/work-log/item-detail";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Easing,
   Animated as NativeAnimated,
   useAnimatedValue,
   View,
@@ -33,7 +34,9 @@ import { elevation } from "../../state/elevation";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useTurnItemDetail } from "../../state/queries";
 import { ThreadCommandOutput, useCommandOutputStreaming } from "../threads/thread-command-output";
+import { FeedRowHeight } from "../threads/feed-row-height";
 import {
+  isFreshRow,
   THREAD_DISCLOSURE_TRANSITION_MS,
   ThreadDisclosureChevron,
 } from "../threads/thread-work-log";
@@ -51,6 +54,7 @@ import {
   useElevationRequestContext,
 } from "./ElevationApprovalCard";
 import { ELEVATION_SETTLE_MS } from "./elevationApproval";
+import { setElevationHandover } from "./elevationHandover";
 import { wasDeniedHere } from "./elevationApprovalTarget";
 
 const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
@@ -60,16 +64,16 @@ const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolN
   cancelled: "minus",
 };
 
-/** How long a card takes to hand over to its row once its request leaves the pending set. */
-export const ELEVATION_CARD_COLLAPSE_MS = 240;
 const CARD_FADE_MS = 140;
 const ROW_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 
 /**
- * A request in its thread: the card while it waits here, then its resolved row, handed over in
- * place as the card fades and its height eases to the row's. Approving here holds "✓ Approved" a
- * moment first. The height eases on the JS driver, not Reanimated: the feed re-pins its end from
- * JS, and Reanimated's per-frame layout commits starve that, so the rows above caught up in jumps.
+ * A request in its thread: the card while it waits here, then its resolved row. A card that
+ * arrives while the thread is open grows in from nothing as it fades in. The card hands over to
+ * the row in place: its height eases down to the row's while it fades. Approving here holds
+ * "✓ Approved" for a moment first. The agent's command row the request stands in for stays until
+ * then and eases out with the card (`ElevationCommandRowExit`). Heights ease through
+ * `FeedRowHeight`, so the feed moves the rows around the card in the same frame.
  */
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -91,40 +95,71 @@ export function ElevationRequestCard(props: {
   // Approved on this card: it stays, showing "✓ Approved", a moment after the request resolves.
   const [held, setHeld] = useState(false);
   const [settled, setSettled] = useState(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the held card on a timer after the approval settles
   useEffect(() => {
     if (!settled) return;
     const timer = setTimeout(() => setHeld(false), ELEVATION_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [settled]);
 
-  // The turn item doesn't carry how many requests came before; the pending request does.
-  const series = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).find(
+  // The turn item doesn't carry how many requests came before; the pending request does. The card
+  // keeps the last one it saw, so its "2nd request" line doesn't drop out as the request settles.
+  const pendingSeries = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).find(
     (entry) =>
       entry.environmentId === props.environmentId &&
       item.type === "elevation_request" &&
       entry.request.requestId === item.requestId,
   )?.request.series;
+  const [series, setSeries] = useState(pendingSeries);
+  if (pendingSeries !== undefined && pendingSeries !== series) setSeries(pendingSeries);
 
   const showCard =
     item.type === "elevation_request" &&
     decoded !== null &&
     (held || (item.elevationStatus === "pending" && visibility === "local"));
+  const reduceMotion = useReducedMotion();
   // Only a card seen leaving animates; history mounts straight as rows.
   const [shownAsCard, setShownAsCard] = useState(showCard);
   const [collapsing, setCollapsing] = useState(false);
   // Once a card, the row keeps the card's wrapper, so ending the collapse doesn't remount it.
   const [wasCard, setWasCard] = useState(showCard);
+  // Only a card that just arrived eases in; rows remount when scrolled back into view.
+  const [arriving, setArriving] = useState(
+    () =>
+      showCard && !reduceMotion && isFreshRow(DateTime.formatIso(item.startedAt ?? item.updatedAt)),
+  );
+  const [cardHeight, setCardHeight] = useState(0);
+  const [rowHeight, setRowHeight] = useState<number | null>(null);
   if (shownAsCard !== showCard) {
     setShownAsCard(showCard);
     setCollapsing(!showCard);
+    setArriving(false);
     if (showCard) setWasCard(true);
   }
 
-  const reduceMotion = useReducedMotion();
-  const height = useAnimatedValue(0);
-  const cardOpacity = useAnimatedValue(1);
-  const collapseStarted = useRef(false);
+  // The feed keeps the command row this request stands in for while the request is live here, and
+  // drops it once the row has eased out as the request settles or its card leaves.
+  const pending = item.type === "elevation_request" && item.elevationStatus === "pending";
+  const [seenPending, setSeenPending] = useState(pending);
+  if (pending && !seenPending) setSeenPending(true);
+  const commandKey = elevationLinkedCommandKey(props.projectedItem);
+  const handover = showCard || pending ? "held" : seenPending || wasCard ? "leaving" : null;
+  useEffect(() => {
+    if (commandKey !== null) setElevationHandover(commandKey, handover);
+  }, [commandKey, handover]);
+  useEffect(
+    () => (commandKey === null ? undefined : () => setElevationHandover(commandKey, null)),
+    [commandKey],
+  );
+
+  const cardOpacity = useAnimatedValue(arriving ? 0 : 1);
+  useEffect(() => {
+    if (!arriving && !collapsing) return;
+    NativeAnimated.timing(cardOpacity, {
+      toValue: collapsing ? 0 : 1,
+      duration: reduceMotion ? 0 : CARD_FADE_MS,
+      useNativeDriver: true,
+    }).start();
+  }, [arriving, cardOpacity, collapsing, reduceMotion]);
 
   if (item.type !== "elevation_request") return null;
 
@@ -145,30 +180,24 @@ export function ElevationRequestCard(props: {
   if (!showCard && !collapsing && !wasCard) return row;
 
   const onCardLayout = (event: LayoutChangeEvent) => {
-    if (collapsing) return;
-    height.setValue(event.nativeEvent.layout.height);
+    if (!collapsing) setCardHeight(event.nativeEvent.layout.height);
   };
   const onRowLayout = (event: LayoutChangeEvent) => {
-    if (!collapsing || collapseStarted.current) return;
-    collapseStarted.current = true;
-    const target = event.nativeEvent.layout.height;
-    NativeAnimated.timing(cardOpacity, {
-      toValue: 0,
-      duration: reduceMotion ? 0 : CARD_FADE_MS,
-      useNativeDriver: true,
-    }).start();
-    NativeAnimated.timing(height, {
-      toValue: target,
-      duration: reduceMotion ? 0 : ELEVATION_CARD_COLLAPSE_MS,
-      easing: Easing.inOut(Easing.quad),
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (finished) setCollapsing(false);
-    });
+    if (collapsing) setRowHeight(event.nativeEvent.layout.height);
   };
+  // Arriving, the card grows to its measured height, retargeting if its content settles mid-ease.
+  // Collapsing, it holds its height until the row under it has measured, then eases to the row's.
+  const wrapperHeight = arriving ? cardHeight : collapsing ? (rowHeight ?? cardHeight) : null;
+  const onWrapperEased = arriving
+    ? cardHeight > 0
+      ? () => setArriving(false)
+      : undefined
+    : collapsing && rowHeight !== null
+      ? () => setCollapsing(false)
+      : undefined;
 
   return (
-    <NativeAnimated.View style={[{ overflow: "hidden" }, collapsing ? { height } : null]}>
+    <FeedRowHeight height={wrapperHeight} onEased={onWrapperEased} style={{ overflow: "hidden" }}>
       {showCard ? null : (
         <View key="row" onLayout={onRowLayout}>
           {row}
@@ -181,7 +210,8 @@ export function ElevationRequestCard(props: {
           pointerEvents={collapsing ? "none" : "auto"}
           style={[
             { opacity: cardOpacity },
-            collapsing ? { position: "absolute", top: 0, left: 0, right: 0 } : null,
+            // Out of flow, so the card lays out at its own height while the wrapper clips it.
+            arriving || collapsing ? { position: "absolute", top: 0, left: 0, right: 0 } : null,
           ]}
         >
           <View className="mb-3 rounded-[20px] border border-border bg-card-alt p-4">
@@ -203,7 +233,7 @@ export function ElevationRequestCard(props: {
           </View>
         </NativeAnimated.View>
       ) : null}
-    </NativeAnimated.View>
+    </FeedRowHeight>
   );
 }
 
@@ -243,7 +273,6 @@ function ResolvedElevationRow(props: {
 
   // A light tick when an approved command finishes while its row is on screen.
   const wasRunning = useRef(props.runActive);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fires a haptic when this row's approved command finishes
   useEffect(() => {
     if (wasRunning.current && !props.runActive && status.kind === "approved") {
       approvalHaptic("done");
