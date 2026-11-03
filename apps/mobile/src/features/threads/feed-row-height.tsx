@@ -18,14 +18,10 @@ const MAX_STEP = 8;
 const easeInOutQuad = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
 /**
- * A feed row's height, eased to `height` one React render per frame. LegendList measures a row in
- * the commit React renders it (`useSyncLayout`), and the feed keeps its end in that same commit. A
- * height written outside React (Animated, Reanimated) reaches LegendList through `onLayout` a frame
- * or more later, so the rows below drew over the changing row.
- *
- * `null` is the row's natural height. A number eases there from the height the row last showed.
- * `onEased` runs in the render of the last step. The children render once per change of `height`,
- * not once per step.
+ * A feed row's height, eased to `height` one React render per frame: LegendList measures a row in
+ * the commit React renders it (`useSyncLayout`); a height set outside React reaches it a frame late.
+ * `null` is the natural height; a number eases there from the last shown height. `onEased` runs in
+ * the last step's render, and the children re-render once per change of `height`, not per step.
  */
 export function FeedRowHeight(props: {
   readonly height: number | null;
@@ -43,14 +39,17 @@ export function FeedRowHeight(props: {
     setTarget(props.height);
     // Leaving the natural height holds it in this render, so nothing moves before the first step.
     if (props.height === null) setShown(null);
+    // oxlint-disable-next-line react/refs -- The row's last laid-out height comes from onLayout; holding it here keeps the row still until the first step.
     else if (shown === null) setShown(laidOut.current);
   }
   const onEased = useEffectEvent(() => props.onEased?.());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports each render's height to LegendList's synchronous layout pass
   useLayoutEffect(() => {
     current.current = shown ?? laidOut.current;
     // Any render may change the row's height, not only a step.
     triggerLayout();
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drives the per-frame requestAnimationFrame ease toward `height`
   useEffect(() => {
     const to = props.height;
     if (to === null) return;

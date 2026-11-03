@@ -128,6 +128,10 @@ vi.mock("./use-thread-outbox", async () => {
   return { dispatchingQueuedMessageIdAtom: Atom.make(null), useThreadOutboxMessages: () => ({}) };
 });
 vi.mock("./thread-outbox", () => ({ enqueueThreadOutboxMessage: state.enqueue }));
+vi.mock("../features/device-approval/elevationHandover", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { elevationHandoverKeysAtom: Atom.make("") };
+});
 vi.mock("./composer-attachment-uploads", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
