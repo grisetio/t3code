@@ -54,7 +54,11 @@ import {
   useElevationRequestContext,
 } from "./ElevationApprovalCard";
 import { ELEVATION_SETTLE_MS } from "./elevationApproval";
-import { setElevationHandover, useElevationCommandLeft } from "./elevationHandover";
+import {
+  ELEVATION_CARD_STEP_BESIDE_ROW,
+  setElevationHandover,
+  useElevationCommandPhase,
+} from "./elevationHandover";
 import { wasDeniedHere } from "./elevationApprovalTarget";
 
 const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
@@ -142,7 +146,8 @@ export function ElevationRequestCard(props: {
   const [seenPending, setSeenPending] = useState(pending);
   if (pending && !seenPending) setSeenPending(true);
   const commandKey = elevationLinkedCommandKey(props.projectedItem);
-  const commandLeft = useElevationCommandLeft(commandKey);
+  const commandPhase = useElevationCommandPhase(commandKey);
+  const commandLeft = commandPhase === "left";
   const [handedOver, setHandedOver] = useState(false);
   if (commandLeft && !showCard && !pending && !collapsing && !handedOver) setHandedOver(true);
   const handover =
@@ -190,7 +195,13 @@ export function ElevationRequestCard(props: {
     if (!collapsing) setCardHeight(event.nativeEvent.layout.height);
   };
   const onRowLayout = (event: LayoutChangeEvent) => {
-    if (collapsing) setRowHeight(event.nativeEvent.layout.height);
+    if (!collapsing) return;
+    const height = event.nativeEvent.layout.height;
+    // The row's height rounds a pixel either way as rows around it move. Each new target restarts
+    // the wrapper's ease from its slow start, so only a real change retargets it.
+    setRowHeight((previous) =>
+      previous !== null && Math.abs(previous - height) < 1 ? previous : height,
+    );
   };
   // Arriving, the card grows to its measured height, retargeting if its content settles mid-ease.
   // Collapsing, it holds its height until the row under it has measured, then eases to the row's.
@@ -204,7 +215,14 @@ export function ElevationRequestCard(props: {
       : undefined;
 
   return (
-    <FeedRowHeight height={wrapperHeight} onEased={onWrapperEased} style={{ overflow: "hidden" }}>
+    <FeedRowHeight
+      height={wrapperHeight}
+      maxStep={
+        collapsing && commandPhase === "leaving" ? ELEVATION_CARD_STEP_BESIDE_ROW : undefined
+      }
+      onEased={onWrapperEased}
+      style={{ overflow: "hidden" }}
+    >
       {showCard ? null : (
         <View key="row" onLayout={onRowLayout}>
           {row}

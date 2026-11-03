@@ -13,7 +13,7 @@ import { useReducedMotion } from "react-native-reanimated";
 /** How long a row's height takes to ease when no frame is capped. */
 export const FEED_ROW_EASE_MS = 240;
 /** dp per frame: about 21 px on a 2.6x screen, so a stalled frame slows the ease instead of jumping. */
-const MAX_STEP = 8;
+export const FEED_ROW_MAX_STEP = 8;
 
 const easeInOutQuad = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
@@ -25,6 +25,8 @@ const easeInOutQuad = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 
  */
 export function FeedRowHeight(props: {
   readonly height: number | null;
+  /** dp per frame, below `FEED_ROW_MAX_STEP` when rows easing together share a frame's move. */
+  readonly maxStep?: number | undefined;
   readonly onEased?: (() => void) | undefined;
   readonly style?: StyleProp<ViewStyle>;
   readonly children: ReactNode;
@@ -43,6 +45,8 @@ export function FeedRowHeight(props: {
     else if (shown === null) setShown(laidOut.current);
   }
   const onEased = useEffectEvent(() => props.onEased?.());
+  // Read per step: a new cap mid-ease must not restart the ease from its slow start.
+  const maxStep = useEffectEvent(() => props.maxStep ?? FEED_ROW_MAX_STEP);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports each render's height to LegendList's synchronous layout pass
   useLayoutEffect(() => {
     current.current = shown ?? laidOut.current;
@@ -65,10 +69,11 @@ export function FeedRowHeight(props: {
       start ??= now;
       const t = Math.min(1, (now - start) / FEED_ROW_EASE_MS);
       const gap = from + (to - from) * easeInOutQuad(t) - current.current;
+      const cap = maxStep();
       const next =
-        t === 1 && Math.abs(to - current.current) <= MAX_STEP
+        t === 1 && Math.abs(to - current.current) <= cap
           ? to
-          : current.current + Math.max(-MAX_STEP, Math.min(MAX_STEP, gap));
+          : current.current + Math.max(-cap, Math.min(cap, gap));
       current.current = next;
       setShown(next);
       if (next === to) {
