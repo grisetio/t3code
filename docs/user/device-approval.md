@@ -46,6 +46,18 @@ waits at the top of the threads list instead. With T3 Connect linked, the phone 
 gets a push for requests that belong to a thread; without it there is no push.
 Web and desktop show requests and can deny them; approving needs the phone.
 
+## Why the T3 Code server can't approve
+
+- The phone creates its approval key in its secure hardware (StrongBox, or the
+  TEE when there is none), and the key never leaves it. Every signature needs
+  your fingerprint, and adding a fingerprint to the phone disables the key.
+- At setup, the machine checks Android's proof that the key is hardware-backed,
+  needs a fingerprint for every use, and belongs to the T3 Code app.
+- The phone signs the exact command, user, and working directory it shows you.
+  `sudo` checks that signature itself, as root, before anything runs.
+- The T3 Code server only relays requests. It can delay, drop, or deny one, but
+  it can't approve one, and neither can an agent running as you.
+
 ## Remove a device or turn it off
 
 In **Settings → Device approval**, open **Details**. **Revoke** removes another
