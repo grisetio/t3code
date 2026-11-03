@@ -5,7 +5,7 @@ When the t3-code MCP server exposes link_pull_request, you must use it to regist
 </pull_request_linking>`;
 
 export const DEVICE_APPROVAL_INSTRUCTIONS =
-  "sudo goes to the user's phone for approval. Run sudo directly: no TTY or password is needed, and one approval covers every sudo within the same command. If sudo fails with a hint starting with `t3:`, follow it. If the request is denied or expires, don't retry on your own: ask the user in the chat and wait for their answer. Never pipe a password into sudo.";
+  "sudo asks the user to approve it in T3. Run sudo directly: no TTY or password is needed, and one approval covers every sudo within the same command. If sudo fails with a hint starting with `t3:`, follow it. If the request is denied or expires, don't retry on your own: ask the user in the chat and wait for their answer. Never pipe a password into sudo.";
 
 /**
  * Whether this environment sends agents' `sudo` to a device for approval.
