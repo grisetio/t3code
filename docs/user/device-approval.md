@@ -9,7 +9,8 @@ the command itself. Deny refuses it, and the agent is told not to retry.
 ## Set up
 
 On the phone, open **Settings → Device approval** and choose **Set up** for the
-machine. Setup asks for your fingerprint first, then the sudo password once.
+machine. Before it asks for anything, setup lists the files it will change on
+that machine. It then asks for your fingerprint, then the sudo password once.
 Enter it, or choose **Use a terminal command instead** to get a command to paste
 into a terminal on that machine. The password goes to the server once and is
 never stored. Setup trusts your account on that machine, the same as typing the sudo
@@ -17,9 +18,11 @@ password into T3 Code: anything running as you, including an agent, could
 change what it installs. On a Mac that uses Touch ID for `sudo`, a Touch ID
 prompt may appear on the Mac first; Cancel continues with the password.
 
-After setup, T3 Code runs a test `sudo` for you to approve on the phone. Run it
-again any time with **Test** in **Settings → Device approval** on the phone,
-web, or desktop.
+Setup doesn't run a test `sudo`. The next `sudo` an agent runs asks on the
+phone.
+
+If the T3 Code build on that machine doesn't include the device approval
+helper, **Set up** is unavailable and Settings says so.
 
 To add another phone, choose **Add this phone** on it. Approve on a phone that
 is already set up after checking that both show the same code, or enter the
@@ -39,6 +42,10 @@ password. Until a phone is set up, only the password can approve it.
   usual way, not the phone.
 - A request nobody answers expires after about 100 seconds, and the command
   fails.
+- Setup changes these files: the `sudo` PAM config (`/etc/pam.d/sudo_local` on
+  macOS, `/etc/pam.d/sudo` on Linux), `/etc/sudoers.d/t3-elevation`, the
+  approval config and phone keys in `/etc/t3-elevation`, and the helper and PAM
+  module it copies to `/usr/local/lib`. **Turn off** restores them.
 
 Requests show up in the app as a banner, and in the agent's thread, while the
 app is connected to the environment. A request T3 Code can't match to a thread
@@ -70,9 +77,10 @@ If `sudo` on a Mac stops with "unable to initialize PAM", macOS's own
 administrator prompt still runs a command as root:
 `osascript -e 'do shell script "<command>" with administrator privileges'`.
 
-Once a phone is set up, adding a phone, revoking, and turning off are approved
-on a phone by default. You can still use the sudo password instead; it passes
-through the T3 Code server on its way to `sudo`.
+Once a phone is set up, adding a phone and revoking are approved on a phone by
+default. **Turn off** on web or desktop also asks a phone first; on the phone
+itself it asks for the sudo password. You can always use the password instead;
+it passes through the T3 Code server on its way to `sudo`.
 
 **Turn off**, also under **Details**, restores the files T3 Code changed, and
 agent `sudo` asks for the password again. When the setup comes from config

@@ -463,7 +463,10 @@ Any tool may produce this state; T3 verifies it whoever installed it.
   never manage its contents; the helper writes keys.
 
 Static checks cover the PAM line, the marker, the config, and the keys dir. The
-rest is proven by a live `sudo -n true` approved on a device. Only root can read
+rest is proven only by a sudo approved on a device. Clients don't offer a test
+`sudo -n true` (a fingerprint that approves nothing teaches users to approve
+blind), so the first agent sudo is the proof; the service's `test` remains for
+tooling. Only root can read
 sudoers, so the module checks the six lines itself on every request (any binding
 order or file, as long as each appears as `Defaults:<user>` or a global
 `Defaults`); without one of them it returns `PAM_IGNORE`, and the live test
@@ -483,7 +486,13 @@ between approval and sudo's exec. Status reports that copy as `helperInstalled`;
 while it is false, clients don't offer adding or removing devices, and a failed
 `helper` check says why. The first install has no such copy, so it
 runs a helper this OS account could have changed, the same trust as typing the
-sudo password into T3.
+sudo password into T3. That helper is `T3_ELEVATION_HELPER`, else the installed
+copy, else the one the build ships (`bundledElevationHelperPath`): the macOS
+desktop app carries it and the module under `Resources/t3-elevation/`, outside
+the asar because sudo can't exec a file inside one. A build with none reports
+`setupUnavailableReason`, and clients disable Set up before the fingerprint.
+The release helper's `option_env!` pins fail the build when the signing digest
+is missing (`T3_ELEVATION_UNPINNED=1` opts test fixtures out).
 
 | Command                                                                                                                       | Result                                                                                                                                                                                      |
 | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

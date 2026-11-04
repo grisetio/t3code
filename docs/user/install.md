@@ -73,6 +73,10 @@ or use a package manager:
 | Arch Linux         | `yay -S t3code-bin`                |
 | Arch Linux nightly | `yay -S t3code-nightly-bin`        |
 
+A macOS build that isn't notarized, such as one you built yourself, opens only
+after you allow it: open it once, then choose **Open Anyway** in **System
+Settings → Privacy & Security**.
+
 The `.deb` updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the
 update fails. Download the new `.deb` and install it the same way.
