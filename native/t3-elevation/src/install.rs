@@ -372,10 +372,7 @@ impl Step {
             }
             Self::CreateDir { .. } => "create directory".into(),
             Self::CreateFile { path, .. } if path == SUDOERS_DROP_IN => {
-                format!(
-                    "add sudoers drop-in: noninteractive_auth, !requiretty, timestamp_timeout=0, always_set_home, !env_editor, and don't pass {} from your environment",
-                    ENV_NOT_KEPT.replace(' ', ", ")
-                )
+                "let sudo ask without a terminal, ask every time, and run with root's home and a clean environment".into()
             }
             Self::CreateFile { path, .. } if path.ends_with(".toml") => {
                 "create device approval config".into()
@@ -384,10 +381,10 @@ impl Step {
                 "install the PAM module".into()
             }
             Self::CreateFile { path, .. } if path.starts_with("/etc/pam.d/") => {
-                "create it with the pam_t3_elevation auth lines".into()
+                "make sudo check device approval first".into()
             }
             Self::CreateFile { .. } => "install the t3-elevation helper".into(),
-            Self::ModifyFile { .. } => "add the pam_t3_elevation auth line first".into(),
+            Self::ModifyFile { .. } => "make sudo check device approval first".into(),
         }
     }
 }
@@ -1781,11 +1778,7 @@ mod tests {
             .iter()
             .find(|step| step.path() == SUDOERS_DROP_IN)
             .expect("drop-in planned");
-        assert!(
-            drop_in
-                .summary()
-                .contains("HOME, EDITOR, VISUAL, SUDO_EDITOR, PATH")
-        );
+        assert!(drop_in.summary().contains("a clean environment"));
         let Step::CreateFile { contents, .. } = drop_in else {
             panic!("{drop_in:?}");
         };
@@ -1882,9 +1875,9 @@ mod tests {
         };
         assert_eq!(
             summary("/etc/pam.d/sudo_local"),
-            "create it with the pam_t3_elevation auth lines"
+            "make sudo check device approval first"
         );
-        assert!(summary(SUDOERS_DROP_IN).starts_with("add sudoers drop-in"));
+        assert!(summary(SUDOERS_DROP_IN).starts_with("let sudo ask without a terminal"));
         assert_eq!(summary(MODULE_INSTALL_PATH), "install the PAM module");
         assert_eq!(
             summary(crate::HELPER_INSTALL_PATH),
