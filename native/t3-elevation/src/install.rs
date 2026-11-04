@@ -380,6 +380,9 @@ impl Step {
             Self::CreateFile { path, .. } if path.ends_with(".so") => {
                 "install the PAM module".into()
             }
+            Self::CreateFile { path, .. } if path.starts_with("/etc/pam.d/") => {
+                "create it with the pam_t3_elevation auth lines".into()
+            }
             Self::CreateFile { .. } => "install the t3-elevation helper".into(),
             Self::ModifyFile { .. } => "add the pam_t3_elevation auth line first".into(),
         }
@@ -600,14 +603,22 @@ impl Planner<'_> {
 
     fn sudoers(&mut self, user: &str) {
         let sudoers = self.layout.path("/etc/sudoers");
-        // Only root can read sudoers; unprivileged status leaves this to the
-        // live `sudo -n true` test.
+        let wanted = sudoers_drop_in(user);
+        // Only root can read sudoers. Unprivileged status still lists the
+        // drop-in it would add, and install as root decides for real.
         if std::fs::File::open(&sudoers)
             .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
         {
+            if std::fs::symlink_metadata(self.layout.path(SUDOERS_DROP_IN)).is_err() {
+                self.plan.steps.push(Step::CreateFile {
+                    path: SUDOERS_DROP_IN.into(),
+                    contents: wanted.into_bytes(),
+                    mode: 0o440,
+                    sudoers: true,
+                });
+            }
             return;
         }
-        let wanted = sudoers_drop_in(user);
         let existing = std::fs::read(self.layout.path(SUDOERS_DROP_IN)).ok();
         if existing.as_deref().is_some_and(|bytes| {
             bytes == wanted.as_bytes() || bytes == without_requiretty(&wanted).as_bytes()
@@ -1840,6 +1851,46 @@ mod tests {
         assert!(root.check("pam_sudo_local"));
         uninstall(&root.layout, "alice").unwrap();
         assert_eq!(root.snapshot(), before);
+    }
+
+    #[test]
+    fn unprivileged_status_on_a_fresh_mac_lists_every_file_setup_writes() {
+        let sudo = "auth       include        sudo_local\n";
+        let root = Root::new(
+            Platform::Macos,
+            &[
+                ("/etc/pam.d/sudo", sudo),
+                ("/etc/sudoers", "#includedir /private/etc/sudoers.d\n"),
+            ],
+        );
+        // As on a real Mac, only root can read sudoers.
+        std::fs::set_permissions(
+            root.layout.path("/etc/sudoers"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o000),
+        )
+        .unwrap();
+        let planned = status(&root.layout, "alice", &root.sources()).planned_changes;
+        let summary = |path: &str| {
+            planned
+                .iter()
+                .find(|change| change.path == path)
+                .map(|change| change.summary.clone())
+                .unwrap_or_else(|| panic!("{path} not planned: {planned:?}"))
+        };
+        assert_eq!(
+            summary("/etc/pam.d/sudo_local"),
+            "create it with the pam_t3_elevation auth lines"
+        );
+        assert!(summary(SUDOERS_DROP_IN).starts_with("add sudoers drop-in"));
+        assert_eq!(summary(MODULE_INSTALL_PATH), "install the PAM module");
+        assert_eq!(
+            summary(crate::HELPER_INSTALL_PATH),
+            "install the t3-elevation helper"
+        );
+        assert_eq!(
+            summary("/etc/t3-elevation/users/alice.toml"),
+            "create device approval config"
+        );
     }
 
     #[test]

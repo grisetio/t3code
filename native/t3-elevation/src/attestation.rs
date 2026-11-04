@@ -25,11 +25,19 @@ const RELEASE_PACKAGES: &str = match option_env!("T3_ELEVATION_ANDROID_PACKAGES"
     None => "com.t3tools.t3code",
 };
 /// SHA-256 digests of the release signing certificates, hex or base64url,
-/// comma-separated. Unknown for now: without one, only dev enrollment works.
+/// comma-separated. Without one, release enrollment rejects every phone.
 const RELEASE_SIGNING_DIGESTS: &str = match option_env!("T3_ELEVATION_ANDROID_SIGNING_DIGESTS") {
     Some(value) => value,
     None => "",
 };
+// A release build without a pin would be shipped and fail only at a user's
+// first setup. Test fixtures, which never ship, opt out explicitly.
+const _: () = assert!(
+    cfg!(debug_assertions)
+        || !RELEASE_SIGNING_DIGESTS.is_empty()
+        || option_env!("T3_ELEVATION_UNPINNED").is_some(),
+    "release builds need T3_ELEVATION_ANDROID_SIGNING_DIGESTS (or T3_ELEVATION_UNPINNED=1 for test builds)"
+);
 /// Debug signing certificates `--allow-dev-attestation` accepts, as above.
 const DEV_SIGNING_DIGESTS: &str = match option_env!("T3_ELEVATION_ANDROID_DEV_SIGNING_DIGESTS") {
     Some(value) => value,

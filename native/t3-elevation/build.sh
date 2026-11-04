@@ -8,6 +8,10 @@
 # cargo-zigbuild and link against a stub libpam, so no sysroot is needed.
 # `--test-server` also builds the VM test fixture; never ship it.
 #
+# Release builds need T3_ELEVATION_ANDROID_SIGNING_DIGESTS, the SHA-256 of the
+# Android app's signing certificate; without it every phone is rejected, so
+# the build fails. `--test-server` builds leave it unpinned.
+#
 # Needs cargo with the Linux rust-std targets. zig and cargo-zigbuild come from
 # nixpkgs when they aren't on PATH.
 set -euo pipefail
@@ -17,7 +21,7 @@ test_server=0
 targets=()
 for arg in "$@"; do
   case "$arg" in
-    --test-server) test_server=1 ;;
+    --test-server) test_server=1; export T3_ELEVATION_UNPINNED=1 ;;
     -*) echo "unknown option $arg" >&2; exit 2 ;;
     *) targets+=("$arg") ;;
   esac
