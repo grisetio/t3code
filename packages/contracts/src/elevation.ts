@@ -371,6 +371,8 @@ export const ElevationStatus = Schema.Struct({
   /** False on platforms or accounts that can't use it (e.g. confined SELinux users). */
   supported: Schema.Boolean,
   unsupportedReason: Schema.optionalKey(Schema.String),
+  /** Why setup can't run here, such as a build without the helper; clients say so before setup starts. */
+  setupUnavailableReason: Schema.optionalKey(Schema.String),
   /** Static checks pass, this server owns the socket, and a device is enrolled. */
   ready: Schema.Boolean,
   /** The installed config points at this server's socket. */

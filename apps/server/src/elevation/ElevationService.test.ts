@@ -205,6 +205,8 @@ const makeFixture = Effect.fn("test.makeFixture")(function* (options?: {
   readonly providerProcesses?: ReadonlyArray<ProviderProcess>;
   /** Set to run without peer credentials, as under Electron's Node. */
   readonly plausiblePeer?: (hello: { readonly chain: ReadonlyArray<{ pid: number }> }) => boolean;
+  /** A fresh machine: no override, nothing installed, and this helper (or none) shipped. */
+  readonly bundledOnly?: "helper" | null;
 }) {
   const dir = yield* Effect.acquireRelease(
     Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elev-"))),
@@ -267,7 +269,7 @@ esac
     await NodeFSP.mkdir(NodePath.dirname(installedHelper(dir)), { recursive: true });
     await NodeFSP.chmod(NodePath.join(dir, "lib"), 0o755);
     await NodeFSP.chmod(NodePath.dirname(installedHelper(dir)), 0o755);
-    await writeScript(installedHelper(dir), helper);
+    if (options?.bundledOnly === undefined) await writeScript(installedHelper(dir), helper);
   });
 
   const commands = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
@@ -297,8 +299,8 @@ esac
       rootUid: NodeOS.userInfo().uid,
       platform: "darwin",
     },
-    helperOverride: NodePath.join(dir, "helper"),
-    bundledHelperPath: null,
+    helperOverride: options?.bundledOnly === undefined ? NodePath.join(dir, "helper") : null,
+    bundledHelperPath: options?.bundledOnly === "helper" ? NodePath.join(dir, "helper") : null,
     sudoPath: NodePath.join(dir, "sudo"),
     attestation: "release",
     devicesStatePath: NodePath.join(dir, "elevation-devices.json"),
@@ -794,6 +796,19 @@ describe("ElevationService", () => {
 describe("ElevationService helper", () => {
   const read = (path: string) => Effect.promise(() => NodeFSP.readFile(path, "utf8"));
   const lines = (text: string) => text.trimEnd().split("\n");
+  const exists = (path: string) =>
+    Effect.promise(() =>
+      NodeFSP.access(path).then(
+        () => true,
+        () => false,
+      ),
+    );
+  const setupDevice = {
+    label: "Pixel",
+    publicKey: vectorsJson.keys.newDevice.spkiDer,
+    challenge: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    attestationChain: ["AAAA"] as [string],
+  };
 
   it.live("installs with the password on sudo's stdin and the key in a removed 0600 file", () =>
     Effect.gen(function* () {
@@ -1085,6 +1100,63 @@ describe("ElevationService helper", () => {
       assert.isFalse(sudoRan);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+
+  it.live("says setup can't run before anything asks for a key or a password", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ bundledOnly: null });
+      const status = yield* fixture.service.status;
+      assert.strictEqual(
+        status.setupUnavailableReason,
+        "This build of T3 Code doesn't include the device approval helper.",
+      );
+      assert.deepStrictEqual(status.plannedChanges, []);
+      const refused = yield* fixture.service
+        .install({ password: "hunter2", device: setupDevice })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused.reason, "not_available");
+      assert.isFalse(yield* exists(NodePath.join(fixture.dir, "sudo.args")));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("sets up with the helper the build ships", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ bundledOnly: "helper" });
+      const status = yield* fixture.service.status;
+      assert.isUndefined(status.setupUnavailableReason);
+      assert.isFalse(status.helperInstalled);
+      assert.deepStrictEqual(status.plannedChanges, [
+        { path: "/etc/pam.d/sudo", summary: "Add the device approval line" },
+      ]);
+      yield* fixture.service.install({ password: "hunter2", device: setupDevice });
+      assert.include(
+        lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))),
+        NodePath.join(fixture.dir, "helper"),
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+});
+
+describe("bundledElevationHelperPath", () => {
+  it("finds the helper beside the CLI archive's server or under the desktop app's Resources", () => {
+    const archive = "/opt/t3-1.0.0-darwin-arm64";
+    const desktop = "/Applications/T3 Code.app/Contents/Resources";
+    const find = (serverDir: string, present: ReadonlyArray<string>, packaged = true) =>
+      ElevationService.bundledElevationHelperPath({
+        serverDir,
+        packaged,
+        exists: (path) => present.includes(path),
+      });
+    assert.deepStrictEqual(
+      [
+        find(archive, [`${archive}/t3-elevation/t3-elevation`]),
+        find(`${desktop}/app.asar/apps/server/dist`, [`${desktop}/t3-elevation/t3-elevation`]),
+        find(archive, []),
+        // A server run from source never picks up a helper lying around.
+        find(archive, [`${archive}/t3-elevation/t3-elevation`], false),
+      ],
+      [`${archive}/t3-elevation/t3-elevation`, `${desktop}/t3-elevation/t3-elevation`, null, null],
+    );
+  });
 });
 
 describe("elevationSudoPath", () => {

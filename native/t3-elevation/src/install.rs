@@ -367,6 +367,9 @@ impl Step {
     }
     pub fn summary(&self) -> String {
         match self {
+            Self::CreateDir { path, .. } if path.contains("/keys/") => {
+                "create the folder for phone keys".into()
+            }
             Self::CreateDir { .. } => "create directory".into(),
             Self::CreateFile { path, .. } if path == SUDOERS_DROP_IN => {
                 format!(
@@ -1890,6 +1893,10 @@ mod tests {
         assert_eq!(
             summary("/etc/t3-elevation/users/alice.toml"),
             "create device approval config"
+        );
+        assert_eq!(
+            summary("/etc/t3-elevation/keys/alice"),
+            "create the folder for phone keys"
         );
     }
 
