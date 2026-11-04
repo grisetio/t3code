@@ -6,6 +6,7 @@ import {
   deviceApprovalCheckPaths,
   deviceApprovalFailingChecks,
   deviceApprovalHandoff,
+  deviceApprovalSetupChanges,
   deviceApprovalState,
   deviceApprovalTurnOff,
   pickDeviceApprovalFixProject,
@@ -200,5 +201,27 @@ describe("deviceApprovalTurnOff", () => {
     expect(deviceApprovalTurnOff(status({ installedByT3: true, helperInstalled: false }))).toBe(
       "agent",
     );
+  });
+});
+
+describe("deviceApprovalSetupChanges", () => {
+  it("lists the files setup writes, leaving out folders that only hold them", () => {
+    expect(
+      deviceApprovalSetupChanges([
+        { path: "/etc/t3-elevation", summary: "create directory" },
+        { path: "/etc/t3-elevation/keys/alice", summary: "create directory" },
+        { path: "/etc/t3-elevation/users", summary: "create directory" },
+        { path: "/etc/t3-elevation/users/alice.toml", summary: "create device approval config" },
+        { path: "/etc/pam.d/sudo_local", summary: "can't change: already exists and differs" },
+      ]),
+    ).toEqual([
+      { path: "/etc/t3-elevation/keys/alice", summary: "Create directory", blocked: false },
+      {
+        path: "/etc/t3-elevation/users/alice.toml",
+        summary: "Create device approval config",
+        blocked: false,
+      },
+      { path: "/etc/pam.d/sudo_local", summary: "Already exists and differs", blocked: true },
+    ]);
   });
 });

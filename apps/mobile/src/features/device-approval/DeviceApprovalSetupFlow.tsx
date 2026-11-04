@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { elevationFailureMessage } from "@t3tools/client-runtime/elevation";
+import { deviceApprovalSetupChanges } from "@t3tools/client-runtime/elevation-fix";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -15,6 +16,9 @@ import { View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
+import { ListRowLayout } from "../../components/ui/ListRowLayout";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import { SettingsSection } from "../settings/components/SettingsSection";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -55,7 +59,8 @@ const releaseClaim = () => appAtomRegistry.set(claimedElevationRequestAtom, null
 /**
  * Setup from the phone (FLOW moment 4): the phone creates its key and the fingerprint proves it
  * can use it, the machine's password approves the first phone once, and an enrolled phone approves a
- * later one. No checks or paths here; Details has them.
+ * later one. First setup lists the files it writes before anything else (SPEC §7); checks live in
+ * Details.
  */
 export function DeviceApprovalSetupFlow(props: {
   readonly environmentId: EnvironmentId;
@@ -85,6 +90,8 @@ export function DeviceApprovalSetupFlow(props: {
   // Leaving mid-wait must not keep hiding the request from the banner.
   useEffect(() => releaseClaim, []);
   const stepNumber = step === "intro" ? 1 : step === "done" ? 3 : 2;
+  const changes = installed ? [] : deviceApprovalSetupChanges(status.plannedChanges);
+  const blocked = changes.some((change) => change.blocked);
 
   const guarded = async (action: () => Promise<void>) => {
     if (inFlight.current) return;
@@ -193,7 +200,11 @@ export function DeviceApprovalSetupFlow(props: {
     });
 
   return (
-    <View className="flex-1 gap-5 px-5 pt-4">
+    <ScrollView
+      className="flex-1"
+      contentContainerClassName="gap-5 px-5 pt-4 pb-8"
+      keyboardShouldPersistTaps="handled"
+    >
       {/* Tall enough for Cancel, so the step count stays put when Done drops it. */}
       <View className="min-h-14 flex-row items-center justify-between">
         {/* Done has nothing left to cancel; its own button closes. */}
@@ -220,11 +231,32 @@ export function DeviceApprovalSetupFlow(props: {
             disabled={
               busy ||
               confirmed ||
+              blocked ||
               status.user === undefined ||
               !(installed ? canEnroll : canInstall)
             }
             onPress={() => void createKey()}
           />
+          {changes.length > 0 ? (
+            <SettingsSection
+              title={`What changes on ${machine}`}
+              footer={
+                blocked
+                  ? "Setup can't change a file safely, so it changes nothing."
+                  : "Turn off restores these files."
+              }
+            >
+              {changes.map((change) => (
+                <ListRowLayout
+                  key={change.path}
+                  icon={change.blocked ? "exclamationmark.triangle" : "doc.text"}
+                  tone={change.blocked ? "danger" : "default"}
+                  label={change.summary}
+                  description={change.path}
+                />
+              ))}
+            </SettingsSection>
+          ) : null}
         </StepBody>
       ) : null}
 
@@ -329,7 +361,7 @@ export function DeviceApprovalSetupFlow(props: {
           {error}
         </Text>
       ) : null}
-    </View>
+    </ScrollView>
   );
 }
 

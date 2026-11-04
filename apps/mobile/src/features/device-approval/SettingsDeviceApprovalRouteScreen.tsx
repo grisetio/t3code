@@ -98,8 +98,11 @@ export function SettingsDeviceApprovalRouteScreen() {
   const insets = useSafeAreaInsets();
   const { environments } = useEnvironments();
   const [setup, setSetup] = useState<SetupTarget | null>(null);
-  const supported = environments.filter((environment) =>
-    environmentSupportsDeviceApproval(environment.serverConfig),
+  // A machine that isn't connected can't be checked or set up, and its requests can't arrive.
+  const supported = environments.filter(
+    (environment) =>
+      environment.connection.phase === "connected" &&
+      environmentSupportsDeviceApproval(environment.serverConfig),
   );
   // The Notifications row only matters once some machine has device approval on.
   const [onSomewhere, setOnSomewhere] = useState<ReadonlySet<EnvironmentId>>(() => new Set());
@@ -265,7 +268,12 @@ function DeviceApprovalGroup(props: {
   const phone = { keyId: phoneRecord?.keyId ?? null };
   const state = status.supported ? deviceApprovalState(status, phone) : "off";
   const thisDevice = status.devices.find((device) => device.keyId === phoneRecord?.keyId);
-  const canRepair = signerPresent && status.user !== undefined && canInstall && canEnroll;
+  const canRepair =
+    signerPresent &&
+    status.user !== undefined &&
+    status.setupUnavailableReason === undefined &&
+    canInstall &&
+    canEnroll;
   const turnOff = deviceApprovalTurnOff(status);
 
   const forgetThisPhone = async () => {
@@ -424,7 +432,7 @@ function DeviceApprovalGroup(props: {
   const footer =
     state === "off"
       ? canSetUp
-        ? offLine
+        ? (status.setupUnavailableReason ?? offLine)
         : offReason(signerPresent)
       : addThisPhone
         ? offLine
@@ -460,7 +468,7 @@ function DeviceApprovalGroup(props: {
             <ListActionRow
               icon={FINGERPRINT}
               label="Set up"
-              disabled={!canInstall}
+              disabled={!canInstall || status.setupUnavailableReason !== undefined}
               onPress={setUp}
             />
           ) : null

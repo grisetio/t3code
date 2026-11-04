@@ -164,7 +164,8 @@ function DeviceApprovalStatus(props: {
             ? undefined
             : state === "needs_fixing"
               ? "Agents' sudo will ask for the password"
-              : `Approve agents' sudo on ${props.machine} with your phone. Set it up in the T3 app on Android, under Settings → Device approval.`
+              : (status.setupUnavailableReason ??
+                `Approve agents' sudo on ${props.machine} with your phone. Set it up in the T3 app on Android, under Settings → Device approval.`)
         }
         status={<Badge variant={badge.variant}>{badge.label}</Badge>}
         control={
