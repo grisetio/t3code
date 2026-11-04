@@ -7,15 +7,29 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { View, type StyleProp, type ViewStyle } from "react-native";
+import { Easing, View, type StyleProp, type ViewStyle } from "react-native";
 import { useReducedMotion } from "react-native-reanimated";
 
-/** How long a row's height takes to ease when no frame is capped. */
-export const FEED_ROW_EASE_MS = 240;
-/** dp per frame: about 21 px on a 2.6x screen, so a stalled frame slows the ease instead of jumping. */
-export const FEED_ROW_MAX_STEP = 8;
+export interface FeedRowMotion {
+  readonly durationMs: number;
+  readonly easing: (t: number) => number;
+}
 
-const easeInOutQuad = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+// Both curves peak at about twice their average speed. Steeper ones (Material's standard and
+// emphasized curves) move a sudo card's height 50-140 px in one 120 Hz frame and read as a jump.
+/** Growing in: quick at first, then settling into place. */
+export const FEED_ROW_ARRIVE: FeedRowMotion = { durationMs: 260, easing: Easing.out(Easing.quad) };
+/** Closing up: gathers speed in a few frames, then slows into its end. */
+export const FEED_ROW_COLLAPSE: FeedRowMotion = {
+  durationMs: 250,
+  // CSS's `ease`; React Native's `Easing.ease` is an ease-in.
+  easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+};
+/** The longest ease, when no frame stalls. */
+export const FEED_ROW_EASE_MS = Math.max(FEED_ROW_ARRIVE.durationMs, FEED_ROW_COLLAPSE.durationMs);
+// A step moves the ease on by the time since the last step, but by no more than a 60 Hz frame: a
+// stalled JS frame then delays the rest of the ease instead of skipping part of it in one jump.
+const MAX_FRAME_MS = 1000 / 60;
 
 /**
  * A feed row's height, eased to `height` one React render per frame. LegendList measures a row in
@@ -29,8 +43,7 @@ const easeInOutQuad = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 
  */
 export function FeedRowHeight(props: {
   readonly height: number | null;
-  /** dp per frame, below `FEED_ROW_MAX_STEP` when rows easing together share a frame's move. */
-  readonly maxStep?: number | undefined;
+  readonly motion: FeedRowMotion;
   readonly onEased?: (() => void) | undefined;
   readonly style?: StyleProp<ViewStyle>;
   readonly children: ReactNode;
@@ -48,8 +61,7 @@ export function FeedRowHeight(props: {
     else if (shown === null) setShown(laidOut.current);
   }
   const onEased = useEffectEvent(() => props.onEased?.());
-  // Read per step: a new cap mid-ease must not restart the ease from its slow start.
-  const maxStep = useEffectEvent(() => props.maxStep ?? FEED_ROW_MAX_STEP);
+  const motion = useEffectEvent(() => props.motion);
   useLayoutEffect(() => {
     current.current = shown ?? laidOut.current;
     // Any render may change the row's height, not only a step.
@@ -65,16 +77,15 @@ export function FeedRowHeight(props: {
       onEased();
       return;
     }
-    let start: number | null = null;
-    let frame = requestAnimationFrame(function step(now) {
-      start ??= now;
-      const t = Math.min(1, (now - start) / FEED_ROW_EASE_MS);
-      const gap = from + (to - from) * easeInOutQuad(t) - current.current;
-      const cap = maxStep();
-      const next =
-        t === 1 && Math.abs(to - current.current) <= cap
-          ? to
-          : current.current + Math.max(-cap, Math.min(cap, gap));
+    const { durationMs, easing } = motion();
+    let elapsed = 0;
+    let last = performance.now();
+    let frame = requestAnimationFrame(function step() {
+      const now = performance.now();
+      elapsed += Math.min(now - last, MAX_FRAME_MS);
+      last = now;
+      const t = Math.min(1, elapsed / durationMs);
+      const next = t === 1 ? to : from + (to - from) * easing(t);
       current.current = next;
       setShown(next);
       if (next === to) {

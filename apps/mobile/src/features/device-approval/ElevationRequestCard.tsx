@@ -34,7 +34,7 @@ import { elevation } from "../../state/elevation";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useTurnItemDetail } from "../../state/queries";
 import { ThreadCommandOutput, useCommandOutputStreaming } from "../threads/thread-command-output";
-import { FeedRowHeight } from "../threads/feed-row-height";
+import { FEED_ROW_ARRIVE, FEED_ROW_COLLAPSE, FeedRowHeight } from "../threads/feed-row-height";
 import {
   isFreshRow,
   THREAD_DISCLOSURE_TRANSITION_MS,
@@ -54,11 +54,7 @@ import {
   useElevationRequestContext,
 } from "./ElevationApprovalCard";
 import { ELEVATION_SETTLE_MS } from "./elevationApproval";
-import {
-  ELEVATION_CARD_STEP_BESIDE_ROW,
-  setElevationHandover,
-  useElevationCommandPhase,
-} from "./elevationHandover";
+import { setElevationHandover, useElevationCommandLeft } from "./elevationHandover";
 import { wasDeniedHere } from "./elevationApprovalTarget";
 
 const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
@@ -147,8 +143,7 @@ export function ElevationRequestCard(props: {
   const [seenPending, setSeenPending] = useState(pending);
   if (pending && !seenPending) setSeenPending(true);
   const commandKey = elevationLinkedCommandKey(props.projectedItem);
-  const commandPhase = useElevationCommandPhase(commandKey);
-  const commandLeft = commandPhase === "left";
+  const commandLeft = useElevationCommandLeft(commandKey);
   const [handedOver, setHandedOver] = useState(false);
   if (commandLeft && !showCard && !pending && !collapsing && !handedOver) setHandedOver(true);
   const handover =
@@ -215,9 +210,7 @@ export function ElevationRequestCard(props: {
   return (
     <FeedRowHeight
       height={wrapperHeight}
-      maxStep={
-        collapsing && commandPhase === "leaving" ? ELEVATION_CARD_STEP_BESIDE_ROW : undefined
-      }
+      motion={arriving ? FEED_ROW_ARRIVE : FEED_ROW_COLLAPSE}
       onEased={onWrapperEased}
       style={{ overflow: "hidden" }}
     >
