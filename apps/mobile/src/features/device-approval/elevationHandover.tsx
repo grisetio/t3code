@@ -12,10 +12,9 @@ import { FEED_ROW_MAX_STEP, FeedRowHeight } from "../threads/feed-row-height";
 type ElevationHandover = "held" | "leaving" | "left";
 
 /**
- * Command rows a sudo request still stands beside, by `elevationCommandRowKey`: "held" while the
- * request waits or its card shows, "leaving" while the row eases out, "left" once it has no
- * height. The feed keeps these rows, so a row leaves at no height instead of dropping out of the
- * list in one frame. The request's card drops the entry only after its own collapse has ended:
+ * Command rows a sudo request stands beside, by `elevationCommandRowKey`: "held" while it waits or
+ * its card shows, "leaving" as the row eases out, "left" at no height. The feed keeps them so a row
+ * never drops out of the list in one frame. The card drops its entry only after its own collapse:
  * dropping it rebuilds the feed, which must not land while the card's height is still easing.
  */
 export const elevationHandoversAtom = Atom.make<ReadonlyMap<string, ElevationHandover>>(
