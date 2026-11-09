@@ -528,6 +528,14 @@ the asar because sudo can't exec a file inside one. A build with none reports
 The release helper's `option_env!` pins fail the build when the signing digest
 is missing (`T3_ELEVATION_UNPINNED=1` opts test fixtures out).
 
+The desktop's Touch ID approver (`native/t3-se-sign`) ships beside the helper as its own
+bundle, `Resources/t3-elevation/T3 Code.app`: macOS names the Touch ID sheet after
+the calling bundle, so a bare binary would read as its file name. Its key is a
+CryptoKit Secure Enclave blob in the desktop's userData, one per environment, not a
+keychain item, so it needs no entitlements and deleting the file deletes the key.
+Main signs only bytes that `decodeElevationPayload` accepts, and closes the sheet
+by interrupting the helper when another device answers.
+
 | Command                                                                                                                                       | Result                                                                                                                                                                                      |
 | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `t3-elevation version`                                                                                                                        | `{ ok, protocol: 1, version }`                                                                                                                                                              |

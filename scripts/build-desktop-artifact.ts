@@ -2487,8 +2487,9 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
 });
 
 /**
- * Device approval's helper and PAM module. First setup runs the helper with
- * sudo, and it copies itself and the module beside it into root-owned paths.
+ * Device approval's helper and PAM module, and the Touch ID approver. First setup
+ * runs the helper with sudo, and it copies itself and the module beside it into
+ * root-owned paths.
  */
 export const stageElevationHelper = Effect.fn("stageElevationHelper")(function* (input: {
   readonly repoRoot: string;

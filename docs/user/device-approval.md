@@ -51,7 +51,32 @@ Requests show up in the app as a banner, and in the agent's thread, while the
 app is connected to the environment. A request T3 Code can't match to a thread
 waits at the top of the threads list instead. With T3 Connect linked, the phone also
 gets a push for requests that belong to a thread; without it there is no push.
-Web and desktop show requests and can deny them; approving needs the phone.
+Web shows requests and can deny them. The Mac desktop app can also approve them
+with Touch ID once that Mac is set up (see below); otherwise approving needs the
+phone.
+
+## Approve on your Mac
+
+The T3 Code desktop app on a Mac with Touch ID can approve too, for any machine
+it connects to. In **Settings → Device approval**, choose **Add this Mac** under
+the machine. macOS asks for Touch ID to "set up approvals on this Mac". Then
+approve the new Mac on a device that is already set up, after checking that
+both show the same code, or enter the password.
+
+A request then shows **Approve** on the Mac, and Touch ID asks to "approve an
+admin request". Check the command in T3 Code; the Touch ID prompt doesn't show
+it. Cancel denies. If you answer on another device first, the prompt closes by
+itself.
+
+- Touch ID needs the lid open, or a Touch ID keyboard connected. When it can't
+  be used, the request says why; approve on another device instead.
+- The key is made in the Mac's Secure Enclave and never leaves it. Unlike a
+  phone, the Mac can't prove that to the machine, which is why an approved
+  device or the password has to admit it.
+- Adding a fingerprint to the Mac disables its key, and T3 Code says this Mac
+  needs fixing. Remove it and add it again.
+- **Remove** on this Mac asks Touch ID to "remove this Mac as an approver", then
+  deletes its key.
 
 ## Why the T3 Code server can't approve
 
@@ -93,7 +118,8 @@ password.
 
 ## Requirements
 
-- An Android phone with Android 11 or later and a fingerprint sensor. iPhone
+- An Android phone with Android 11 or later and a fingerprint sensor, or the
+  T3 Code desktop app on a Mac with Touch ID and macOS 13 or later. iPhone
   isn't supported yet.
 - The machine runs Linux or macOS. On Fedora and other SELinux systems, confined
   SELinux users aren't supported; setup says so, and `sudo` keeps asking for the
