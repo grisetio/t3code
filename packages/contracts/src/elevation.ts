@@ -506,6 +506,9 @@ export const ElevationUnattestedEnrollmentDevice = Schema.Struct({
   publicKey: ElevationBase64Url,
   /** A passkey's site; absent for a Secure Enclave key. */
   webauthn: Schema.optionalKey(ElevationWebauthnBinding),
+  // A phone's object with a bad chain must fail, not decode as unattested without it.
+  challenge: Schema.optionalKey(Schema.Never),
+  attestationChain: Schema.optionalKey(Schema.Never),
 });
 
 export const ElevationEnrollmentDevice = Schema.Union([

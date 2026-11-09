@@ -1,11 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 
 import vectorsJson from "../test-vectors/device-approval.json" with { type: "json" };
 
 import {
   decodeElevationBase64Url,
   decodeElevationPayload,
+  ElevationEnrollmentDevice,
   elevationComparisonCode,
   elevationKeyIdFromSpkiSha256,
   elevationWebauthnSite,
@@ -66,6 +68,20 @@ describe("elevation display", () => {
 });
 
 describe("elevation enrollment", () => {
+  it("never reads a phone's enrollment with a bad chain as an unattested key", () => {
+    const decode = Schema.decodeUnknownOption(ElevationEnrollmentDevice);
+    const publicKey = vectorsJson.keys.newDevice.spkiDer;
+    const challenge = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+    expect(decode({ label: "Pixel", publicKey, challenge, attestationChain: [] })._tag).toBe(
+      "None",
+    );
+    expect(decode({ label: "Pixel", publicKey, challenge })._tag).toBe("None");
+    expect(decode({ label: "MacBook Pro", publicKey })._tag).toBe("Some");
+    expect(decode({ label: "Pixel", publicKey, challenge, attestationChain: ["AAAA"] })._tag).toBe(
+      "Some",
+    );
+  });
+
   it.each(vectors.comparisonCodes)(
     "derives code $code and keyId",
     async ({ spkiDer, keyId, code }) => {
