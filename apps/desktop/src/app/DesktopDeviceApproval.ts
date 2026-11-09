@@ -236,15 +236,14 @@ export const make = Effect.gen(function* () {
   );
 
   /** Runs under `operationId` so `abort` can interrupt it; interruption reads as cancelled. */
-  const abortable = <A>(
+  const abortable = Effect.fn("DesktopDeviceApproval.abortable")(function* <A>(
     operationId: string,
     effect: Effect.Effect<A | null, DesktopDeviceApprovalError>,
-  ) =>
-    Effect.gen(function* () {
-      const fiber = yield* FiberMap.run(operations, operationId, effect);
-      const exit = yield* Fiber.await(fiber);
-      return Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause) ? null : yield* exit;
-    });
+  ) {
+    const fiber = yield* FiberMap.run(operations, operationId, effect);
+    const exit = yield* Fiber.await(fiber);
+    return Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause) ? null : yield* exit;
+  });
 
   const state: DesktopDeviceApproval["Service"]["state"] = Effect.fn("DesktopDeviceApproval.state")(
     function* (environmentId) {
