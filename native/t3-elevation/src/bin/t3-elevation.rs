@@ -178,7 +178,7 @@ fn verify_unattested(enrollment: UnattestedEnrollment) -> Result<Admitted, Failu
         label: enrollment.label,
         spki,
         how: match enrollment.webauthn {
-            Some(binding) => How::Webauthn(binding),
+            Some(binding) => How::Webauthn(binding.binding()),
             None => How::SecureEnclave,
         },
     })

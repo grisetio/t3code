@@ -194,7 +194,69 @@ pub struct UnattestedEnrollment {
     pub label: String,
     pub public_key: String,
     #[serde(default)]
-    pub webauthn: Option<WebauthnBinding>,
+    pub webauthn: Option<WebauthnEnrollment>,
+}
+
+/// A passkey's site, plus its registration's authenticator data, which only
+/// enrollment reads: the key file keeps the site.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebauthnEnrollment {
+    pub rp_id: String,
+    pub origin: String,
+    pub credential_id: String,
+    pub authenticator_data: String,
+}
+
+impl WebauthnEnrollment {
+    pub fn binding(&self) -> WebauthnBinding {
+        WebauthnBinding {
+            rp_id: self.rp_id.clone(),
+            origin: self.origin.clone(),
+            credential_id: self.credential_id.clone(),
+        }
+    }
+}
+
+const FLAG_BE: u8 = 0x08;
+const FLAG_AT: u8 = 0x40;
+
+/// Why a registration can't be enrolled (`elevationWebauthnRegistrationRefusal`
+/// in packages/contracts). With `attestation: "none"` nothing signs this data,
+/// so it only stops an honest mistake early; refusing BE in every assertion
+/// (`check_webauthn`) is the guarantee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationRefusal {
+    /// Backup eligible: the passkey can sync to devices nobody enrolled.
+    Synced,
+    /// Not this site's rpIdHash, no attested credential, or another credential.
+    Invalid,
+}
+
+pub fn check_registration(
+    authenticator_data: &[u8],
+    rp_id: &str,
+    credential_id: &[u8],
+) -> Result<(), RegistrationRefusal> {
+    use sha2::{Digest as _, Sha256};
+    // rpIdHash, flags, signCount, then the attested credential: AAGUID and the ID's length.
+    const ID_START: usize = 37 + 16 + 2;
+    let data = authenticator_data;
+    if data.len() < ID_START || data[..32] != Sha256::digest(rp_id.as_bytes())[..] {
+        return Err(RegistrationRefusal::Invalid);
+    }
+    let flags = data[32];
+    if flags & FLAG_AT == 0 {
+        return Err(RegistrationRefusal::Invalid);
+    }
+    let id_len = usize::from(u16::from_be_bytes([data[53], data[54]]));
+    if data.get(ID_START..ID_START + id_len) != Some(credential_id) {
+        return Err(RegistrationRefusal::Invalid);
+    }
+    if flags & FLAG_BE != 0 {
+        return Err(RegistrationRefusal::Synced);
+    }
+    Ok(())
 }
 
 /// WebAuthn allows credential IDs up to 1023 bytes.
@@ -226,7 +288,7 @@ pub fn check_unattested(
                 "origin must be https://host[:port] or http://localhost[:port], and rpId that host or a parent of it",
             )
         })?;
-        b64::decode(&binding.credential_id)
+        let credential_id = b64::decode(&binding.credential_id)
             .filter(|id| !id.is_empty() && id.len() <= MAX_CREDENTIAL_ID_BYTES)
             .ok_or_else(|| {
                 reject(
@@ -234,6 +296,22 @@ pub fn check_unattested(
                     "credentialId must be 1-1023 bytes of base64url",
                 )
             })?;
+        let authenticator_data = b64::decode(&binding.authenticator_data).unwrap_or_default();
+        match check_registration(&authenticator_data, &binding.rp_id, &credential_id) {
+            Ok(()) => {}
+            Err(RegistrationRefusal::Synced) => {
+                return Err(reject(
+                    "synced_passkey",
+                    "this passkey syncs to other devices; only a passkey kept on one device can approve",
+                ));
+            }
+            Err(RegistrationRefusal::Invalid) => {
+                return Err(reject(
+                    "invalid_passkey",
+                    "authenticatorData isn't this credential's registration for this rpId",
+                ));
+            }
+        }
     }
     Ok(spki)
 }

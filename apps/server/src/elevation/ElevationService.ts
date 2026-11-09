@@ -29,6 +29,7 @@ import {
   type ElevationEnrollInput,
   ElevationEnrollmentDevice,
   elevationApproverKind,
+  elevationWebauthnRegistrationRefusal,
   isElevationUnattestedDevice,
   type ElevationFailureReason,
   type ElevationInstallInput,
@@ -222,6 +223,27 @@ const lastLine = (text: string) => text.trim().split("\n").at(-1) ?? "";
 
 /** The helper's enrollment object has exactly the device's fields. */
 const enrollmentObject = Schema.encodeSync(Schema.fromJsonString(ElevationEnrollmentDevice));
+
+/**
+ * A synced passkey is refused before anything asks for an approval it would only waste; the
+ * helper refuses it too (`check_registration`).
+ */
+const refuseUnenrollablePasskey = (device: ElevationEnrollmentDevice) => {
+  if (!isElevationUnattestedDevice(device) || device.webauthn === undefined) return Effect.void;
+  const { webauthn } = device;
+  const authenticatorData = decodeElevationBase64Url(webauthn.authenticatorData);
+  const credentialId = decodeElevationBase64Url(webauthn.credentialId);
+  const refusal =
+    authenticatorData === null || credentialId === null
+      ? "invalid"
+      : elevationWebauthnRegistrationRefusal({
+          authenticatorData,
+          rpIdHash: NodeCrypto.createHash("sha256").update(webauthn.rpId).digest(),
+          credentialId,
+        });
+  if (refusal === null) return Effect.void;
+  return fail(refusal === "synced" ? "synced_passkey" : "invalid_passkey");
+};
 
 export class ElevationService extends Context.Service<
   ElevationService,
@@ -1043,6 +1065,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const install = Effect.fn("ElevationService.install")(function* (input: ElevationInstallInput) {
     yield* requireSupported;
+    yield* refuseUnenrollablePasskey(input.device);
     const helper = yield* requireSetupHelper;
     const installArgs = (keyPath: string) => [
       "install",
@@ -1084,6 +1107,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const enroll = Effect.fn("ElevationService.enroll")(function* (input: ElevationEnrollInput) {
     yield* requireSupported;
+    yield* refuseUnenrollablePasskey(input.device);
     const { device } = input;
     const proof = !isElevationUnattestedDevice(device)
       ? ["--challenge", device.challenge, ...attestationFlag]

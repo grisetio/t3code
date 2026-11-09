@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Plays the PAM module over a real Unix socket and fakes sudo with scripts.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
@@ -22,6 +23,7 @@ import {
   ThreadId,
   TurnItemId,
   decodeElevationBase64Url,
+  type ElevationError,
   type ElevationKeyId,
   type ElevationRequestId,
   type OrchestrationV2ServerCommand,
@@ -48,6 +50,12 @@ import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderRepl
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ElevationService from "./ElevationService.ts";
+
+const registration = (name: string) => {
+  const vector = vectorsJson.webauthnRegistrations.find((candidate) => candidate.name === name);
+  if (vector === undefined) throw new Error(`No registration vector ${name}`);
+  return vector.authenticatorData;
+};
 
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
@@ -942,7 +950,7 @@ describe("ElevationService helper", () => {
       const passkey = {
         label: "Chrome on Mac",
         publicKey: webauthnDevice.spkiDer,
-        webauthn: webauthnDevice.webauthn,
+        webauthn: { ...webauthnDevice.webauthn, authenticatorData: registration("device_bound") },
       };
       yield* fixture.service.enroll({ device: passkey });
       assert.deepStrictEqual(lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))).slice(2), [
@@ -992,6 +1000,36 @@ describe("ElevationService helper", () => {
           ["Chrome on Mac", "browser", "https://app.t3.codes"],
         ],
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("refuses a passkey that can sync before sudo asks anyone to approve it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const { webauthnDevice } = vectorsJson.keys;
+      const passkey = (name: string) => ({
+        label: "Chrome on Mac",
+        publicKey: webauthnDevice.spkiDer,
+        webauthn: { ...webauthnDevice.webauthn, authenticatorData: registration(name) },
+      });
+      const reason = (effect: Effect.Effect<unknown, ElevationError>) =>
+        effect.pipe(
+          Effect.flip,
+          Effect.map((error) => error.reason),
+        );
+      assert.strictEqual(
+        yield* reason(fixture.service.enroll({ device: passkey("synced") })),
+        "synced_passkey",
+      );
+      assert.strictEqual(
+        yield* reason(fixture.service.install({ password: "hunter2", device: passkey("synced") })),
+        "synced_passkey",
+      );
+      assert.strictEqual(
+        yield* reason(fixture.service.enroll({ device: passkey("other_rp_id") })),
+        "invalid_passkey",
+      );
+      assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.dir, "sudo.args")));
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

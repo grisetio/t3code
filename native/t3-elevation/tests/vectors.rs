@@ -359,6 +359,61 @@ fn vector_keys_derive_their_ids() {
 }
 
 #[test]
+fn webauthn_registrations() {
+    let vectors = vectors();
+    for vector in vectors["webauthnRegistrations"].as_array().unwrap() {
+        let name = str_of(vector, "name");
+        let refusal = enroll::check_registration(
+            &bytes(vector, "authenticatorData"),
+            str_of(vector, "rpId"),
+            &bytes(vector, "credentialId"),
+        )
+        .err()
+        .map(|refusal| match refusal {
+            enroll::RegistrationRefusal::Synced => "synced",
+            enroll::RegistrationRefusal::Invalid => "invalid",
+        });
+        assert_eq!(refusal, vector["refusal"].as_str(), "{name}");
+    }
+}
+
+#[test]
+fn unattested_passkeys_carry_their_registration() {
+    let vectors = vectors();
+    let device = &vectors["keys"]["webauthnDevice"];
+    let registration = |name: &str| {
+        vectors["webauthnRegistrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|vector| vector["name"] == name)
+            .map(|vector| str_of(vector, "authenticatorData").to_string())
+            .unwrap()
+    };
+    let enrollment = |authenticator_data: Option<String>| {
+        let mut webauthn = device["webauthn"].clone();
+        if let Some(data) = authenticator_data {
+            webauthn["authenticatorData"] = data.into();
+        }
+        serde_json::from_value::<enroll::UnattestedEnrollment>(serde_json::json!({
+            "label": "Chrome on Mac",
+            "publicKey": device["spkiDer"],
+            "webauthn": webauthn,
+        }))
+    };
+    // The site alone no longer decodes: the registration is required.
+    assert!(enrollment(None).is_err());
+    let code = |name: &str| {
+        enroll::check_unattested(&enrollment(Some(registration(name))).unwrap())
+            .err()
+            .map(|rejected| rejected.code)
+    };
+    assert_eq!(code("device_bound"), None);
+    assert_eq!(code("synced"), Some("synced_passkey"));
+    assert_eq!(code("other_credential"), Some("invalid_passkey"));
+}
+
+#[test]
 fn helper_input() {
     let vectors = vectors();
     let section = &vectors["helperInput"];

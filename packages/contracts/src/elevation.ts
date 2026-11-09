@@ -428,6 +428,50 @@ export const ElevationWebauthnBinding = Schema.Struct({
 });
 export type ElevationWebauthnBinding = typeof ElevationWebauthnBinding.Type;
 
+/**
+ * A passkey being enrolled: its site, plus the registration's authenticator data, whose BE flag
+ * says whether it can sync. Unsigned with `attestation: "none"`, so it only stops an honest
+ * mistake early; the module refusing BE in every assertion is the guarantee.
+ */
+export const ElevationWebauthnEnrollment = Schema.Struct({
+  ...ElevationWebauthnBinding.fields,
+  authenticatorData: ElevationBase64Url,
+});
+export type ElevationWebauthnEnrollment = typeof ElevationWebauthnEnrollment.Type;
+
+const AUTHENTICATOR_DATA_FLAGS = { BE: 0x08, AT: 0x40 } as const;
+
+/**
+ * Why a passkey's registration can't be enrolled: `synced` when it is backup eligible, so it can
+ * sync to devices nobody enrolled; `invalid` when its authenticator data isn't for this site or
+ * doesn't carry this credential. The helper checks the same (`check_registration` in
+ * native/t3-elevation/src/enroll.rs).
+ */
+export function elevationWebauthnRegistrationRefusal(input: {
+  readonly authenticatorData: Uint8Array;
+  /** SHA-256 of the rpId; callers hash with their platform's crypto. */
+  readonly rpIdHash: Uint8Array;
+  readonly credentialId: Uint8Array;
+}): "synced" | "invalid" | null {
+  const data = input.authenticatorData;
+  // rpIdHash, flags, signCount, then the attested credential: AAGUID and the ID's length.
+  const idStart = 37 + 16 + 2;
+  if (data.length < idStart || input.rpIdHash.length !== 32) return "invalid";
+  if (!input.rpIdHash.every((byte, index) => byte === data[index])) return "invalid";
+  const flags = data[32] ?? 0;
+  if ((flags & AUTHENTICATOR_DATA_FLAGS.AT) === 0) return "invalid";
+  const idLength = ((data[53] ?? 0) << 8) | (data[54] ?? 0);
+  const id = data.subarray(idStart, idStart + idLength);
+  if (
+    idLength !== input.credentialId.length ||
+    id.length !== idLength ||
+    !id.every((byte, index) => byte === input.credentialId[index])
+  ) {
+    return "invalid";
+  }
+  return (flags & AUTHENTICATOR_DATA_FLAGS.BE) === 0 ? null : "synced";
+}
+
 export const ElevationDevice = Schema.Struct({
   keyId: ElevationKeyId,
   label: Schema.String,
@@ -504,8 +548,8 @@ export const ElevationUnattestedEnrollmentDevice = Schema.Struct({
   label: EnrollmentLabel,
   /** SPKI DER. */
   publicKey: ElevationBase64Url,
-  /** A passkey's site; absent for a Secure Enclave key. */
-  webauthn: Schema.optionalKey(ElevationWebauthnBinding),
+  /** A passkey's site and registration; absent for a Secure Enclave key. */
+  webauthn: Schema.optionalKey(ElevationWebauthnEnrollment),
   // A phone's object with a bad chain must fail, not decode as unattested without it.
   challenge: Schema.optionalKey(Schema.Never),
   attestationChain: Schema.optionalKey(Schema.Never),
@@ -565,6 +609,9 @@ const ELEVATION_FAILURE_MESSAGES = {
   wrong_password: "The password was not accepted.",
   password_required: "No device approved this, so sudo needs the password.",
   helper_failed: "The device approval helper failed.",
+  synced_passkey:
+    "This passkey syncs to your other devices, so it can't approve. Save one on this device only.",
+  invalid_passkey: "This passkey's registration doesn't match this site.",
 } as const;
 
 export const ElevationFailureReason = Schema.Literals(

@@ -10,6 +10,7 @@ import {
   ElevationEnrollmentDevice,
   elevationComparisonCode,
   elevationKeyIdFromSpkiSha256,
+  elevationWebauthnRegistrationRefusal,
   elevationWebauthnSite,
   escapeElevationDisplayText,
   parseElevationEnrollCommand,
@@ -21,6 +22,13 @@ interface Vectors {
   readonly enrollParse: ReadonlyArray<{ name: string; expected: Record<string, unknown> | null }>;
   readonly displayEscaping: ReadonlyArray<{ name: string; input: string; expected: string }>;
   readonly comparisonCodes: ReadonlyArray<{ spkiDer: string; keyId: string; code: string }>;
+  readonly webauthnRegistrations: ReadonlyArray<{
+    name: string;
+    rpId: string;
+    credentialId: string;
+    authenticatorData: string;
+    refusal: string | null;
+  }>;
 }
 
 const vectors: Vectors = vectorsJson;
@@ -68,6 +76,20 @@ describe("elevation display", () => {
 });
 
 describe("elevation enrollment", () => {
+  it.each(vectors.webauthnRegistrations)(
+    "refuses a $name passkey registration as $refusal",
+    async ({ rpId, credentialId, authenticatorData, refusal }) => {
+      const rpIdHash = await sha256(new TextEncoder().encode(rpId));
+      expect(
+        elevationWebauthnRegistrationRefusal({
+          authenticatorData: bytesOf(authenticatorData),
+          rpIdHash,
+          credentialId: bytesOf(credentialId),
+        }),
+      ).toBe(refusal);
+    },
+  );
+
   it("never reads a phone's enrollment with a bad chain as an unattested key", () => {
     const decode = Schema.decodeUnknownOption(ElevationEnrollmentDevice);
     const publicKey = vectorsJson.keys.newDevice.spkiDer;

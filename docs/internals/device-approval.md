@@ -239,8 +239,13 @@ requesting a challenge and enrolling.
 ```
 
 An unattested key's object is `{ label, publicKey, webauthn? }`, where a passkey's
-`webauthn` is `{ rpId, origin, credentialId }` and the credential ID rides only
-here, not in the argv. For `enroll`, `label`, `publicKey`, `challenge`, and a
+`webauthn` is `{ rpId, origin, credentialId, authenticatorData }`; the credential
+ID and the registration's authenticator data ride only here, not in the argv.
+A registration with BE set is refused before it is enrolled (`synced_passkey`),
+first by the server and again by the helper, as is one whose rpIdHash or
+credential ID doesn't match (`invalid_passkey`). With `attestation: "none"`
+nothing signs that data, so this only stops an honest mistake early; refusing
+BE in every assertion is the guarantee. The key file keeps only the site. For `enroll`, `label`, `publicKey`, `challenge`, and a
 passkey's `rpId` and `origin` must equal the argv values.
 
 **Enroll stdin.** `enroll` reads the line `t3-elevation-input-v1`, then the

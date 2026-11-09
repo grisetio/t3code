@@ -1743,5 +1743,56 @@
       "expected": "bad_signature",
       "failure": null
     }
+  ],
+  "webauthnRegistrations": [
+    {
+      "name": "device_bound",
+      "rpId": "app.t3.codes",
+      "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+      "authenticatorData": "figgsGFRH9p2q8cBXkhMMNWI4Ge2l7aJC1dzEyF0TyFFAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAABAgMEBQYHCAkKCwwNDg-lAQIDJiABIVggWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0iWCAOFL7Y1GgqNNg1OL3_W5bommZm7A21dF0C-hIQBy33Wg",
+      "refusal": null
+    },
+    {
+      "name": "synced",
+      "rpId": "app.t3.codes",
+      "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+      "authenticatorData": "figgsGFRH9p2q8cBXkhMMNWI4Ge2l7aJC1dzEyF0TyFdAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAABAgMEBQYHCAkKCwwNDg-lAQIDJiABIVggWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0iWCAOFL7Y1GgqNNg1OL3_W5bommZm7A21dF0C-hIQBy33Wg",
+      "refusal": "synced"
+    },
+    {
+      "name": "backup_eligible_not_backed_up",
+      "rpId": "app.t3.codes",
+      "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+      "authenticatorData": "figgsGFRH9p2q8cBXkhMMNWI4Ge2l7aJC1dzEyF0TyFNAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAABAgMEBQYHCAkKCwwNDg-lAQIDJiABIVggWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0iWCAOFL7Y1GgqNNg1OL3_W5bommZm7A21dF0C-hIQBy33Wg",
+      "refusal": "synced"
+    },
+    {
+      "name": "other_rp_id",
+      "rpId": "app.t3.codes",
+      "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+      "authenticatorData": "5sZ63imjDgCsNhYWYpgIvzCmFVZTWnvopBtjk0ug7-FFAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAABAgMEBQYHCAkKCwwNDg-lAQIDJiABIVggWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0iWCAOFL7Y1GgqNNg1OL3_W5bommZm7A21dF0C-hIQBy33Wg",
+      "refusal": "invalid"
+    },
+    {
+      "name": "other_credential",
+      "rpId": "app.t3.codes",
+      "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+      "authenticatorData": "figgsGFRH9p2q8cBXkhMMNWI4Ge2l7aJC1dzEyF0TyFFAAAAAAAAAAAAAAAAAAAAAAAAAAAAEA8ODQwLCgkIBwYFBAMCAQClAQIDJiABIVggWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0iWCAOFL7Y1GgqNNg1OL3_W5bommZm7A21dF0C-hIQBy33Wg",
+      "refusal": "invalid"
+    },
+    {
+      "name": "no_attested_credential",
+      "rpId": "app.t3.codes",
+      "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+      "authenticatorData": "figgsGFRH9p2q8cBXkhMMNWI4Ge2l7aJC1dzEyF0TyEFAAAAAA",
+      "refusal": "invalid"
+    },
+    {
+      "name": "truncated_credential_id",
+      "rpId": "app.t3.codes",
+      "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+      "authenticatorData": "figgsGFRH9p2q8cBXkhMMNWI4Ge2l7aJC1dzEyF0TyFFAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAABAgMEBQYHCAkKCw",
+      "refusal": "invalid"
+    }
   ]
 }
