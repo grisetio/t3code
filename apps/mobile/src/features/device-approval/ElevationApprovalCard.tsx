@@ -463,7 +463,10 @@ export function ElevationApprovalCard(props: {
   const ended = approved
     ? ({ kind: "approved", text: "Approved" } as const)
     : props.ended
-      ? elevationEndedLine(props.ended, thisKeyId)
+      ? elevationEndedLine(
+          props.ended,
+          thisKeyId === null ? null : { kind: "phone", keyId: thisKeyId },
+        )
       : null;
   const buttons = (
     <View className="flex-row gap-2">
@@ -622,7 +625,7 @@ function ElevationHeadlineText(props: { readonly text: string }) {
   );
 }
 
-/** Both phones show a code derived from the new key; matching codes mean it is the same key. */
+/** Both devices show a code derived from the new key; matching codes mean it is the same key. */
 function EnrollComparison(props: { readonly publicKey: Uint8Array }) {
   const code = useComparisonCode(props.publicKey);
   return (
@@ -635,7 +638,7 @@ function EnrollComparison(props: { readonly publicKey: Uint8Array }) {
         {code ?? "…"}
       </Text>
       <Text className="text-sm text-foreground-muted">
-        Approve only if the new phone shows this same code.
+        Approve only if the new device shows this same code.
       </Text>
     </View>
   );

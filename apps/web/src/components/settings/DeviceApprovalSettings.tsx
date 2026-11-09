@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_TOUCH_ID_HINT,
+  elevationApproverDescription,
+  elevationDeviceKind,
   elevationFailureMessage,
   elevationPasswordWords,
   type ElevationPasswordWords,
@@ -20,16 +22,26 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import type {
+  ElevationApproverKind,
   ElevationCheck,
   ElevationDevice,
   ElevationStatus,
   EnvironmentId,
 } from "@t3tools/contracts";
-import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  GlobeIcon,
+  LaptopIcon,
+  SmartphoneIcon,
+  XIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 
 import { useEnvironments } from "../../state/environments";
 import { elevation } from "../../state/elevation";
+import { useElevationApprover } from "../../state/elevationApprover";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
@@ -38,11 +50,13 @@ import { Input } from "../ui/input";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { useDeviceApprovalAgentHandoff } from "./useDeviceApprovalAgentHandoff";
 
-const SECURITY_LEVEL_LABELS: Record<ElevationDevice["securityLevel"], string> = {
-  strongbox: "StrongBox",
-  tee: "TEE",
-  software: "Software (development)",
+const APPROVER_ICONS: Record<ElevationApproverKind, LucideIcon> = {
+  phone: SmartphoneIcon,
+  mac: LaptopIcon,
+  browser: GlobeIcon,
 };
+
+const HERE_BADGES = { mac: "This Mac", browser: "This browser" } as const;
 
 function formatDate(value: { readonly epochMilliseconds: number }) {
   return new Date(value.epochMilliseconds).toLocaleDateString();
@@ -124,6 +138,7 @@ function DeviceApprovalStatus(props: {
 }) {
   const { status } = props;
   const handoff = useDeviceApprovalAgentHandoff();
+  const approver = useElevationApprover(props.environmentId);
   const [fixNote, setFixNote] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   if (!status.supported) {
@@ -178,6 +193,22 @@ function DeviceApprovalStatus(props: {
       >
         {fixNote !== null ? <p className="text-xs text-muted-foreground">{fixNote}</p> : null}
       </SettingsRow>
+      {state === "off"
+        ? null
+        : status.devices.map((device) => (
+            <DeviceRow
+              key={device.keyId}
+              environmentId={props.environmentId}
+              device={device}
+              here={
+                approver !== null && approver.keyId === device.keyId
+                  ? HERE_BADGES[approver.kind]
+                  : null
+              }
+              revocable={status.helperInstalled}
+              words={props.words}
+            />
+          ))}
       {state === "off" ? null : (
         <SettingsRow
           title="Details"
@@ -204,17 +235,6 @@ function DeviceApprovalStatus(props: {
           ) : null}
         </SettingsRow>
       )}
-      {detailsOpen
-        ? status.devices.map((device) => (
-            <DeviceRow
-              key={device.keyId}
-              environmentId={props.environmentId}
-              device={device}
-              revocable={status.helperInstalled}
-              words={props.words}
-            />
-          ))
-        : null}
       {detailsOpen && turnOff === "uninstall" ? (
         <TurnOffRow
           environmentId={props.environmentId}
@@ -274,9 +294,12 @@ function CheckLine(props: { readonly check: ElevationCheck }) {
   );
 }
 
+/** An approver: a phone, a Mac's Touch ID or a browser's passkey, with a badge on this one. */
 function DeviceRow(props: {
   readonly environmentId: EnvironmentId;
   readonly device: ElevationDevice;
+  /** "This Mac" or "This browser" when the key is this client's. */
+  readonly here: string | null;
   readonly revocable: boolean;
   readonly words: ElevationPasswordWords;
 }) {
@@ -284,10 +307,17 @@ function DeviceRow(props: {
   const revoke = useAtomCommand(elevation.revoke, "revoke device approval key");
   const canRevoke = useAtomValue(elevation.revoke.permissionAtom(props.environmentId));
   const [confirming, setConfirming] = useState(false);
+  const Icon = APPROVER_ICONS[elevationDeviceKind(device)];
   return (
     <SettingsRow
-      title={device.label}
-      description={`${SECURITY_LEVEL_LABELS[device.securityLevel]} · Added ${formatDate(device.enrolledAt)}${
+      title={
+        <span className="flex min-w-0 items-center gap-2">
+          <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="truncate">{device.label}</span>
+          {props.here === null ? null : <Badge variant="secondary">{props.here}</Badge>}
+        </span>
+      }
+      description={`${elevationApproverDescription(device)} · Added ${formatDate(device.enrolledAt)}${
         device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`
       }`}
       control={
@@ -298,14 +328,14 @@ function DeviceRow(props: {
             disabled={!canRevoke}
             onClick={() => setConfirming(true)}
           >
-            Revoke
+            Remove
           </Button>
         )
       }
     >
       {confirming ? (
         <SudoConfirmForm
-          actionLabel="Revoke"
+          actionLabel="Remove"
           words={props.words}
           phoneFirst
           onCancel={() => setConfirming(false)}
@@ -334,7 +364,7 @@ function TurnOffRow(props: {
   return (
     <SettingsRow
       title="Turn off"
-      description={`Agents' sudo on ${props.machine} asks for the password again, and every phone stops approving there.`}
+      description={`Agents' sudo on ${props.machine} asks for the password again, and every device stops approving there.`}
       control={
         confirming ? null : (
           <Button

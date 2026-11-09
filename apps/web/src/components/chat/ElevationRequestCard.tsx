@@ -26,6 +26,7 @@ import { CheckIcon, ClockIcon, MinusIcon, ShieldIcon, XIcon } from "lucide-react
 import { use, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { elevation } from "../../state/elevation";
+import { useElevationApproverHere } from "../../state/elevationApprover";
 import { useElevationAgent } from "../elevation/ElevationAgentMark";
 import { DisclosureChevron, ElevationPendingCard } from "../elevation/ElevationPendingCard";
 import { ElevationRequestFactLines } from "../elevation/ElevationRequestDetails";
@@ -79,8 +80,10 @@ export function ElevationRequestCard(props: {
       entry.environmentId === props.environmentId && entry.request.requestId === item.requestId,
   )?.request.series;
   const runActive = activeTurnInProgress && item.runId !== null && item.runId === latestRunId;
+  const here = useElevationApproverHere(props.environmentId);
   const status = elevationRequestStatusView(item, {
     finished: props.command === undefined ? !runActive : elevationCommandFinished(props.command),
+    here,
   });
   const showCard = status.kind === "pending" && props.visibility === "local";
   // Only a row that replaced this card fades in; rows mounted by scrolling appear as they are.

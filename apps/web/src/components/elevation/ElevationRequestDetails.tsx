@@ -28,7 +28,7 @@ export function ElevationRequestFactLines(props: {
   );
 }
 
-/** The code both phones show for a new key; matching codes mean it is the same key. */
+/** The code both devices show for a new key; matching codes mean it is the same key. */
 export function ElevationComparisonCode(props: { readonly publicKey: Uint8Array }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5 rounded-lg bg-muted/40 px-3 py-2">
@@ -36,7 +36,7 @@ export function ElevationComparisonCode(props: { readonly publicKey: Uint8Array 
         {elevationComparisonCode(sha256(props.publicKey))}
       </span>
       <span className="text-xs text-muted-foreground">
-        Approve only if the new phone shows this same code.
+        Approve only if the new device shows this same code.
       </span>
     </div>
   );

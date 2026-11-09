@@ -276,7 +276,7 @@ function ResolvedElevationRow(props: {
   const thisKeyId = useThisPhoneKeyId(props.environmentId);
   const status = elevationRequestStatusView(item, {
     finished: !props.runActive,
-    thisKeyId,
+    here: thisKeyId === null ? null : { kind: "phone", keyId: thisKeyId },
     deniedHere: wasDeniedHere(item.requestId),
   });
   const decodedSuccess =

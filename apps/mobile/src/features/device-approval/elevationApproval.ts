@@ -80,6 +80,6 @@ export function removeThisPhoneMessage(machine: string, otherApprovers: readonly
     return `Agents' sudo on ${machine} will ask for the password again.`;
   }
   const others =
-    otherApprovers.length === 1 ? otherApprovers[0] : `Your ${otherApprovers.length} other phones`;
+    otherApprovers.length === 1 ? otherApprovers[0] : `Your ${otherApprovers.length} other devices`;
   return `This phone stops approving sudo on ${machine}. ${others} can still approve.`;
 }

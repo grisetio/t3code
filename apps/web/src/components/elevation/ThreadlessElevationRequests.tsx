@@ -16,6 +16,7 @@ import { cn } from "~/lib/utils";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
+import { useElevationApproverHere } from "../../state/elevationApprover";
 import { useElevationAgent } from "./ElevationAgentMark";
 import { ElevationPendingCard } from "./ElevationPendingCard";
 import { useElevationSidebarStore } from "./elevationSidebarStore";
@@ -212,6 +213,7 @@ function ThreadlessRequestCard(props: {
   const { environmentId, request, decoded } = props.entry;
   const agent = useElevationAgent(environmentId, null, request.driver);
   const success = Result.isSuccess(decoded) ? decoded.success : null;
+  const here = useElevationApproverHere(environmentId);
   const highlight = useElevationSidebarStore((state) => state.highlight);
   const clearHighlight = useElevationSidebarStore((state) => state.clearHighlight);
   const highlighted =
@@ -249,7 +251,7 @@ function ThreadlessRequestCard(props: {
         changes={null}
         series={request.series}
         raisedByT3={request.raisedByT3}
-        ended={props.ended === null ? null : elevationEndedLine(props.ended, null)}
+        ended={props.ended === null ? null : elevationEndedLine(props.ended, here)}
         inMachineSection
       />
       {highlighted ? (

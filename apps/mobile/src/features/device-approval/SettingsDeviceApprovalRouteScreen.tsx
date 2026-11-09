@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_CANT_APPROVE_HERE,
+  elevationApproverDescription,
+  elevationDeviceKind,
   elevationFailureMessage,
   type ElevationPasswordWords,
 } from "@t3tools/client-runtime/elevation";
@@ -26,7 +28,9 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   resolveEnvironmentMachineKind,
+  type ElevationApproverKind,
   type ElevationCheck,
+  type ElevationDevice,
   type ElevationStatus,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -351,7 +355,7 @@ function DeviceApprovalGroup(props: {
     turnOff === "uninstall"
       ? Dialog.confirm({
           title: "Turn off device approval?",
-          message: `Agents' sudo on ${machine} will ask for the password again, and every phone stops approving there.`,
+          message: `Agents' sudo on ${machine} will ask for the password again, and every device stops approving there.`,
           confirmText: "Turn off",
           destructive: true,
           onConfirm: () => setTurningOff(true),
@@ -500,7 +504,7 @@ function DeviceApprovalGroup(props: {
         )}
       </SettingsSection>
       {state === "off" || thisDevice === undefined ? null : (
-        // Remove sits with the row it removes, apart from the phones it leaves approving.
+        // Remove sits with the row it removes, apart from the devices it leaves approving.
         <SettingsSection title="This phone">
           <ListRowLayout
             icon="iphone"
@@ -524,14 +528,24 @@ function DeviceApprovalGroup(props: {
         </SettingsSection>
       )}
       {state === "off" || otherDevices.length === 0 ? null : (
-        <SettingsSection title={thisDevice === undefined ? "Phones" : "Other phones"}>
+        <SettingsSection
+          title={
+            otherDevices.every((device) => elevationDeviceKind(device) === "phone")
+              ? thisDevice === undefined
+                ? "Phones"
+                : "Other phones"
+              : thisDevice === undefined
+                ? "Approvers"
+                : "Other approvers"
+          }
+        >
           {otherDevices.map((device) =>
             status.helperInstalled ? (
               <ListActionRow
                 key={device.keyId}
-                icon="iphone"
+                icon={APPROVER_SYMBOLS[elevationDeviceKind(device)]}
                 label={device.label}
-                description={formatDeviceUse(device, now)}
+                description={approverRowDescription(device, now)}
                 disabled={!canRevoke || busy !== null}
                 loading={busy === device.keyId}
                 onPress={() => revokeOther(device.keyId, device.label)}
@@ -539,9 +553,9 @@ function DeviceApprovalGroup(props: {
             ) : (
               <ListRowLayout
                 key={device.keyId}
-                icon="iphone"
+                icon={APPROVER_SYMBOLS[elevationDeviceKind(device)]}
                 label={device.label}
-                description={formatDeviceUse(device, now)}
+                description={approverRowDescription(device, now)}
               />
             ),
           )}
@@ -763,6 +777,20 @@ function PasswordField(props: {
 }
 
 /** The sudo the helper runs to revoke this phone's own key, which this phone answers itself. */
+const APPROVER_SYMBOLS = {
+  phone: "iphone",
+  mac: "laptopcomputer",
+  browser: "globe",
+} as const satisfies Record<ElevationApproverKind, AppSymbolName>;
+
+/** A phone row reads as before; a Mac or browser says what it is first. */
+function approverRowDescription(device: ElevationDevice, now: number) {
+  const use = formatDeviceUse(device, now);
+  return elevationDeviceKind(device) === "phone"
+    ? use
+    : `${elevationApproverDescription(device)} · ${use}`;
+}
+
 function isOwnRevokeRequest(entry: PendingElevationRequest, user: string, keyId: string) {
   if (entry.request.threadId !== null || !Result.isSuccess(entry.decoded)) return false;
   const tail = entry.decoded.success.payload.command.argv.slice(-5);
