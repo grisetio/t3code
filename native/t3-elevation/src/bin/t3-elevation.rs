@@ -4,7 +4,9 @@
 use serde_json::{Value, json};
 use std::io::{IsTerminal as _, Read as _, Write as _};
 use t3_elevation::attestation::{self, Enrollment, Pins, Trust};
-use t3_elevation::install::{self, KeyError, Layout, Sources};
+use t3_elevation::enroll::{Proof, UnattestedEnrollment};
+use t3_elevation::install::{self, Admission, KeyError, Layout, Sources};
+use t3_elevation::keys::WebauthnBinding;
 use t3_elevation::{HELPER_VERSION, PROTOCOL_VERSION, b64, config, keys, sys};
 
 const MAX_ENROLLMENT_BYTES: u64 = 256 * 1024;
@@ -101,10 +103,6 @@ fn known_user(user: &str) -> Result<String, Failure> {
     Ok(user.to_string())
 }
 
-fn read_enrollment(source: &str) -> Result<Enrollment, Failure> {
-    parse_enrollment(&read_input(source)?)
-}
-
 fn read_input(source: &str) -> Result<Vec<u8>, Failure> {
     let mut bytes = Vec::new();
     let read = if source == "-" {
@@ -127,7 +125,7 @@ fn read_input(source: &str) -> Result<Vec<u8>, Failure> {
     Ok(bytes)
 }
 
-fn parse_enrollment(bytes: &[u8]) -> Result<Enrollment, Failure> {
+fn parse_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Failure> {
     serde_json::from_slice(bytes).map_err(|error| {
         fail(
             "invalid_enrollment",
@@ -136,15 +134,54 @@ fn parse_enrollment(bytes: &[u8]) -> Result<Enrollment, Failure> {
     })
 }
 
-fn verify_enrollment(
-    enrollment: &Enrollment,
-    trust: Trust,
-) -> Result<(Vec<u8>, attestation::Verified), Failure> {
+/// A key the helper may write, and what admitted it.
+struct Admitted {
+    label: String,
+    spki: Vec<u8>,
+    how: How,
+}
+
+enum How {
+    Attested(attestation::Verified),
+    SecureEnclave,
+    Webauthn(WebauthnBinding),
+}
+
+impl Admitted {
+    fn admission(&self) -> Admission<'_> {
+        match &self.how {
+            How::Attested(verified) => Admission::Attested(verified),
+            How::SecureEnclave => Admission::SecureEnclave,
+            How::Webauthn(binding) => Admission::Webauthn(binding),
+        }
+    }
+}
+
+fn verify_attested(enrollment: &Enrollment, trust: Trust) -> Result<Admitted, Failure> {
     let verified = attestation::verify(enrollment, sys::now(), &Pins::release(), trust)
         .map_err(|rejected| fail(rejected.code, rejected.message))?;
     let spki = b64::decode(&enrollment.public_key)
         .ok_or_else(|| fail("invalid_enrollment", "publicKey isn't base64url"))?;
-    Ok((spki, verified))
+    Ok(Admitted {
+        label: enrollment.label.clone(),
+        spki,
+        how: How::Attested(verified),
+    })
+}
+
+/// Only with `--unattested` in the approved argv (or the password's install);
+/// the attested path never reads this shape.
+fn verify_unattested(enrollment: UnattestedEnrollment) -> Result<Admitted, Failure> {
+    let spki = t3_elevation::enroll::check_unattested(&enrollment)
+        .map_err(|rejected| fail(rejected.code, rejected.message))?;
+    Ok(Admitted {
+        label: enrollment.label,
+        spki,
+        how: match enrollment.webauthn {
+            Some(binding) => How::Webauthn(binding),
+            None => How::SecureEnclave,
+        },
+    })
 }
 
 fn key_error(error: KeyError) -> Failure {
@@ -159,14 +196,20 @@ fn key_error(error: KeyError) -> Failure {
     }
 }
 
-fn key_result(key_id: &str, spki: &[u8], label: &str, verified: &attestation::Verified) -> Value {
+fn key_result(key_id: &str, admitted: &Admitted) -> Value {
+    let (security_level, trust) = match &admitted.how {
+        How::Attested(verified) => (verified.security_level, Some(verified.trust)),
+        How::SecureEnclave => ("secure_enclave", None),
+        How::Webauthn(_) => ("webauthn", None),
+    };
     json!({
         "keyId": key_id,
-        "label": label,
-        "comparisonCode": keys::comparison_code(spki),
-        "securityLevel": verified.security_level,
-        "devAttestation": verified.trust != Trust::Release,
-        "testAttestation": verified.trust == Trust::Test,
+        "label": admitted.label,
+        "comparisonCode": keys::comparison_code(&admitted.spki),
+        "securityLevel": security_level,
+        "attested": trust.is_some(),
+        "devAttestation": trust.is_some_and(|trust| trust != Trust::Release),
+        "testAttestation": trust == Some(Trust::Test),
     })
 }
 
@@ -183,7 +226,7 @@ fn confirm(label: &str, code: &str) -> Result<(), Failure> {
         .map_err(|error| fail("io", format!("can't open the terminal: {error}")))?;
     let _ = write!(
         tty,
-        "Enroll {}, comparison code {code}? It must match the phone. [y/N] ",
+        "Enroll {}, comparison code {code}? It must match the device. [y/N] ",
         escape(label)
     );
     let mut answer = [0u8; 64];
@@ -229,7 +272,11 @@ fn install(args: &[String]) -> Outcome {
     let options = Options::parse(
         args,
         &["--user", "--socket", "--key", "--window"],
-        &["--allow-dev-attestation", "--allow-test-attestation"],
+        &[
+            "--allow-dev-attestation",
+            "--allow-test-attestation",
+            "--unattested",
+        ],
     )?;
     require_root()?;
     let user = user(&options)?;
@@ -258,22 +305,23 @@ fn install(args: &[String]) -> Outcome {
         ));
     }
     // Verify the device before changing anything.
-    let enrollment = read_enrollment(options.require("--key")?)?;
-    let trust = match (
+    let input = read_input(options.require("--key")?)?;
+    let admitted = match (
         options.flag("--allow-dev-attestation"),
         options.flag("--allow-test-attestation"),
+        options.flag("--unattested"),
     ) {
-        (false, false) => Trust::Release,
-        (true, false) => Trust::Dev,
-        (false, true) => Trust::Test,
-        (true, true) => {
+        (false, false, false) => verify_attested(&parse_json(&input)?, Trust::Release)?,
+        (true, false, false) => verify_attested(&parse_json(&input)?, Trust::Dev)?,
+        (false, true, false) => verify_attested(&parse_json(&input)?, Trust::Test)?,
+        (false, false, true) => verify_unattested(parse_json(&input)?)?,
+        _ => {
             return Err(fail(
                 "usage",
-                "use one of --allow-dev-attestation and --allow-test-attestation",
+                "use at most one of --allow-dev-attestation, --allow-test-attestation and --unattested",
             ));
         }
     };
-    let (spki, verified) = verify_enrollment(&enrollment, trust)?;
     let (module, helper) = bundled();
     let plan = install::plan_install(
         &layout,
@@ -293,10 +341,15 @@ fn install(args: &[String]) -> Outcome {
         failure.extra = Some(json!({ "blocked": plan.blocked }));
         return Err(failure);
     }
-    confirm(&enrollment.label, &keys::comparison_code(&spki))?;
+    confirm(&admitted.label, &keys::comparison_code(&admitted.spki))?;
     let changes = install::apply(&layout, &user, &plan, sys::now())
         .map_err(|message| fail("install_failed", message))?;
-    let (key_id, bytes) = install::key_file_bytes(&spki, &enrollment.label, &verified, sys::now());
+    let (key_id, bytes) = install::key_file_bytes(
+        &admitted.spki,
+        &admitted.label,
+        &admitted.admission(),
+        sys::now(),
+    );
     match install::write_key(&layout, &user, &key_id, &bytes) {
         Ok(()) | Err(KeyError::AlreadyEnrolled) => {}
         Err(error) => return Err(key_error(error)),
@@ -305,40 +358,68 @@ fn install(args: &[String]) -> Outcome {
         "ok": true,
         "changes": changes.iter().map(|change| json!({ "path": change.path, "action": change.action })).collect::<Vec<_>>(),
         "alreadyPresent": plan.satisfied,
-        "key": key_result(&key_id, &spki, &enrollment.label, &verified),
+        "key": key_result(&key_id, &admitted),
     }))
 }
 
 fn enroll(args: &[String]) -> Outcome {
     let command = t3_elevation::enroll::parse_options(args).ok_or_else(|| {
-        fail("usage", "usage: t3-elevation enroll --user U --label L --public-key K --challenge C [--allow-dev-attestation | --allow-test-attestation]")
+        fail("usage", "usage: t3-elevation enroll --user U --label L --public-key K (--challenge C [--allow-dev-attestation | --allow-test-attestation] | --unattested [--rp-id R --origin O])")
     })?;
     require_root()?;
     let user = known_user(&command.user)?;
     let mut input = read_input("-")?;
-    let enrollment = parse_enrollment(
-        t3_elevation::enroll::unframe_input(&mut input).ok_or_else(|| {
-            fail(
-                "invalid_enrollment",
-                "stdin doesn't start with the t3-elevation-input-v1 line",
-            )
-        })?,
-    )?;
-    // The approval showed these argv values; the device must be that one.
-    if enrollment.label != command.label
-        || enrollment.public_key != command.public_key
-        || enrollment.challenge != command.challenge
-    {
-        return Err(fail(
+    let body = t3_elevation::enroll::unframe_input(&mut input).ok_or_else(|| {
+        fail(
+            "invalid_enrollment",
+            "stdin doesn't start with the t3-elevation-input-v1 line",
+        )
+    })?;
+    let mismatch = || {
+        fail(
             "mismatch",
             "the enrollment doesn't match the approved command",
-        ));
-    }
-    let (spki, verified) = verify_enrollment(&enrollment, command.trust)?;
+        )
+    };
+    // The approval showed these argv values; the device must be that one.
+    let admitted = match &command.proof {
+        Proof::Attested { challenge, trust } => {
+            let enrollment: Enrollment = parse_json(body)?;
+            if enrollment.label != command.label
+                || enrollment.public_key != command.public_key
+                || &enrollment.challenge != challenge
+            {
+                return Err(mismatch());
+            }
+            verify_attested(&enrollment, *trust)?
+        }
+        Proof::Unattested { site } => {
+            let enrollment: UnattestedEnrollment = parse_json(body)?;
+            let same_site = match (site, &enrollment.webauthn) {
+                (None, None) => true,
+                (Some(site), Some(binding)) => {
+                    site.rp_id == binding.rp_id && site.origin == binding.origin
+                }
+                _ => false,
+            };
+            if enrollment.label != command.label
+                || enrollment.public_key != command.public_key
+                || !same_site
+            {
+                return Err(mismatch());
+            }
+            verify_unattested(enrollment)?
+        }
+    };
     let layout = Layout::system(&user);
-    let (key_id, bytes) = install::key_file_bytes(&spki, &enrollment.label, &verified, sys::now());
+    let (key_id, bytes) = install::key_file_bytes(
+        &admitted.spki,
+        &admitted.label,
+        &admitted.admission(),
+        sys::now(),
+    );
     install::write_key(&layout, &user, &key_id, &bytes).map_err(key_error)?;
-    Ok(json!({ "ok": true, "key": key_result(&key_id, &spki, &enrollment.label, &verified) }))
+    Ok(json!({ "ok": true, "key": key_result(&key_id, &admitted) }))
 }
 
 fn revoke(args: &[String]) -> Outcome {

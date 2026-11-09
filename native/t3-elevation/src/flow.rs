@@ -608,10 +608,18 @@ fn exchange(
             Exchange::Decided(fail_with(decline::DENIED))
         }
         (Some("response"), Some("approve")) => {
+            let webauthn = message.get("webauthn");
+            let webauthn_text = |key: &str| webauthn.and_then(|value| value.get(key)?.as_str());
             let response = Response {
                 key_id: text("keyId").unwrap_or_default(),
                 alg: text("alg").unwrap_or_default(),
                 signature: text("signature").unwrap_or_default(),
+                webauthn: webauthn_text("authenticatorData")
+                    .zip(webauthn_text("clientDataJSON"))
+                    .map(|(authenticator_data, client_data_json)| verify::Assertion {
+                        authenticator_data,
+                        client_data_json,
+                    }),
             };
             match verify::verify(
                 &bytes,
@@ -929,6 +937,61 @@ mod tests {
         let hello = exchange.hello.unwrap();
         assert_eq!(hello["type"], "hello");
         assert!(!hello["chain"].as_array().unwrap().is_empty());
+    }
+
+    fn enroll_key_file(setup: &Setup, file: serde_json::Value) {
+        let key_id = file["keyId"].as_str().unwrap().to_string();
+        test_fs::write(
+            &setup
+                .environment
+                .state_dir
+                .join("keys")
+                .join(&setup.user)
+                .join(format!("{key_id}.json")),
+            file.to_string(),
+        );
+    }
+
+    #[test]
+    fn approves_with_an_unattested_secure_enclave_key() {
+        let setup = setup();
+        let key = vector_key("enrolled");
+        enroll_key_file(
+            &setup,
+            serde_json::json!({
+                "version": 1, "keyId": key.key_id, "alg": "es256", "publicKey": crate::b64::encode(&key.spki),
+                "label": "MacBook Pro", "securityLevel": "secure_enclave", "enrolledAt": "2026-11-09T12:00:00Z"
+            }),
+        );
+        let (outcome, exchange) = setup.run(Mode::Approve, &setup.invocation(&["sudo", "id"]));
+        assert_eq!(outcome, Outcome::Approved);
+        assert_eq!(exchange.result.as_deref(), Some("approved"));
+    }
+
+    #[test]
+    fn webauthn_keys_approve_only_from_their_site_and_never_synced() {
+        let setup = setup();
+        let key = vector_key("webauthnDevice");
+        enroll_key_file(
+            &setup,
+            serde_json::json!({
+                "version": 1, "keyId": key.key_id, "alg": "webauthn-es256",
+                "publicKey": crate::b64::encode(&key.spki), "label": "Chrome on Mac",
+                "securityLevel": "webauthn", "enrolledAt": "2026-11-09T12:00:00Z",
+                "webauthn": fixture_server::vector_webauthn_binding(),
+            }),
+        );
+        for (mode, outcome, result) in [
+            (Mode::ApproveWebauthn, Outcome::Approved, "approved"),
+            (Mode::WebauthnBackupEligible, Outcome::Fail, "bad_signature"),
+            (Mode::WebauthnWrongOrigin, Outcome::Fail, "bad_signature"),
+        ] {
+            let (got, exchange) = setup.run(mode, &setup.invocation(&["sudo", "id"]));
+            assert_eq!(got, outcome, "{mode:?}");
+            assert_eq!(exchange.result.as_deref(), Some(result), "{mode:?}");
+            let listed = exchange.payload.unwrap()["keyIds"].to_string();
+            assert!(listed.contains(&key.key_id), "{mode:?}");
+        }
     }
 
     #[test]

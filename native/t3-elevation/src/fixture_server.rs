@@ -33,6 +33,12 @@ pub enum Mode {
     NotMine,
     /// Replies to hello with something that isn't JSON.
     Garbage,
+    /// A WebAuthn assertion from the `webauthnDevice` key, for its vector site.
+    ApproveWebauthn,
+    /// The same with the backup-eligible flag: a synced passkey.
+    WebauthnBackupEligible,
+    /// The same, from another origin.
+    WebauthnWrongOrigin,
 }
 
 impl Mode {
@@ -48,6 +54,9 @@ impl Mode {
             "close" => Self::Close,
             "not_mine" => Self::NotMine,
             "garbage" => Self::Garbage,
+            "approve_webauthn" => Self::ApproveWebauthn,
+            "webauthn_backup_eligible" => Self::WebauthnBackupEligible,
+            "webauthn_wrong_origin" => Self::WebauthnWrongOrigin,
             _ => return None,
         })
     }
@@ -57,6 +66,41 @@ pub struct VectorKey {
     pub key_id: String,
     pub spki: Vec<u8>,
     pub signing: SigningKey,
+}
+
+/// The vector site the `webauthnDevice` key is enrolled for.
+pub fn vector_webauthn_binding() -> crate::keys::WebauthnBinding {
+    let vectors: Value = serde_json::from_str(VECTORS).expect("vectors");
+    serde_json::from_value(vectors["keys"]["webauthnDevice"]["webauthn"].clone()).expect("binding")
+}
+
+/// What a browser would answer for `payload`: an assertion over
+/// `authenticatorData || SHA-256(clientDataJSON)`.
+pub fn webauthn_response(payload: &[u8], flags: u8, origin: &str) -> Value {
+    use sha2::{Digest as _, Sha256};
+    let key = vector_key("webauthnDevice");
+    let binding = vector_webauthn_binding();
+    let client_data = json!({
+        "type": "webauthn.get",
+        "challenge": b64::encode(&verify::webauthn_challenge(payload)),
+        "origin": origin,
+        "crossOrigin": false,
+    })
+    .to_string();
+    let mut authenticator_data = Sha256::digest(binding.rp_id.as_bytes()).to_vec();
+    authenticator_data.push(flags);
+    authenticator_data.extend_from_slice(&[0, 0, 0, 0]);
+    let mut signed = authenticator_data.clone();
+    signed.extend_from_slice(&Sha256::digest(client_data.as_bytes()));
+    let signature: Signature = key.signing.sign(&signed);
+    json!({
+        "type": "response", "decision": "approve", "keyId": key.key_id,
+        "alg": "webauthn-es256", "signature": b64::encode(signature.to_der().as_bytes()),
+        "webauthn": {
+            "authenticatorData": b64::encode(&authenticator_data),
+            "clientDataJSON": b64::encode(client_data.as_bytes()),
+        },
+    })
 }
 
 pub fn vector_key(name: &str) -> VectorKey {
@@ -160,6 +204,15 @@ pub fn handle(stream: UnixStream, mode: Mode) -> Exchange {
             let mut other = bytes.clone();
             other[0] ^= 1;
             send(sign(&enrolled.signing, &other))
+        }
+        Mode::ApproveWebauthn => {
+            send(webauthn_response(&bytes, 0x05, &vector_webauthn_binding().origin).to_string())
+        }
+        Mode::WebauthnBackupEligible => {
+            send(webauthn_response(&bytes, 0x0d, &vector_webauthn_binding().origin).to_string())
+        }
+        Mode::WebauthnWrongOrigin => {
+            send(webauthn_response(&bytes, 0x05, "https://evil.t3.codes").to_string())
         }
         Mode::Deny => send(json!({ "type": "response", "decision": "deny" }).to_string()),
         Mode::Cancel => send(json!({ "type": "cancel" }).to_string()),

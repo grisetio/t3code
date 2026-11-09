@@ -368,7 +368,7 @@ impl Step {
     pub fn summary(&self) -> String {
         match self {
             Self::CreateDir { path, .. } if path.contains("/keys/") => {
-                "create the folder for phone keys".into()
+                "create the folder for device keys".into()
             }
             Self::CreateDir { .. } => "create directory".into(),
             Self::CreateFile { path, .. } if path == SUDOERS_DROP_IN => {
@@ -1414,27 +1414,49 @@ pub fn status(layout: &Layout, user: &str, sources: &Sources) -> Status {
 // ---------------------------------------------------------------------------
 // Keys
 
+/// What admitted a key, for its key file.
+pub enum Admission<'a> {
+    Attested(&'a crate::attestation::Verified),
+    /// `--unattested` without a site: a Secure Enclave key.
+    SecureEnclave,
+    /// `--unattested` with a site.
+    Webauthn(&'a keys::WebauthnBinding),
+}
+
 pub fn key_file_bytes(
     spki: &[u8],
     label: &str,
-    verified: &crate::attestation::Verified,
+    admission: &Admission,
     now: i64,
 ) -> (String, Vec<u8>) {
     let key_id = keys::key_id(spki);
+    let (alg, security_level, attestation_summary, webauthn) = match admission {
+        Admission::Attested(verified) => (
+            "es256",
+            verified.security_level,
+            Some(keys::AttestationSummary {
+                package_name: verified.package_name.clone(),
+                signing_cert_digest: verified.signing_cert_digest.clone(),
+                dev_attestation: verified.trust != Trust::Release,
+                test_attestation: verified.trust == Trust::Test,
+            }),
+            None,
+        ),
+        Admission::SecureEnclave => ("es256", "secure_enclave", None, None),
+        Admission::Webauthn(binding) => {
+            ("webauthn-es256", "webauthn", None, Some((*binding).clone()))
+        }
+    };
     let file = keys::KeyFile {
         version: 1,
         key_id: key_id.clone(),
-        alg: "es256".into(),
+        alg: alg.into(),
         public_key: crate::b64::encode(spki),
         label: label.into(),
-        security_level: verified.security_level.into(),
+        security_level: security_level.into(),
         enrolled_at: rfc3339(now),
-        attestation_summary: keys::AttestationSummary {
-            package_name: verified.package_name.clone(),
-            signing_cert_digest: verified.signing_cert_digest.clone(),
-            dev_attestation: verified.trust != Trust::Release,
-            test_attestation: verified.trust == Trust::Test,
-        },
+        attestation_summary,
+        webauthn,
     };
     let mut bytes = serde_json::to_vec(&file).unwrap_or_default();
     bytes.push(b'\n');
@@ -1889,7 +1911,7 @@ mod tests {
         );
         assert_eq!(
             summary("/etc/t3-elevation/keys/alice"),
-            "create the folder for phone keys"
+            "create the folder for device keys"
         );
     }
 

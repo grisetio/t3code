@@ -3,8 +3,9 @@
 
 use serde_json::Value;
 use t3_elevation::attestation::Trust;
+use t3_elevation::enroll::Proof;
 use t3_elevation::keys::{self, EnrolledKey};
-use t3_elevation::verify::{self, Response};
+use t3_elevation::verify::{self, Assertion, Response};
 use t3_elevation::{b64, enroll, escape, payload, shell_words};
 
 fn vectors() -> Value {
@@ -33,11 +34,19 @@ fn enrolled(vectors: &Value, ids: &[String]) -> Vec<EnrolledKey> {
         .filter(|key| key.is_object())
         .filter(|key| ids.iter().any(|id| id == str_of(key, "keyId")))
         .map(|key| {
-            let file = serde_json::json!({
-                "version": 1, "keyId": key["keyId"], "alg": "es256", "publicKey": key["spkiDer"],
-                "label": "test", "securityLevel": "tee", "enrolledAt": "2026-10-30T12:00:00Z",
-                "attestationSummary": { "packageName": "p", "signingCertDigest": "d", "devAttestation": true }
-            });
+            let file = if key["webauthn"].is_object() {
+                serde_json::json!({
+                    "version": 1, "keyId": key["keyId"], "alg": "webauthn-es256", "publicKey": key["spkiDer"],
+                    "label": "test", "securityLevel": "webauthn", "enrolledAt": "2026-10-30T12:00:00Z",
+                    "webauthn": key["webauthn"]
+                })
+            } else {
+                serde_json::json!({
+                    "version": 1, "keyId": key["keyId"], "alg": "es256", "publicKey": key["spkiDer"],
+                    "label": "test", "securityLevel": "tee", "enrolledAt": "2026-10-30T12:00:00Z",
+                    "attestationSummary": { "packageName": "p", "signingCertDigest": "d", "devAttestation": true }
+                })
+            };
             let name = format!("{}.json", str_of(key, "keyId"));
             keys::parse_key_file(&name, file.to_string().as_bytes()).expect("key file")
         })
@@ -78,6 +87,7 @@ fn payloads_decode_reencode_and_verify() {
             key_id: str_of(signature, "keyId"),
             alg: str_of(signature, "alg"),
             signature: str_of(signature, "signature"),
+            webauthn: None,
         };
         let issued_at = vector["decoded"]["issuedAt"].as_i64().unwrap();
         let expires_at = vector["decoded"]["expiresAt"].as_i64().unwrap();
@@ -102,10 +112,27 @@ fn parse() {
     }
 }
 
+fn response_of(response: &Value) -> Response<'_> {
+    let webauthn = &response["webauthn"];
+    Response {
+        key_id: response["keyId"].as_str().unwrap_or_default(),
+        alg: response["alg"].as_str().unwrap_or_default(),
+        signature: response["signature"].as_str().unwrap_or_default(),
+        webauthn: webauthn.is_object().then(|| Assertion {
+            authenticator_data: str_of(webauthn, "authenticatorData"),
+            client_data_json: str_of(webauthn, "clientDataJSON"),
+        }),
+    }
+}
+
 #[test]
 fn verify_vectors() {
     let vectors = vectors();
-    for vector in vectors["verify"].as_array().unwrap() {
+    let sections = ["verify", "webauthnVerify"];
+    for vector in sections
+        .iter()
+        .flat_map(|name| vectors[*name].as_array().unwrap())
+    {
         let name = str_of(vector, "name");
         let ids: Vec<String> = serde_json::from_value(vector["enrolledKeyIds"].clone()).unwrap();
         let keys = enrolled(&vectors, &ids);
@@ -114,18 +141,41 @@ fn verify_vectors() {
         let expires_at = payload::decode(&raw)
             .map(|payload| payload.expires_at)
             .unwrap_or(0);
-        let response = &vector["response"];
-        let response = Response {
-            key_id: response["keyId"].as_str().unwrap_or_default(),
-            alg: response["alg"].as_str().unwrap_or_default(),
-            signature: response["signature"].as_str().unwrap_or_default(),
-        };
+        let response = response_of(&vector["response"]);
         let now = vector["now"].as_i64().unwrap();
         let result = match verify::verify(&raw, expires_at, &response, &keys, now) {
             Ok(_) => "ok",
             Err(error) => error.as_str(),
         };
         assert_eq!(result, str_of(vector, "expected"), "{name}");
+    }
+}
+
+/// Each failing assertion fails at the step it was built to fail, not at a
+/// later one by accident.
+#[test]
+fn webauthn_steps() {
+    let vectors = vectors();
+    for vector in vectors["webauthnVerify"].as_array().unwrap() {
+        let name = str_of(vector, "name");
+        let ids: Vec<String> = serde_json::from_value(vector["enrolledKeyIds"].clone()).unwrap();
+        let [key] = enrolled(&vectors, &ids).try_into().unwrap();
+        let response = response_of(&vector["response"]);
+        let (Some(binding), Some(assertion)) = (&key.file.webauthn, &response.webauthn) else {
+            assert!(vector["failure"].is_null(), "{name}");
+            continue;
+        };
+        let signature = b64::decode(response.signature).unwrap();
+        let step = verify::check_webauthn(
+            &key.verifying_key,
+            binding,
+            &bytes(vector, "payload"),
+            assertion,
+            &signature,
+        )
+        .err()
+        .map(|failure| failure.as_str());
+        assert_eq!(step, vector["failure"].as_str(), "{name}");
     }
 }
 
@@ -151,14 +201,30 @@ fn enroll_parse() {
         assert_eq!(parsed.user, str_of(expected, "user"));
         assert_eq!(parsed.label, str_of(expected, "label"));
         assert_eq!(parsed.public_key, str_of(expected, "publicKey"));
-        assert_eq!(parsed.challenge, str_of(expected, "challenge"));
+        let (challenge, trust, unattested, site) = match &parsed.proof {
+            Proof::Attested { challenge, trust } => (Some(challenge.as_str()), *trust, false, None),
+            Proof::Unattested { site } => (None, Trust::Release, true, site.as_ref()),
+        };
+        assert_eq!(challenge, expected["challenge"].as_str(), "{name}");
         assert_eq!(
-            parsed.trust == Trust::Dev,
+            trust == Trust::Dev,
             expected["allowDevAttestation"].as_bool().unwrap()
         );
         assert_eq!(
-            parsed.trust == Trust::Test,
+            trust == Trust::Test,
             expected["allowTestAttestation"].as_bool().unwrap()
+        );
+        assert_eq!(
+            unattested,
+            expected["unattested"].as_bool().unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            site.map(|site| serde_json::json!({ "rpId": site.rp_id, "origin": site.origin })),
+            expected["site"]
+                .is_object()
+                .then(|| expected["site"].clone()),
+            "{name}"
         );
         let spki = b64::decode(&parsed.public_key).unwrap();
         assert_eq!(
@@ -189,17 +255,45 @@ fn enroll_grammar_is_strict() {
         argv.into_iter().map(str::to_string).collect()
     };
     assert!(enroll::parse_command(&argv(&[])).is_some());
-    assert_eq!(
-        enroll::parse_command(&argv(&["--allow-dev-attestation"]))
-            .unwrap()
-            .trust,
-        Trust::Dev
+    let trust = |extra: &[&str]| match enroll::parse_command(&argv(extra))?.proof {
+        Proof::Attested { trust, .. } => Some(trust),
+        Proof::Unattested { .. } => None,
+    };
+    assert_eq!(trust(&["--allow-dev-attestation"]), Some(Trust::Dev));
+    assert_eq!(trust(&["--allow-test-attestation"]), Some(Trust::Test));
+    // Unattested keys never ride the attested grammar, nor it theirs.
+    assert!(enroll::parse_command(&argv(&["--unattested"])).is_none());
+    assert!(
+        enroll::parse_command(&argv(&[
+            "--rp-id",
+            "localhost",
+            "--origin",
+            "http://localhost:3773"
+        ]))
+        .is_none()
     );
-    assert_eq!(
-        enroll::parse_command(&argv(&["--allow-test-attestation"]))
-            .unwrap()
-            .trust,
-        Trust::Test
+    let unattested = |extra: &[&str]| {
+        let mut argv = argv(&[]);
+        argv.drain(2..4);
+        argv.push("--unattested".into());
+        argv.extend(extra.iter().map(|arg| arg.to_string()));
+        enroll::parse_command(&argv)
+    };
+    assert!(unattested(&[]).is_some());
+    assert!(unattested(&["--unattested"]).is_none());
+    assert!(unattested(&["--allow-test-attestation"]).is_none());
+    assert!(unattested(&["--challenge", challenge]).is_none());
+    assert!(unattested(&["--rp-id", "localhost", "--origin", "http://localhost:3773"]).is_some());
+    assert!(unattested(&["--rp-id", "localhost"]).is_none());
+    assert!(unattested(&["--origin", "http://localhost:3773"]).is_none());
+    assert!(
+        unattested(&[
+            "--rp-id",
+            "localhost",
+            "--origin",
+            "http://192.168.1.20:3773"
+        ])
+        .is_none()
     );
     assert!(
         enroll::parse_command(&argv(&[

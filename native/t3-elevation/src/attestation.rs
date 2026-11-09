@@ -381,6 +381,10 @@ fn level_name(level: u64) -> Option<&'static str> {
     }
 }
 
+pub fn label_ok(label: &str) -> bool {
+    !label.trim().is_empty() && label.chars().count() <= 100 && !label.chars().any(char::is_control)
+}
+
 pub fn verify(
     enrollment: &Enrollment,
     now: i64,
@@ -389,10 +393,7 @@ pub fn verify(
 ) -> Result<Verified, Rejected> {
     // Only test attestation lets the device itself go unproven.
     let any_device = trust == Trust::Test;
-    let label_ok = !enrollment.label.trim().is_empty()
-        && enrollment.label.chars().count() <= 100
-        && !enrollment.label.chars().any(char::is_control);
-    if !label_ok {
+    if !label_ok(&enrollment.label) {
         return Err(reject(
             "invalid_label",
             "label must be 1-100 characters without control characters",

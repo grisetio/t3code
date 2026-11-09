@@ -1,5 +1,5 @@
-//! Requests the phone can't show faithfully, or that would ask for a
-//! fingerprint that approves nothing, go back to the agent as one line on
+//! Requests an approving device can't show faithfully, or that would ask for
+//! a fingerprint that approves nothing, go back to the agent as one line on
 //! sudo's stderr instead (FLOW moment 2). They only apply to sudo that T3
 //! claimed, so a person's own sudo is never declined. A decline isn't a
 //! security decision: it fails the stack the same way a deny does.
@@ -27,7 +27,7 @@ fn basename(path: &str) -> &str {
 }
 
 fn not_sent(reason: &str) -> String {
-    format!("{PREFIX}not sent to the user's phone: {reason}")
+    format!("{PREFIX}not sent for approval: {reason}")
 }
 
 /// A check like `sudo -n true`, `-v` or `-l` that runs nothing.
@@ -36,11 +36,11 @@ pub fn is_probe(parsed: &Parsed) -> bool {
         || matches!(&parsed.mode, Mode::Run(argv) if argv.len() == 1 && basename(&argv[0]) == "true")
 }
 
-/// The hint for a request that shouldn't reach the phone, or None.
+/// The hint for a request that shouldn't be sent for approval, or None.
 pub fn decline(parsed: &Parsed, command: &Command, context: &Context) -> Option<String> {
     if parsed.stdin_password {
         return Some(not_sent(
-            "drop `-S` and the password. sudo asks the user's phone, and a piped password would reach the command's input.",
+            "drop `-S` and the password. sudo here asks the user to approve it in T3, and a piped password would reach the command's input.",
         ));
     }
     let self_target = parsed.group.is_none()
@@ -55,7 +55,7 @@ pub fn decline(parsed: &Parsed, command: &Command, context: &Context) -> Option<
     }
     if is_probe(parsed) {
         return Some(not_sent(
-            "sudo here asks the user's phone, so a check like `sudo -n true`, `-v` or `-l` would ask them to approve nothing. Run the real command.",
+            "sudo here asks the user to approve it in T3, so a check like `sudo -n true`, `-v` or `-l` would ask them to approve nothing. Run the real command.",
         ));
     }
     match &parsed.mode {
@@ -77,7 +77,7 @@ pub fn decline(parsed: &Parsed, command: &Command, context: &Context) -> Option<
         Mode::Run(argv) => {
             if let Some((Source::Stdin, inline)) = sudo_argv::interpreter_source(argv) {
                 return Some(not_sent(&format!(
-                    "{} would read its code from stdin, which the phone can't show. Pass the code with `{inline}` so it's shown.",
+                    "{} would read its code from stdin, which the approval can't show. Pass the code with `{inline}` so it's shown.",
                     crate::escape::display(basename(&argv[0]))
                 )));
             }
@@ -181,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn showable_requests_go_to_the_phone() {
+    fn showable_requests_are_sent_for_approval() {
         for args in [
             &["sudo", "sh", "-c", "echo x > /etc/f"][..],
             &["sudo", "/bin/zsh", "-lc", "id"],
@@ -224,7 +224,7 @@ mod tests {
     }
 
     /// A writable program is declined only when a copy the user can't change
-    /// exists; otherwise it reaches the phone with its warning.
+    /// exists; otherwise it is sent for approval with its warning.
     #[test]
     fn writable_programs_point_at_the_system_copy() {
         let dir = std::env::temp_dir().join(format!("t3e-decline-{}", std::process::id()));

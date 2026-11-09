@@ -4,14 +4,32 @@
 
 use crate::attestation::Trust;
 use crate::b64;
+use crate::keys::WebauthnBinding;
+use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnrollCommand {
     pub user: String,
     pub label: String,
     pub public_key: String,
-    pub challenge: String,
-    pub trust: Trust,
+    pub proof: Proof,
+}
+
+/// What admits the key besides the approval itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Proof {
+    /// Android key attestation over the phone's challenge.
+    Attested { challenge: String, trust: Trust },
+    /// `--unattested`: nothing proves where the key lives, so only the approval
+    /// of this argv (an enrolled device showing its comparison code, or the
+    /// password) admits it. With a site, the key is a WebAuthn credential.
+    Unattested { site: Option<Site> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Site {
+    pub rp_id: String,
+    pub origin: String,
 }
 
 /// `<path>/t3-elevation enroll <options>`.
@@ -23,11 +41,23 @@ pub fn parse_command(argv: &[String]) -> Option<EnrollCommand> {
     parse_options(rest)
 }
 
+const VALUE_OPTIONS: [&str; 6] = [
+    "--user",
+    "--label",
+    "--public-key",
+    "--challenge",
+    "--rp-id",
+    "--origin",
+];
+
 /// The options after `enroll`: each at most once, any order, nothing else.
-/// At most one of `--allow-dev-attestation` and `--allow-test-attestation`.
+/// Attested: `--challenge` and at most one of `--allow-dev-attestation` and
+/// `--allow-test-attestation`. Unattested: `--unattested`, and `--rp-id` with
+/// `--origin` for a WebAuthn key; no challenge and no attestation option.
 pub fn parse_options(rest: &[String]) -> Option<EnrollCommand> {
-    let mut values: [Option<&String>; 4] = [None; 4];
+    let mut values: [Option<&String>; 6] = [None; 6];
     let mut trust = Trust::Release;
+    let mut unattested = false;
     let mut args = rest.iter();
     while let Some(option) = args.next() {
         if let Some(flag) = trust_flag(option) {
@@ -37,25 +67,57 @@ pub fn parse_options(rest: &[String]) -> Option<EnrollCommand> {
             trust = flag;
             continue;
         }
-        let slot = ["--user", "--label", "--public-key", "--challenge"]
-            .iter()
-            .position(|name| name == option)?;
+        if option == "--unattested" {
+            if unattested {
+                return None;
+            }
+            unattested = true;
+            continue;
+        }
+        let slot = VALUE_OPTIONS.iter().position(|name| name == option)?;
         if values[slot].is_some() {
             return None;
         }
         values[slot] = Some(args.next()?);
     }
-    let [Some(user), Some(label), Some(public_key), Some(challenge)] = values else {
+    let [
+        Some(user),
+        Some(label),
+        Some(public_key),
+        challenge,
+        rp_id,
+        origin,
+    ] = values
+    else {
         return None;
     };
     b64::decode(public_key)?;
-    (b64::decode(challenge)?.len() == 32).then_some(())?;
+    let proof = if unattested {
+        if trust != Trust::Release || challenge.is_some() {
+            return None;
+        }
+        let site = match (rp_id, origin) {
+            (None, None) => None,
+            (Some(rp_id), Some(origin)) => Some(webauthn_site(rp_id, origin)?),
+            _ => return None,
+        };
+        Proof::Unattested { site }
+    } else {
+        let challenge = challenge?;
+        if rp_id.is_some() || origin.is_some() {
+            return None;
+        }
+        (b64::decode(challenge)?.len() == 32).then_some(())?;
+        Proof::Attested {
+            challenge: challenge.clone(),
+            trust,
+        }
+    };
     Some(EnrollCommand {
         user: user.clone(),
         label: label.clone(),
         public_key: public_key.clone(),
-        challenge: challenge.clone(),
-        trust,
+        proof,
     })
 }
 
@@ -65,6 +127,115 @@ pub fn trust_flag(option: &str) -> Option<Trust> {
         "--allow-test-attestation" => Some(Trust::Test),
         _ => None,
     }
+}
+
+/// A host as a WebAuthn rpId can name it: lowercase DNS labels, not an IP.
+fn is_host(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 253
+        && text.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+        && !text
+            .rsplit('.')
+            .next()
+            .is_some_and(|last| last.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The origin exactly as a browser serializes it into clientDataJSON:
+/// `https://host[:port]`, or `http://localhost[:port]`, with no default port,
+/// path or trailing slash; and an rpId that is that host or a parent of it.
+/// Anything else could never match an assertion, or would match too much.
+pub fn webauthn_site(rp_id: &str, origin: &str) -> Option<Site> {
+    let (scheme, authority) = origin.split_once("://")?;
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    let default_port = match (scheme, host) {
+        ("https", _) => "443",
+        ("http", "localhost") => "80",
+        _ => return None,
+    };
+    if let Some(port) = port {
+        let valid = !port.is_empty()
+            && !port.starts_with('0')
+            && port.bytes().all(|b| b.is_ascii_digit())
+            && port.parse::<u16>().is_ok()
+            && port != default_port;
+        if !valid {
+            return None;
+        }
+    }
+    if !is_host(host) || !is_host(rp_id) {
+        return None;
+    }
+    let covers = host == rp_id
+        || host
+            .strip_suffix(rp_id)
+            .is_some_and(|prefix| prefix.ends_with('.'));
+    covers.then(|| Site {
+        rp_id: rp_id.to_string(),
+        origin: origin.to_string(),
+    })
+}
+
+/// The enrollment object for `--unattested`: no challenge and no chain, since
+/// nothing could check them.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnattestedEnrollment {
+    pub label: String,
+    pub public_key: String,
+    #[serde(default)]
+    pub webauthn: Option<WebauthnBinding>,
+}
+
+/// WebAuthn allows credential IDs up to 1023 bytes.
+const MAX_CREDENTIAL_ID_BYTES: usize = 1023;
+
+/// The checks attestation would otherwise make on the label and key, plus a
+/// valid site for a WebAuthn key. Returns the SPKI DER.
+pub fn check_unattested(
+    enrollment: &UnattestedEnrollment,
+) -> Result<Vec<u8>, crate::attestation::Rejected> {
+    use crate::attestation::{Rejected, label_ok};
+    let reject = |code: &'static str, message: &str| Rejected {
+        code,
+        message: message.into(),
+    };
+    if !label_ok(&enrollment.label) {
+        return Err(reject(
+            "invalid_label",
+            "label must be 1-100 characters without control characters",
+        ));
+    }
+    let spki = b64::decode(&enrollment.public_key)
+        .filter(|spki| crate::keys::parse_p256_spki(spki).is_some())
+        .ok_or_else(|| reject("invalid_public_key", "publicKey is not a P-256 SPKI"))?;
+    if let Some(binding) = &enrollment.webauthn {
+        webauthn_site(&binding.rp_id, &binding.origin).ok_or_else(|| {
+            reject(
+                "invalid_site",
+                "origin must be https://host[:port] or http://localhost[:port], and rpId that host or a parent of it",
+            )
+        })?;
+        b64::decode(&binding.credential_id)
+            .filter(|id| !id.is_empty() && id.len() <= MAX_CREDENTIAL_ID_BYTES)
+            .ok_or_else(|| {
+                reject(
+                    "invalid_credential_id",
+                    "credentialId must be 1-1023 bytes of base64url",
+                )
+            })?;
+    }
+    Ok(spki)
 }
 
 /// The first line of `enroll`'s stdin. With `sudo -S`, sudo reads the
@@ -101,6 +272,32 @@ fn wipe(bytes: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sites_are_exact_origins_their_rp_id_covers() {
+        let ok = |rp_id: &str, origin: &str| webauthn_site(rp_id, origin).is_some();
+        assert!(ok("app.t3.codes", "https://app.t3.codes"));
+        assert!(ok("t3.codes", "https://app.t3.codes"));
+        assert!(ok(
+            "mac.tail1234.ts.net",
+            "https://mac.tail1234.ts.net:8443"
+        ));
+        assert!(ok("localhost", "http://localhost:3773"));
+        assert!(ok("localhost", "https://localhost"));
+        assert!(!ok("app.t3.codes", "https://t3.codes"));
+        assert!(!ok("pp.t3.codes", "https://app.t3.codes"));
+        assert!(!ok("app.t3.codes", "http://app.t3.codes"));
+        assert!(!ok("app.t3.codes", "https://app.t3.codes/"));
+        assert!(!ok("app.t3.codes", "https://app.t3.codes:443"));
+        assert!(!ok("localhost", "http://localhost:80"));
+        assert!(!ok("app.t3.codes", "https://app.t3.codes:0443"));
+        assert!(!ok("app.t3.codes", "https://app.t3.codes:70000"));
+        assert!(!ok("App.t3.codes", "https://App.t3.codes"));
+        assert!(!ok("192.168.1.20", "https://192.168.1.20"));
+        assert!(!ok("", "https://app.t3.codes"));
+        assert!(!ok("app.t3.codes", "https://user@app.t3.codes"));
+        assert!(!ok("app.t3.codes", "t3code://app.t3.codes"));
+    }
 
     #[test]
     fn zeroes_a_password_line_left_by_sudo() {
