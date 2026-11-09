@@ -18,13 +18,11 @@ import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
 import { useElevationApproverHere } from "../../state/elevationApprover";
 import { useElevationAgent } from "./ElevationAgentMark";
-import { ElevationPendingCard } from "./ElevationPendingCard";
+import { ELEVATION_SETTLE_MS, ElevationPendingCard } from "./ElevationPendingCard";
 import { useElevationSidebarStore } from "./elevationSidebarStore";
 
 // The ring's fade, plus a margin for the sidebar opening first.
 const HIGHLIGHT_MS = 1500;
-// How long "✓ Approved on Pixel" stays before the card leaves, as on the phone.
-const SETTLE_MS = 700;
 const FADE_MS = 140;
 const LEAVE_MS = 240;
 
@@ -88,8 +86,9 @@ function Leaving(props: {
  * view, their notices stay away.
  */
 export function ThreadlessElevationRequests(props: { readonly onScreen: boolean }) {
+  const claimed = useElevationSidebarStore((state) => state.claimed);
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).filter(
-    (entry) => entry.request.threadId === null,
+    (entry) => entry.request.threadId === null && claimed?.(entry) !== true,
   );
   const endedByEnvironment = useAtomValue(elevation.endedAcrossEnvironmentsAtom);
   const currentKeys = new Set(pending.map(keyOf));
@@ -189,7 +188,7 @@ export function ThreadlessElevationRequests(props: { readonly onScreen: boolean 
 function Settle(props: { readonly id: string; readonly onSettled: (id: string) => void }) {
   const { id, onSettled } = props;
   useEffect(() => {
-    const timer = setTimeout(() => onSettled(id), SETTLE_MS);
+    const timer = setTimeout(() => onSettled(id), ELEVATION_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [id, onSettled]);
   return null;
@@ -249,6 +248,9 @@ function ThreadlessRequestCard(props: {
           Result.isFailure(decoded) ? elevationDecodeFailureMessage(decoded.failure) : null
         }
         changes={null}
+        signable={
+          success === null ? null : { bytes: success.bytes, keyIds: success.payload.keyIds }
+        }
         series={request.series}
         raisedByT3={request.raisedByT3}
         ended={props.ended === null ? null : elevationEndedLine(props.ended, here)}

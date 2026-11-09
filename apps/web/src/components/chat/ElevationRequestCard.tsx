@@ -3,6 +3,7 @@ import {
   decodeElevationRequestPayload,
   elevationCommandFinished,
   elevationDecodeFailureMessage,
+  elevationEndedLine,
   elevationHeadline,
   elevationRequestFacts,
   elevationRequestFallbackView,
@@ -23,12 +24,16 @@ import type {
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { CheckIcon, ClockIcon, MinusIcon, ShieldIcon, XIcon } from "lucide-react";
-import { use, useState, type KeyboardEvent, type ReactNode } from "react";
+import { use, useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { elevation } from "../../state/elevation";
 import { useElevationApproverHere } from "../../state/elevationApprover";
 import { useElevationAgent } from "../elevation/ElevationAgentMark";
-import { DisclosureChevron, ElevationPendingCard } from "../elevation/ElevationPendingCard";
+import {
+  DisclosureChevron,
+  ELEVATION_SETTLE_MS,
+  ElevationPendingCard,
+} from "../elevation/ElevationPendingCard";
 import { ElevationRequestFactLines } from "../elevation/ElevationRequestDetails";
 import { TimelineRowActivityCtx, TimelineRowCtx } from "./timelineRowContext";
 import { CommandItemOutput } from "./V2ItemInspector";
@@ -60,8 +65,8 @@ function itemView(item: ElevationRequestItem) {
 
 /**
  * Matches the phone: a pending request is a card that leads with words, never the command; once
- * it ends it becomes a work-log row. Web can't sign, so approving happens on the phone; Deny
- * works here.
+ * it ends it becomes a work-log row. A card answered here, or whose prompt was open when another
+ * device answered, first says how for a moment.
  */
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -85,7 +90,16 @@ export function ElevationRequestCard(props: {
     finished: props.command === undefined ? !runActive : elevationCommandFinished(props.command),
     here,
   });
-  const showCard = status.kind === "pending" && props.visibility === "local";
+  const [engaged, setEngaged] = useState(false);
+  const [released, setReleased] = useState(false);
+  const holding =
+    engaged && !released && item.elevationStatus !== "pending" && props.visibility === "local";
+  useEffect(() => {
+    if (!holding) return;
+    const timer = setTimeout(() => setReleased(true), ELEVATION_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [holding]);
+  const showCard = (status.kind === "pending" && props.visibility === "local") || holding;
   // Only a row that replaced this card fades in; rows mounted by scrolling appear as they are.
   const [replacesCard] = useState(showCard);
   const { view, signed, decoded } = itemView(item);
@@ -117,6 +131,20 @@ export function ElevationRequestCard(props: {
             ? elevationDecodeFailureMessage(decoded.failure)
             : null
         }
+        signable={
+          decoded !== null && Result.isSuccess(decoded)
+            ? { bytes: decoded.success.bytes, keyIds: decoded.success.payload.keyIds }
+            : null
+        }
+        ended={
+          item.elevationStatus === "pending"
+            ? null
+            : elevationEndedLine(
+                { elevationStatus: item.elevationStatus, resolvedBy: item.resolvedBy },
+                here,
+              )
+        }
+        onEngaged={() => setEngaged(true)}
       />
     );
   }

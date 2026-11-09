@@ -48,6 +48,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { ThisDeviceApproval } from "./ThisDeviceApproval";
 import { useDeviceApprovalAgentHandoff } from "./useDeviceApprovalAgentHandoff";
 
 const APPROVER_ICONS: Record<ElevationApproverKind, LucideIcon> = {
@@ -56,13 +57,14 @@ const APPROVER_ICONS: Record<ElevationApproverKind, LucideIcon> = {
   browser: GlobeIcon,
 };
 
-const HERE_BADGES = { mac: "This Mac", browser: "This browser" } as const;
-
 function formatDate(value: { readonly epochMilliseconds: number }) {
   return new Date(value.epochMilliseconds).toLocaleDateString();
 }
 
-export function DeviceApprovalSettings() {
+export function DeviceApprovalSettings(props: {
+  /** The machine to set this device up on at once, from a card's "Set up this browser". */
+  readonly setup: EnvironmentId | null;
+}) {
   const { environments } = useEnvironments();
   const supported = environments.filter((environment) =>
     environmentSupportsDeviceApproval(environment.serverConfig),
@@ -79,6 +81,7 @@ export function DeviceApprovalSettings() {
             key={environment.environmentId}
             environmentId={environment.environmentId}
             machine={environment.label}
+            autoStart={props.setup === environment.environmentId}
             words={elevationPasswordWords(
               environment.serverConfig?.environment.platform.os,
               environment.label,
@@ -94,6 +97,7 @@ function EnvironmentDeviceApproval(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
   readonly words: ElevationPasswordWords;
+  readonly autoStart: boolean;
 }) {
   const status = useEnvironmentQuery(
     elevation.status({ environmentId: props.environmentId, input: {} }),
@@ -118,6 +122,7 @@ function EnvironmentDeviceApproval(props: {
           machine={props.machine}
           words={props.words}
           status={status.data}
+          autoStart={props.autoStart}
         />
       )}
     </SettingsSection>
@@ -135,6 +140,7 @@ function DeviceApprovalStatus(props: {
   readonly machine: string;
   readonly words: ElevationPasswordWords;
   readonly status: ElevationStatus;
+  readonly autoStart: boolean;
 }) {
   const { status } = props;
   const handoff = useDeviceApprovalAgentHandoff();
@@ -180,7 +186,9 @@ function DeviceApprovalStatus(props: {
             : state === "needs_fixing"
               ? "Agents' sudo will ask for the password"
               : (status.setupUnavailableReason ??
-                `Approve agents' sudo on ${props.machine} with your phone. Set it up in the T3 app on Android, under Settings → Device approval.`)
+                (approver === null
+                  ? `Approve agents' sudo on ${props.machine} with your phone. Set it up in the T3 app on Android, under Settings → Device approval.`
+                  : undefined))
         }
         status={<Badge variant={badge.variant}>{badge.label}</Badge>}
         control={
@@ -193,22 +201,29 @@ function DeviceApprovalStatus(props: {
       >
         {fixNote !== null ? <p className="text-xs text-muted-foreground">{fixNote}</p> : null}
       </SettingsRow>
+      {approver === null ? null : (
+        <ThisDeviceApproval
+          environmentId={props.environmentId}
+          machine={props.machine}
+          words={props.words}
+          status={status}
+          approver={approver}
+          autoStart={props.autoStart}
+        />
+      )}
       {state === "off"
         ? null
-        : status.devices.map((device) => (
-            <DeviceRow
-              key={device.keyId}
-              environmentId={props.environmentId}
-              device={device}
-              here={
-                approver !== null && approver.keyId === device.keyId
-                  ? HERE_BADGES[approver.kind]
-                  : null
-              }
-              revocable={status.helperInstalled}
-              words={props.words}
-            />
-          ))}
+        : status.devices
+            .filter((device) => device.keyId !== approver?.keyId)
+            .map((device) => (
+              <DeviceRow
+                key={device.keyId}
+                environmentId={props.environmentId}
+                device={device}
+                revocable={status.helperInstalled}
+                words={props.words}
+              />
+            ))}
       {state === "off" ? null : (
         <SettingsRow
           title="Details"
@@ -294,12 +309,10 @@ function CheckLine(props: { readonly check: ElevationCheck }) {
   );
 }
 
-/** An approver: a phone, a Mac's Touch ID or a browser's passkey, with a badge on this one. */
+/** Another approver: a phone, a Mac's Touch ID or a browser's passkey. */
 function DeviceRow(props: {
   readonly environmentId: EnvironmentId;
   readonly device: ElevationDevice;
-  /** "This Mac" or "This browser" when the key is this client's. */
-  readonly here: string | null;
   readonly revocable: boolean;
   readonly words: ElevationPasswordWords;
 }) {
@@ -314,7 +327,6 @@ function DeviceRow(props: {
         <span className="flex min-w-0 items-center gap-2">
           <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="truncate">{device.label}</span>
-          {props.here === null ? null : <Badge variant="secondary">{props.here}</Badge>}
         </span>
       }
       description={`${elevationApproverDescription(device)} · Added ${formatDate(device.enrolledAt)}${
