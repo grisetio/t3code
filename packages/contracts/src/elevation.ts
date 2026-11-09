@@ -37,6 +37,7 @@ export const ElevationRequestId = TrimmedNonEmptyString.pipe(Schema.brand("Eleva
 export type ElevationRequestId = typeof ElevationRequestId.Type;
 
 const Bytes32 = base64UrlOfLength(43);
+const isBytes32 = Schema.is(Bytes32);
 
 export const ElevationWarning = Schema.Struct({
   code: Schema.String.check(Schema.isPattern(/^[a-z_]{1,64}$/)),
@@ -289,7 +290,7 @@ export function parseElevationEnrollCommand(
     if (rpId !== undefined && site === null) return null;
     return { ...common, challenge: null, unattested, site };
   }
-  if (challenge === undefined || !Schema.is(Bytes32)(challenge)) return null;
+  if (challenge === undefined || !isBytes32(challenge)) return null;
   if (rpId !== undefined || origin !== undefined) return null;
   return { ...common, challenge, unattested, site: null };
 }

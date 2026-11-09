@@ -5,7 +5,7 @@ import type {
   ElevationWebauthnBinding,
   EnvironmentId,
 } from "@t3tools/contracts";
-import { useCallback, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 /**
  * Something on this client that approves sudo: the desktop's Touch ID key, or this browser's
@@ -59,15 +59,12 @@ const subscribe = (listener: () => void) => {
 
 /** The approver this client offers on a machine, or null where only a phone approves. */
 export function useElevationApprover(environmentId: EnvironmentId): ElevationApprover | null {
-  const get = useCallback(
-    () =>
-      SOURCES.reduce<ElevationApprover | null>(
-        (found, source) => found ?? source.get(environmentId),
-        null,
-      ),
-    [environmentId],
+  return useSyncExternalStore(subscribe, () =>
+    SOURCES.reduce<ElevationApprover | null>(
+      (found, source) => found ?? source.get(environmentId),
+      null,
+    ),
   );
-  return useSyncExternalStore(subscribe, get);
 }
 
 /** This client's approver where it has a key, so rows say "Approved on this Mac". */
