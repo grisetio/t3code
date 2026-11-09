@@ -75,6 +75,7 @@ vi.mock(import("./settingsLayout"), async (original) => ({
 import { render } from "../../../test/render";
 import { enrollThisBrowser, virtualAuthenticator } from "../../../test/virtualPasskey";
 import { browserElevationApproverSource } from "../../state/browserElevationApprover";
+import { useElevationSidebarStore } from "../elevation/elevationSidebarStore";
 import { useElevationApprover } from "../../state/elevationApprover";
 import { ThisDeviceApproval } from "./ThisDeviceApproval";
 
@@ -112,6 +113,7 @@ const off: ElevationStatus = {
 function setup() {
   for (const command of Object.values(testState.commands)) command.mockReset();
   testState.commands.respond?.mockResolvedValue(AsyncResult.success(undefined));
+  useElevationSidebarStore.setState({ setupRequested: null, claimed: null });
   return AtomRegistry.make();
 }
 
@@ -137,7 +139,6 @@ function Harness(props: {
       words={words}
       status={props.status}
       approver={shown}
-      autoStart={false}
     />
   );
 }
@@ -186,6 +187,21 @@ function pendingRequest(
 }
 
 describe("ThisDeviceApproval", () => {
+  it("starts setup once when a card asked for it", async () => {
+    const registry = setup();
+    await using _authenticator = await virtualAuthenticator(environmentId);
+    testState.commands.enroll?.mockReturnValue(deferred().promise);
+    useElevationSidebarStore.getState().requestSetup(environmentId);
+    await using screen = await render(harness(registry, on));
+
+    await expect
+      .element(screen.getByText("Approve on Galaxy Z Fold if it shows the same code:"))
+      .toBeVisible();
+    expect(testState.commands.enroll).toHaveBeenCalledTimes(1);
+    // A later visit to Settings doesn't start it again.
+    expect(useElevationSidebarStore.getState().setupRequested).toBeNull();
+  });
+
   it("sets this browser up when a phone confirms the same code", async () => {
     const registry = setup();
     await using _authenticator = await virtualAuthenticator(environmentId);
@@ -198,7 +214,7 @@ describe("ThisDeviceApproval", () => {
     await expect
       .element(screen.getByText("Approve on Galaxy Z Fold if it shows the same code:"))
       .toBeVisible();
-    const { device } = testState.commands.enroll?.mock.lastCall?.[0].input;
+    const device = testState.commands.enroll?.mock.lastCall?.[0].input.device;
     expect(device).toMatchObject({
       label: "Chrome on Mac",
       webauthn: { rpId: "localhost", origin: window.location.origin },
@@ -248,7 +264,7 @@ describe("ThisDeviceApproval", () => {
     await using screen = await render(harness(registry, on));
     await userEvent.click(screen.getByRole("button", { name: "Set up" }));
     await expect.element(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
-    const { device } = testState.commands.enroll?.mock.lastCall?.[0].input;
+    const device = testState.commands.enroll?.mock.lastCall?.[0].input.device;
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     registry.set(testState.pending, [

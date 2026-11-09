@@ -18,6 +18,12 @@ interface ElevationSidebarState {
    */
   readonly claimed: ((entry: PendingElevationRequest) => boolean) | null;
   readonly claim: (matches: ((entry: PendingElevationRequest) => boolean) | null) => void;
+  /**
+   * The machine a card's "Set up this browser" asked Settings to set this device up on. Not in the
+   * URL: Settings remounts its page when the search changes, and a reload shouldn't start it again.
+   */
+  readonly setupRequested: EnvironmentId | null;
+  readonly requestSetup: (environmentId: EnvironmentId | null) => void;
   readonly reveal: (target: ElevationSidebarTarget) => void;
   readonly clearHighlight: () => void;
   readonly setListOnScreen: (onScreen: boolean) => void;
@@ -28,6 +34,8 @@ export const useElevationSidebarStore = create<ElevationSidebarState>()((set) =>
   listOnScreen: false,
   claimed: null,
   claim: (claimed) => set({ claimed }),
+  setupRequested: null,
+  requestSetup: (setupRequested) => set({ setupRequested }),
   reveal: (target) => set({ highlight: target }),
   clearHighlight: () => set({ highlight: null }),
   setListOnScreen: (listOnScreen) => set({ listOnScreen }),

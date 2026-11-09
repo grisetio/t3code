@@ -61,10 +61,7 @@ function formatDate(value: { readonly epochMilliseconds: number }) {
   return new Date(value.epochMilliseconds).toLocaleDateString();
 }
 
-export function DeviceApprovalSettings(props: {
-  /** The machine to set this device up on at once, from a card's "Set up this browser". */
-  readonly setup: EnvironmentId | null;
-}) {
+export function DeviceApprovalSettings() {
   const { environments } = useEnvironments();
   const supported = environments.filter((environment) =>
     environmentSupportsDeviceApproval(environment.serverConfig),
@@ -81,7 +78,6 @@ export function DeviceApprovalSettings(props: {
             key={environment.environmentId}
             environmentId={environment.environmentId}
             machine={environment.label}
-            autoStart={props.setup === environment.environmentId}
             words={elevationPasswordWords(
               environment.serverConfig?.environment.platform.os,
               environment.label,
@@ -97,7 +93,6 @@ function EnvironmentDeviceApproval(props: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
   readonly words: ElevationPasswordWords;
-  readonly autoStart: boolean;
 }) {
   const status = useEnvironmentQuery(
     elevation.status({ environmentId: props.environmentId, input: {} }),
@@ -122,7 +117,6 @@ function EnvironmentDeviceApproval(props: {
           machine={props.machine}
           words={props.words}
           status={status.data}
-          autoStart={props.autoStart}
         />
       )}
     </SettingsSection>
@@ -140,7 +134,6 @@ function DeviceApprovalStatus(props: {
   readonly machine: string;
   readonly words: ElevationPasswordWords;
   readonly status: ElevationStatus;
-  readonly autoStart: boolean;
 }) {
   const { status } = props;
   const handoff = useDeviceApprovalAgentHandoff();
@@ -208,7 +201,6 @@ function DeviceApprovalStatus(props: {
           words={props.words}
           status={status}
           approver={approver}
-          autoStart={props.autoStart}
         />
       )}
       {state === "off"

@@ -21,7 +21,6 @@ import {
   type ElevationStatus,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
 import * as Result from "effect/Result";
 import { CheckIcon, GlobeIcon, LaptopIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
@@ -110,8 +109,6 @@ export function ThisDeviceApproval(props: {
   readonly words: ElevationPasswordWords;
   readonly status: ElevationStatus;
   readonly approver: ElevationApprover;
-  /** Opened from a card's "Set up this browser": start at once. */
-  readonly autoStart: boolean;
 }) {
   const { environmentId, machine, words, status, approver } = props;
   const { user } = status;
@@ -126,7 +123,6 @@ export function ThisDeviceApproval(props: {
     (entry) => entry.environmentId === environmentId,
   );
   const claim = useElevationSidebarStore((state) => state.claim);
-  const navigate = useNavigate();
   const [step, setStep] = useState<Step>(IDLE);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -333,14 +329,15 @@ export function ThisDeviceApproval(props: {
     return () => claim(null);
   }, [claim, claimEnroll, claimRevoke, environmentId, user]);
 
-  const autoStarted = useRef(false);
+  const setupRequested = useElevationSidebarStore(
+    (state) => state.setupRequested === environmentId,
+  );
+  const requestSetup = useElevationSidebarStore((state) => state.requestSetup);
   useEffect(() => {
-    if (!props.autoStart || autoStarted.current || enrolled !== undefined || !canSetUp) return;
-    autoStarted.current = true;
-    // A reload shouldn't start setup again.
-    void navigate({ to: "/settings/device-approval", search: {}, replace: true });
+    if (!setupRequested || enrolled !== undefined || !canSetUp) return;
+    requestSetup(null);
     void start();
-  }, [props.autoStart, enrolled, canSetUp, navigate, start]);
+  }, [setupRequested, enrolled, canSetUp, requestSetup, start]);
 
   const Icon = here.icon;
   const settingUp =

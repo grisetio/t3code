@@ -42,6 +42,7 @@ import { useElevationApprover } from "../../state/elevationApprover";
 import { Button } from "../ui/button";
 import { ElevationAgentMark, type ElevationAgentView } from "./ElevationAgentMark";
 import { ElevationComparisonCode, ElevationRequestFactLines } from "./ElevationRequestDetails";
+import { useElevationSidebarStore } from "./elevationSidebarStore";
 import { useElevationRespond } from "./useElevationRespond";
 
 /** How long "✓ Approved on Pixel" stays before the card leaves, as on the phone. */
@@ -210,6 +211,7 @@ function ElevationCardActions(props: {
   const respond = useElevationRespond();
   const approver = useElevationApprover(environmentId);
   const navigate = useNavigate();
+  const requestSetup = useElevationSidebarStore((state) => state.requestSetup);
   const [answered, setAnswered] = useState<"approved" | "denied" | null>(null);
   const [signing, setSigning] = useState(false);
   const prompt = useRef<AbortController | null>(null);
@@ -316,12 +318,10 @@ function ElevationCardActions(props: {
                 <button
                   type="button"
                   className="truncate underline decoration-muted-foreground/45 underline-offset-2 hover:text-foreground"
-                  onClick={() =>
-                    void navigate({
-                      to: "/settings/device-approval",
-                      search: { setup: environmentId },
-                    })
-                  }
+                  onClick={() => {
+                    requestSetup(environmentId);
+                    void navigate({ to: "/settings/device-approval" });
+                  }}
                 >
                   {SET_UP_HERE[approver.kind]}
                 </button>
