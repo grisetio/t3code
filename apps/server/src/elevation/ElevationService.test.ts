@@ -1012,7 +1012,7 @@ describe("ElevationService helper", () => {
         publicKey: webauthnDevice.spkiDer,
         webauthn: { ...webauthnDevice.webauthn, authenticatorData: registration(name) },
       });
-      const reason = (effect: Effect.Effect<unknown, ElevationError>) =>
+      const reason = <A>(effect: Effect.Effect<A, ElevationError>) =>
         effect.pipe(
           Effect.flip,
           Effect.map((error) => error.reason),
