@@ -163,6 +163,7 @@ describe("ElevationPendingCard", () => {
     testState.approver = {
       kind: "mac",
       label: "MacBook Pro",
+      computerName: null,
       keyId,
       unavailableReason: "Touch ID needs the lid open",
       sign: vi.fn(),

@@ -319,6 +319,7 @@ describe("ThisDeviceApproval", () => {
     const safari: ElevationApprover = {
       kind: "browser",
       label: "Safari on Mac",
+      computerName: null,
       keyId: null,
       unavailableReason:
         "Safari only saves passkeys that sync to your other devices, so it can't approve.",
