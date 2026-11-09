@@ -2,10 +2,12 @@ import type { ElevationApproverHere } from "@t3tools/client-runtime/elevation";
 import type {
   ElevationKeyId,
   ElevationSignedResponse,
-  ElevationWebauthnBinding,
+  ElevationWebauthnEnrollment,
   EnvironmentId,
 } from "@t3tools/contracts";
 import { useSyncExternalStore } from "react";
+
+import { browserElevationApproverSource } from "./browserElevationApprover";
 
 /**
  * Something on this client that approves sudo: the desktop's Touch ID key, or this browser's
@@ -14,25 +16,35 @@ import { useSyncExternalStore } from "react";
  */
 export interface ElevationApprover {
   readonly kind: "mac" | "browser";
-  /** This device's key on the machine; null until it is set up there. */
+  /** The model name new keys are labeled with: "MacBook Pro", "Chrome on Mac". */
+  readonly label: string;
+  /**
+   * The key this device made for the machine; null before setup. The machine may never have
+   * accepted it, or have revoked it since, so surfaces check it against the machine's keys.
+   */
   readonly keyId: ElevationKeyId | null;
   /** Why it can't approve or set up now, such as "Touch ID needs the lid open"; null when it can. */
   readonly unavailableReason: string | null;
   /**
    * Signs the payload's exact bytes as `es256-der` (Mac) or `webauthn-es256` (browser). Null when
    * the user cancelled, which counts as Deny. The signal aborts when another device answers.
+   * Every method throws only errors whose message is meant for the user.
    */
   readonly sign: (
     payloadBytes: Uint8Array,
     signal: AbortSignal,
   ) => Promise<ElevationSignedResponse | null>;
   /**
-   * Makes the key for "Add device": an SPKI DER public key, plus the passkey's site for a browser.
-   * Null when the user cancelled.
+   * Makes the key for "Add device": an SPKI DER public key, plus the passkey's site and
+   * registration for a browser. Null when the user cancelled. `account.name` is what a passkey
+   * manager lists the key as.
    */
-  readonly createKey: (signal: AbortSignal) => Promise<{
+  readonly createKey: (
+    signal: AbortSignal,
+    account: { readonly name: string },
+  ) => Promise<{
     readonly publicKey: string;
-    readonly webauthn?: ElevationWebauthnBinding;
+    readonly webauthn?: ElevationWebauthnEnrollment;
   } | null>;
   /** Forgets this device's key on the machine, after the helper has revoked it. */
   readonly forget: () => Promise<void>;
@@ -48,7 +60,7 @@ export interface ElevationApproverSource {
   readonly get: (environmentId: EnvironmentId) => ElevationApprover | null;
 }
 
-const SOURCES: ReadonlyArray<ElevationApproverSource> = [];
+const SOURCES: ReadonlyArray<ElevationApproverSource> = [browserElevationApproverSource];
 
 const subscribe = (listener: () => void) => {
   const unsubscribes = SOURCES.map((source) => source.subscribe(listener));
