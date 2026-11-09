@@ -91,6 +91,26 @@ Enrolling a new fingerprint on the phone invalidates its key, and Settings shows
 **Needs fixing**. **Fix** replaces the key with your fingerprint and the
 password.
 
+## Approve in a browser
+
+A browser can approve with a passkey kept only on that computer, such as
+**Your Chrome profile** in Chrome on a Mac, or **Windows Hello** on Windows. In
+the browser, open **Settings → Device approval** and choose **Set up** under the
+machine. A device that is already set up approves the new passkey after checking
+that both show the same code, or you enter the machine's password; on a machine
+with nothing set up yet, that password also turns device approval on. After
+that, requests in the browser show **Approve**, which asks for your fingerprint
+or your computer's password. Cancel there denies.
+
+A passkey saved to Google Password Manager, iCloud Keychain, or another password
+manager syncs to your other devices, and each of them could then approve, so
+T3 Code refuses it; set up again and save it to this device only. Safari saves
+every passkey to iCloud Keychain, so it can't approve.
+
+Passkeys need a secure address: `https`, such as through Tailscale or T3
+Connect, or `localhost`. Over plain `http` on a network address, **Set up** is
+unavailable. A passkey works only at the address it was set up at.
+
 ## Requirements
 
 - An Android phone with Android 11 or later and a fingerprint sensor. iPhone

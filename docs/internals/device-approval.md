@@ -245,8 +245,16 @@ A registration with BE set is refused before it is enrolled (`synced_passkey`),
 first by the server and again by the helper, as is one whose rpIdHash or
 credential ID doesn't match (`invalid_passkey`). With `attestation: "none"`
 nothing signs that data, so this only stops an honest mistake early; refusing
-BE in every assertion is the guarantee. The key file keeps only the site. For `enroll`, `label`, `publicKey`, `challenge`, and a
-passkey's `rpId` and `origin` must equal the argv values.
+BE in every assertion is the guarantee. The key file keeps only the site. For
+`enroll`, `label`, `publicKey`, `challenge`, and a passkey's `rpId` and `origin`
+must equal the argv values.
+
+**Which key is this client's.** Status lists every key on a machine but not
+which client holds it, so a browser keeps its own map from environment to
+`{ keyId, credentialId, rpId }` in localStorage, the same profile and origin
+its passkey belongs to (`browserElevationApprover.ts`). It is written when the
+passkey is made, before the machine accepts it, so the card and Settings treat
+the browser as an approver only while the machine's keys include that keyId.
 
 **Enroll stdin.** `enroll` reads the line `t3-elevation-input-v1`, then the
 enrollment object. With a password, the server puts the password line first for
