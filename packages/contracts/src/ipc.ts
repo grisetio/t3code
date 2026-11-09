@@ -11,7 +11,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
-import { ElevationBase64Url, ElevationSignedResponse } from "./elevation.ts";
+import { ElevationBase64Url, ElevationKeyId, ElevationSignedResponse } from "./elevation.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -342,7 +342,7 @@ export const DesktopDeviceApprovalStateSchema = Schema.Union([
   Schema.Struct({
     supported: Schema.Literal(true),
     /** The key this Mac holds for the environment; it approves only once the machine enrolls it. */
-    keyId: Schema.NullOr(Schema.String),
+    keyId: Schema.NullOr(ElevationKeyId),
     unavailable: Schema.NullOr(DesktopTouchIdUnavailableSchema),
     /** "MacBook Pro". */
     model: Schema.String,

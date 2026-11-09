@@ -7,6 +7,8 @@ import type {
 } from "@t3tools/contracts";
 import { useSyncExternalStore } from "react";
 
+import { macApproverSource } from "./elevationApproverMac";
+
 /**
  * Something on this client that approves sudo: the desktop's Touch ID key, or this browser's
  * passkey. A Mac and a browser enroll unattested, so an enrolled device or the password admits
@@ -18,6 +20,11 @@ export interface ElevationApprover {
   readonly keyId: ElevationKeyId | null;
   /** Why it can't approve or set up now, such as "Touch ID needs the lid open"; null when it can. */
   readonly unavailableReason: string | null;
+  /**
+   * The label to enroll it under: its model ("MacBook Pro", "Chrome on Mac"), with the computer's
+   * name only when `existing` already has that label (`uniqueElevationApproverLabel`).
+   */
+  readonly label: (existing: ReadonlyArray<string>) => string;
   /**
    * Signs the payload's exact bytes as `es256-der` (Mac) or `webauthn-es256` (browser). Null when
    * the user cancelled, which counts as Deny. The signal aborts when another device answers.
@@ -48,7 +55,7 @@ export interface ElevationApproverSource {
   readonly get: (environmentId: EnvironmentId) => ElevationApprover | null;
 }
 
-const SOURCES: ReadonlyArray<ElevationApproverSource> = [];
+const SOURCES: ReadonlyArray<ElevationApproverSource> = [macApproverSource];
 
 const subscribe = (listener: () => void) => {
   const unsubscribes = SOURCES.map((source) => source.subscribe(listener));
