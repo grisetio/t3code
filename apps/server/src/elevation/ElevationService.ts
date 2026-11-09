@@ -28,6 +28,8 @@ import {
   type ElevationEndedRequest,
   type ElevationEnrollInput,
   ElevationEnrollmentDevice,
+  elevationApproverKind,
+  isElevationUnattestedDevice,
   type ElevationFailureReason,
   type ElevationInstallInput,
   type ElevationInstallResult,
@@ -883,6 +885,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       keyId: key.keyId,
       label: key.label,
       securityLevel: key.securityLevel,
+      kind: elevationApproverKind(key.securityLevel),
+      ...(key.webauthn === undefined ? {} : { webauthn: key.webauthn }),
       enrolledAt: Option.getOrElse(DateTime.make(key.enrolledAt), () => DateTime.makeUnsafe(0)),
       lastUsedAt: Option.getOrNull(DateTime.make(lastUsed.get(key.keyId) ?? "")),
     }));
@@ -1009,6 +1013,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   });
 
   const attestationFlag = ATTESTATION_FLAGS[options.attestation];
+  // A Mac's or browser's key has no attestation to check; the flag puts that in the approved argv.
+  const proofFlags = (device: ElevationEnrollmentDevice) =>
+    isElevationUnattestedDevice(device) ? ["--unattested"] : attestationFlag;
 
   const withKeyFile = <A, E, R>(
     device: ElevationEnrollmentDevice,
@@ -1045,7 +1052,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       options.socketPath,
       "--key",
       keyPath,
-      ...attestationFlag,
+      ...proofFlags(input.device),
     ];
     if (input.password === null) {
       // The key file outlives this call, so it sits in the private state dir.
@@ -1077,6 +1084,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const enroll = Effect.fn("ElevationService.enroll")(function* (input: ElevationEnrollInput) {
     yield* requireSupported;
+    const { device } = input;
+    const proof = !isElevationUnattestedDevice(device)
+      ? ["--challenge", device.challenge, ...attestationFlag]
+      : device.webauthn === undefined
+        ? ["--unattested"]
+        : ["--unattested", "--rp-id", device.webauthn.rpId, "--origin", device.webauthn.origin];
     yield* runHelper({
       helper: yield* requireInstalledHelper,
       args: [
@@ -1087,9 +1100,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         input.device.label,
         "--public-key",
         input.device.publicKey,
-        "--challenge",
-        input.device.challenge,
-        ...attestationFlag,
+        ...proof,
       ],
       password: input.password,
       stdin: enrollmentObject(input.device),

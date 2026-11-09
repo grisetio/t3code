@@ -935,6 +935,66 @@ describe("ElevationService helper", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.live("enrolls and installs a Mac or browser key as --unattested, and lists it by kind", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const { webauthnDevice } = vectorsJson.keys;
+      const passkey = {
+        label: "Chrome on Mac",
+        publicKey: webauthnDevice.spkiDer,
+        webauthn: webauthnDevice.webauthn,
+      };
+      yield* fixture.service.enroll({ device: passkey });
+      assert.deepStrictEqual(lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))).slice(2), [
+        "enroll",
+        "--user",
+        "me",
+        "--label",
+        "Chrome on Mac",
+        "--public-key",
+        passkey.publicKey,
+        "--unattested",
+        "--rp-id",
+        "app.t3.codes",
+        "--origin",
+        "https://app.t3.codes",
+      ]);
+      assert.strictEqual(
+        yield* read(NodePath.join(fixture.dir, "helper.stdin")),
+        `${vectorsJson.helperInput.marker}\n${JSON.stringify(passkey)}`,
+      );
+
+      const mac = { label: "MacBook Pro", publicKey: vectorsJson.keys.newDevice.spkiDer };
+      yield* fixture.service.install({ password: "hunter2", device: mac });
+      const sudoArgs = lines(yield* read(NodePath.join(fixture.dir, "sudo.args")));
+      assert.deepStrictEqual(sudoArgs.slice(sudoArgs.indexOf("--key") + 2), ["--unattested"]);
+
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(fixture.dir, "etc", "keys", "me", `${webauthnDevice.keyId}.json`),
+          JSON.stringify({
+            version: 1,
+            keyId: webauthnDevice.keyId,
+            alg: "webauthn-es256",
+            publicKey: webauthnDevice.spkiDer,
+            label: "Chrome on Mac",
+            securityLevel: "webauthn",
+            enrolledAt: "2026-10-31T12:00:00Z",
+            webauthn: webauthnDevice.webauthn,
+          }),
+        ),
+      );
+      const status = yield* fixture.service.status;
+      assert.deepStrictEqual(
+        status.devices.map((device) => [device.label, device.kind, device.webauthn?.origin]),
+        [
+          ["Pixel", "phone", undefined],
+          ["Chrome on Mac", "browser", "https://app.t3.codes"],
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.live(
     "frames the enrollment so the helper finds it whether or not sudo read the password",
     () =>

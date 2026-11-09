@@ -8,6 +8,7 @@ import {
   decodeElevationPayload,
   elevationComparisonCode,
   elevationKeyIdFromSpkiSha256,
+  elevationWebauthnSite,
   escapeElevationDisplayText,
   parseElevationEnrollCommand,
 } from "./elevation.ts";
@@ -102,6 +103,45 @@ describe("elevation enrollment", () => {
     expect(withArgv([...argv, "--user"])).toBeNull();
     expect(withArgv(["/tmp/not-the-helper", ...argv.slice(1)])).toBeNull();
     expect(withArgv(argv.filter((_, index) => index !== 8 && index !== 9))).toBeNull();
+    // Unattested keys never take the attested grammar, nor it theirs.
+    expect(withArgv([...argv, "--unattested"])).toBeNull();
+    expect(
+      withArgv([...argv, "--rp-id", "localhost", "--origin", "http://localhost:3773"]),
+    ).toBeNull();
+    const unattested = [...argv.slice(0, 8), "--unattested"];
+    expect(withArgv(unattested)?.unattested).toBe(true);
+    expect(withArgv([...unattested, "--unattested"])).toBeNull();
+    expect(withArgv([...unattested, "--allow-test-attestation"])).toBeNull();
+    expect(withArgv([...unattested, "--rp-id", "localhost"])).toBeNull();
+    expect(
+      withArgv([...unattested, "--rp-id", "localhost", "--origin", "http://localhost:3773"])?.site,
+    ).toEqual({ rpId: "localhost", origin: "http://localhost:3773" });
+  });
+
+  it("binds a passkey only to an exact origin its rpId covers", () => {
+    const ok = (rpId: string, origin: string) => elevationWebauthnSite(rpId, origin) !== null;
+    expect(ok("app.t3.codes", "https://app.t3.codes")).toBe(true);
+    expect(ok("t3.codes", "https://app.t3.codes")).toBe(true);
+    expect(ok("mac.tail1234.ts.net", "https://mac.tail1234.ts.net:8443")).toBe(true);
+    expect(ok("localhost", "http://localhost:3773")).toBe(true);
+    expect(ok("localhost", "https://localhost")).toBe(true);
+    for (const [rpId, origin] of [
+      ["app.t3.codes", "https://t3.codes"],
+      ["pp.t3.codes", "https://app.t3.codes"],
+      ["app.t3.codes", "http://app.t3.codes"],
+      ["app.t3.codes", "https://app.t3.codes/"],
+      ["app.t3.codes", "https://app.t3.codes:443"],
+      ["localhost", "http://localhost:80"],
+      ["app.t3.codes", "https://app.t3.codes:0443"],
+      ["app.t3.codes", "https://app.t3.codes:70000"],
+      ["App.t3.codes", "https://App.t3.codes"],
+      ["192.168.1.20", "https://192.168.1.20"],
+      ["", "https://app.t3.codes"],
+      ["app.t3.codes", "https://user@app.t3.codes"],
+      ["app.t3.codes", "t3code://app.t3.codes"],
+    ] as const) {
+      expect(ok(rpId, origin), `${rpId} ${origin}`).toBe(false);
+    }
   });
 
   // Its owner could swap a user-writable copy after approval.

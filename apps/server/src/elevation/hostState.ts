@@ -12,7 +12,9 @@ import {
   ELEVATION_SIGNATURE_CONTEXT,
   ElevationKeyId,
   ElevationSecurityLevel,
+  ElevationWebauthnBinding,
   decodeElevationBase64Url,
+  elevationWebauthnSite,
   type ElevationCheck,
   type ElevationPayload,
   type ElevationSignedResponse,
@@ -49,16 +51,20 @@ export interface EnrolledKey {
   readonly label: string;
   readonly securityLevel: ElevationSecurityLevel;
   readonly enrolledAt: string;
+  /** A passkey's site; it signs only WebAuthn assertions from there. */
+  readonly webauthn?: ElevationWebauthnBinding;
 }
 
 const KeyFile = Schema.Struct({
   version: Schema.Literal(1),
   keyId: ElevationKeyId,
-  alg: Schema.Literal("es256"),
+  alg: Schema.Literals(["es256", "webauthn-es256"]),
   publicKey: Schema.String,
   label: Schema.String,
   securityLevel: ElevationSecurityLevel,
   enrolledAt: Schema.String,
+  attestationSummary: Schema.optionalKey(Schema.Unknown),
+  webauthn: Schema.optionalKey(ElevationWebauthnBinding),
 });
 const decodeKeyFile = Schema.decodeUnknownOption(Schema.fromJsonString(KeyFile));
 
@@ -155,12 +161,20 @@ export const readEnrolledKeys = Effect.fn("ElevationHostState.readEnrolledKeys")
     const publicKey = decodeElevationBase64Url(file.value.publicKey);
     if (publicKey === null || name !== `${file.value.keyId}.json`) continue;
     if (derivedKeyId(publicKey) !== file.value.keyId) continue;
+    const { alg, webauthn, attestationSummary } = file.value;
+    // As the module's parse_key_file: a passkey has a valid site and no attestation.
+    const passkey =
+      webauthn !== undefined &&
+      attestationSummary === undefined &&
+      elevationWebauthnSite(webauthn.rpId, webauthn.origin) !== null;
+    if (alg === "es256" ? webauthn !== undefined : !passkey) continue;
     keys.push({
       keyId: file.value.keyId,
       publicKey,
       label: file.value.label,
       securityLevel: file.value.securityLevel,
       enrolledAt: file.value.enrolledAt,
+      ...(webauthn === undefined ? {} : { webauthn }),
     });
   }
   return keys;
@@ -176,29 +190,116 @@ function derivedKeyId(spki: Uint8Array): string {
 
 export type SignatureCheck = "ok" | "unsupported_alg" | "unknown_key" | "bad_signature";
 
-/** The module's check minus the clock, which only the module's own clock decides. */
+const verifyDer = (publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array) => {
+  try {
+    return NodeCrypto.verify(
+      "sha256",
+      message,
+      { key: Buffer.from(publicKey), format: "der", type: "spki", dsaEncoding: "der" },
+      signature,
+    );
+  } catch {
+    return false;
+  }
+};
+
+const sha256 = (bytes: Uint8Array | string) =>
+  NodeCrypto.createHash("sha256").update(bytes).digest();
+
+const signedMessage = (payloadBytes: Uint8Array) =>
+  Buffer.concat([Buffer.from(ELEVATION_SIGNATURE_CONTEXT, "latin1"), payloadBytes]);
+
+const FLAG_UP = 0x01;
+const FLAG_UV = 0x04;
+const FLAG_BE = 0x08;
+
+/** The step a WebAuthn assertion fails, named as the module's `WebauthnFailure`. */
+export type WebauthnFailure =
+  | "encoding"
+  | "type"
+  | "challenge"
+  | "origin"
+  | "cross_origin"
+  | "rp_id"
+  | "user_presence"
+  | "user_verification"
+  | "backup_eligible"
+  | "signature";
+
+/**
+ * The module's `check_webauthn`, in its order. The challenge is the SHA-256 of what an
+ * `es256-der` key signs, so an assertion answers one payload only. A backup-eligible
+ * credential can sync to devices the user never enrolled, so it never approves.
+ */
+export function checkWebauthnAssertion(input: {
+  readonly key: EnrolledKey & { readonly webauthn: ElevationWebauthnBinding };
+  readonly payloadBytes: Uint8Array;
+  readonly authenticatorData: string;
+  readonly clientDataJSON: string;
+  readonly signature: Uint8Array;
+}): WebauthnFailure | null {
+  const authenticatorData = decodeElevationBase64Url(input.authenticatorData);
+  const clientDataBytes = decodeElevationBase64Url(input.clientDataJSON);
+  if (authenticatorData === null || authenticatorData.length < 37) return "encoding";
+  if (clientDataBytes === null) return "encoding";
+  let clientData: unknown;
+  try {
+    clientData = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(clientDataBytes));
+  } catch {
+    return "encoding";
+  }
+  if (typeof clientData !== "object" || clientData === null || Array.isArray(clientData)) {
+    return "encoding";
+  }
+  const fields = clientData as Record<string, unknown>;
+  if (fields.type !== "webauthn.get") return "type";
+  if (fields.challenge !== sha256(signedMessage(input.payloadBytes)).toString("base64url")) {
+    return "challenge";
+  }
+  if (fields.origin !== input.key.webauthn.origin) return "origin";
+  if (fields.crossOrigin !== undefined && fields.crossOrigin !== false) return "cross_origin";
+  if (!sha256(input.key.webauthn.rpId).equals(authenticatorData.subarray(0, 32))) return "rp_id";
+  const flags = authenticatorData[32] ?? 0;
+  if ((flags & FLAG_UP) === 0) return "user_presence";
+  if ((flags & FLAG_UV) === 0) return "user_verification";
+  if ((flags & FLAG_BE) !== 0) return "backup_eligible";
+  const signed = Buffer.concat([authenticatorData, sha256(clientDataBytes)]);
+  return verifyDer(input.key.publicKey, signed, input.signature) ? null : "signature";
+}
+
+/**
+ * The module's check minus the clock, which only the module's own clock decides. A key signs
+ * only in its own format: a passkey's key counts only inside an assertion from its site.
+ */
 export function checkSignature(input: {
   readonly payloadBytes: Uint8Array;
   readonly payload: ElevationPayload;
   readonly response: ElevationSignedResponse;
   readonly keys: ReadonlyArray<EnrolledKey>;
 }): SignatureCheck {
-  if (input.response.alg !== "es256-der") return "unsupported_alg";
+  const { alg } = input.response;
+  if (alg !== "es256-der" && alg !== "webauthn-es256") return "unsupported_alg";
   const key = input.keys.find((candidate) => candidate.keyId === input.response.keyId);
   if (key === undefined || !input.payload.keyIds.includes(key.keyId)) return "unknown_key";
   const signature = decodeElevationBase64Url(input.response.signature);
   if (signature === null || signature.length === 0) return "bad_signature";
-  try {
-    const verified = NodeCrypto.verify(
-      "sha256",
-      Buffer.concat([Buffer.from(ELEVATION_SIGNATURE_CONTEXT, "latin1"), input.payloadBytes]),
-      { key: Buffer.from(key.publicKey), format: "der", type: "spki", dsaEncoding: "der" },
-      signature,
-    );
-    return verified ? "ok" : "bad_signature";
-  } catch {
-    return "bad_signature";
+  const { webauthn } = key;
+  if (alg === "es256-der") {
+    if (webauthn !== undefined || input.response.webauthn !== undefined) return "bad_signature";
+    return verifyDer(key.publicKey, signedMessage(input.payloadBytes), signature)
+      ? "ok"
+      : "bad_signature";
   }
+  const assertion = input.response.webauthn;
+  if (webauthn === undefined || assertion === undefined) return "bad_signature";
+  const failure = checkWebauthnAssertion({
+    key: { ...key, webauthn },
+    payloadBytes: input.payloadBytes,
+    authenticatorData: assertion.authenticatorData,
+    clientDataJSON: assertion.clientDataJSON,
+    signature,
+  });
+  return failure === null ? "ok" : "bad_signature";
 }
 
 /** Parses `\0t3-elevation-module protocol=N\0` without loading the library. */

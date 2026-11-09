@@ -172,13 +172,25 @@ export function elevationKeyIdFromSpkiSha256(spkiSha256: Uint8Array): ElevationK
   return Base64Url.encode(spkiSha256.subarray(0, 16));
 }
 
+/** Where a passkey signs: assertions must come from exactly this origin, for this rpId. */
+export interface ElevationWebauthnSite {
+  readonly rpId: string;
+  /** `scheme://host[:port]`, as browsers write it into clientDataJSON. */
+  readonly origin: string;
+}
+
 export interface ElevationEnrollCommand {
   readonly user: string;
   readonly label: string;
   readonly publicKey: string;
-  readonly challenge: string;
+  /** The phone's attestation challenge; null with `--unattested`. */
+  readonly challenge: string | null;
   readonly allowDevAttestation: boolean;
   readonly allowTestAttestation: boolean;
+  /** Nothing proves where the key lives: a Mac's Secure Enclave key, or a passkey. */
+  readonly unattested: boolean;
+  /** `--rp-id` and `--origin`: a passkey that signs only on this site. */
+  readonly site: ElevationWebauthnSite | null;
 }
 
 /** Where install leaves the root-owned helper; the only copy the server runs once installed. */
@@ -189,7 +201,38 @@ const ENROLL_VALUE_OPTIONS = {
   "--label": "label",
   "--public-key": "publicKey",
   "--challenge": "challenge",
+  "--rp-id": "rpId",
+  "--origin": "origin",
 } as const;
+
+const isWebauthnHost = (text: string) =>
+  text.length > 0 &&
+  text.length <= 253 &&
+  text
+    .split(".")
+    .every((label) => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)) &&
+  !/^\d+$/.test(text.split(".").at(-1) ?? "");
+
+/**
+ * The origin exactly as a browser serializes it: `https://host[:port]`, or
+ * `http://localhost[:port]`, with no default port, path or trailing slash; and
+ * an rpId that is that host or a parent of it. The helper checks the same
+ * (`webauthn_site` in native/t3-elevation/src/enroll.rs).
+ */
+export function elevationWebauthnSite(rpId: string, origin: string): ElevationWebauthnSite | null {
+  const match = /^(https?):\/\/([^:/]*)(?::(\d+))?$/.exec(origin);
+  if (match === null) return null;
+  const [, scheme, host = "", port] = match;
+  if (scheme === "http" && host !== "localhost") return null;
+  if (port !== undefined) {
+    const value = Number(port);
+    if (port.startsWith("0") || value > 65535) return null;
+    if (port === (scheme === "https" ? "443" : "80")) return null;
+  }
+  if (!isWebauthnHost(host) || !isWebauthnHost(rpId)) return null;
+  if (host !== rpId && !host.endsWith(`.${rpId}`)) return null;
+  return { rpId, origin };
+}
 
 /**
  * The enroll grammar the helper accepts, run from its installed root-owned
@@ -211,6 +254,7 @@ export function parseElevationEnrollCommand(
   > = {};
   let allowDevAttestation = false;
   let allowTestAttestation = false;
+  let unattested = false;
   for (let index = 0; index < rest.length; index++) {
     const option = rest[index];
     if (option === "--allow-dev-attestation" || option === "--allow-test-attestation") {
@@ -220,6 +264,11 @@ export function parseElevationEnrollCommand(
       else allowTestAttestation = true;
       continue;
     }
+    if (option === "--unattested") {
+      if (unattested) return null;
+      unattested = true;
+      continue;
+    }
     if (option === undefined || !Object.hasOwn(ENROLL_VALUE_OPTIONS, option)) return null;
     const field = ENROLL_VALUE_OPTIONS[option as keyof typeof ENROLL_VALUE_OPTIONS];
     const value = rest[index + 1];
@@ -227,11 +276,22 @@ export function parseElevationEnrollCommand(
     values[field] = value;
     index++;
   }
-  const { user, label, publicKey, challenge } = values;
+  const { user, label, publicKey, challenge, rpId, origin } = values;
   if (user === undefined || label === undefined || publicKey === undefined) return null;
-  if (challenge === undefined) return null;
-  if (decodeElevationBase64Url(publicKey) === null || !Schema.is(Bytes32)(challenge)) return null;
-  return { user, label, publicKey, challenge, allowDevAttestation, allowTestAttestation };
+  if (decodeElevationBase64Url(publicKey) === null) return null;
+  const common = { user, label, publicKey, allowDevAttestation, allowTestAttestation };
+  if (unattested) {
+    // Nothing to attest, so no challenge and no attestation option.
+    if (challenge !== undefined || allowDevAttestation || allowTestAttestation) return null;
+    if ((rpId === undefined) !== (origin === undefined)) return null;
+    const site =
+      rpId === undefined || origin === undefined ? null : elevationWebauthnSite(rpId, origin);
+    if (rpId !== undefined && site === null) return null;
+    return { ...common, challenge: null, unattested, site };
+  }
+  if (challenge === undefined || !Schema.is(Bytes32)(challenge)) return null;
+  if (rpId !== undefined || origin !== undefined) return null;
+  return { ...common, challenge, unattested, site: null };
 }
 
 export const ElevationSignedResponse = Schema.Struct({
@@ -336,13 +396,45 @@ export const ElevationPendingRequests = Schema.Struct({
 });
 export type ElevationPendingRequests = typeof ElevationPendingRequests.Type;
 
-export const ElevationSecurityLevel = Schema.Literals(["strongbox", "tee", "software"]);
+/**
+ * Where a key lives. Phones attest StrongBox or TEE (`software` only with test attestation); a
+ * Mac's `secure_enclave` key and a browser's `webauthn` passkey are enrolled unattested.
+ */
+export const ElevationSecurityLevel = Schema.Literals([
+  "strongbox",
+  "tee",
+  "software",
+  "secure_enclave",
+  "webauthn",
+]);
 export type ElevationSecurityLevel = typeof ElevationSecurityLevel.Type;
+
+/** What approves: the Android app, a Mac's Touch ID, or a browser's passkey. */
+export const ElevationApproverKind = Schema.Literals(["phone", "mac", "browser"]);
+export type ElevationApproverKind = typeof ElevationApproverKind.Type;
+
+/** Only the Android app attests, so an unattested key is a Mac's or a browser's. */
+export const elevationApproverKind = (
+  securityLevel: ElevationSecurityLevel,
+): ElevationApproverKind =>
+  securityLevel === "webauthn" ? "browser" : securityLevel === "secure_enclave" ? "mac" : "phone";
+
+export const ElevationWebauthnBinding = Schema.Struct({
+  rpId: TrimmedNonEmptyString,
+  origin: TrimmedNonEmptyString,
+  /** base64url; approvals pass it in `allowCredentials`. */
+  credentialId: ElevationBase64Url.check(Schema.isMinLength(2), Schema.isMaxLength(1364)),
+});
+export type ElevationWebauthnBinding = typeof ElevationWebauthnBinding.Type;
 
 export const ElevationDevice = Schema.Struct({
   keyId: ElevationKeyId,
   label: Schema.String,
   securityLevel: ElevationSecurityLevel,
+  /** Older servers omit it; their devices are all phones. */
+  kind: Schema.optionalKey(ElevationApproverKind),
+  /** Set for a browser's passkey. */
+  webauthn: Schema.optionalKey(ElevationWebauthnBinding),
   enrolledAt: Schema.DateTimeUtc,
   lastUsedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
@@ -390,8 +482,11 @@ export const ElevationStatus = Schema.Struct({
 });
 export type ElevationStatus = typeof ElevationStatus.Type;
 
-export const ElevationEnrollmentDevice = Schema.Struct({
-  label: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+const EnrollmentLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+
+/** A phone's key, admitted by its Android key attestation. */
+export const ElevationAttestedEnrollmentDevice = Schema.Struct({
+  label: EnrollmentLabel,
   /** SPKI DER. */
   publicKey: ElevationBase64Url,
   /** 32 random bytes from the phone, also the key's attestation challenge. */
@@ -399,7 +494,29 @@ export const ElevationEnrollmentDevice = Schema.Struct({
   /** DER certificates, leaf first. */
   attestationChain: Schema.NonEmptyArray(ElevationBase64Url),
 });
+
+/**
+ * A Mac's Secure Enclave key or a browser's passkey. Nothing proves where it lives, so only an
+ * enrolled device approving its comparison code, or the password, admits it (`--unattested`).
+ */
+export const ElevationUnattestedEnrollmentDevice = Schema.Struct({
+  label: EnrollmentLabel,
+  /** SPKI DER. */
+  publicKey: ElevationBase64Url,
+  /** A passkey's site; absent for a Secure Enclave key. */
+  webauthn: Schema.optionalKey(ElevationWebauthnBinding),
+});
+
+export const ElevationEnrollmentDevice = Schema.Union([
+  ElevationAttestedEnrollmentDevice,
+  ElevationUnattestedEnrollmentDevice,
+]);
 export type ElevationEnrollmentDevice = typeof ElevationEnrollmentDevice.Type;
+
+/** An unattested device carries no attestation chain. */
+export const isElevationUnattestedDevice = (
+  device: ElevationEnrollmentDevice,
+): device is typeof ElevationUnattestedEnrollmentDevice.Type => !("attestationChain" in device);
 
 /** The sudo password goes to the server once and is never stored. */
 const ElevationPassword = Schema.String;
