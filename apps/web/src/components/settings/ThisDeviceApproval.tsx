@@ -207,7 +207,7 @@ export function ThisDeviceApproval(props: {
       device: {
         label: uniqueElevationApproverLabel(
           approver.label,
-          null,
+          approver.computerName,
           status.devices.map((device) => device.label),
         ),
         publicKey: created.publicKey,

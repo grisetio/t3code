@@ -149,6 +149,7 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
     return {
       kind: "browser",
       label: browserApproverLabel(userAgent),
+      computerName: null,
       // The binding can name the key of a setup the machine never accepted; every surface checks
       // it against the machine's keys before treating this browser as an approver there.
       keyId: unavailableReason === null ? (stored?.keyId ?? null) : null,

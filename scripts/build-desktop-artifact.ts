@@ -2487,8 +2487,9 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
 });
 
 /**
- * Device approval's helper and PAM module. First setup runs the helper with
- * sudo, and it copies itself and the module beside it into root-owned paths.
+ * Device approval's helper and PAM module, and the Touch ID approver. First setup
+ * runs the helper with sudo, and it copies itself and the module beside it into
+ * root-owned paths.
  */
 export const stageElevationHelper = Effect.fn("stageElevationHelper")(function* (input: {
   readonly repoRoot: string;
@@ -2551,6 +2552,18 @@ export const stageElevationHelper = Effect.fn("stageElevationHelper")(function* 
       verbose: input.verbose,
     });
   }
+  // Signs approvals with Touch ID on this Mac; its own bundle, so the sheet names T3 Code.
+  yield* runCommand(
+    ChildProcess.make(path.join(input.repoRoot, "native/t3-se-sign/build.sh"), [
+      "--out",
+      destinationDirectory,
+      "--arch",
+      input.arch,
+      "--icon",
+      path.join(input.stageResourcesDir, "icon.icns"),
+    ]),
+    { label: "build Touch ID approver", verbose: input.verbose },
+  );
 });
 
 export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (input: {
@@ -3892,13 +3905,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     arch: options.arch,
     verbose: options.verbose,
   });
-  yield* stageElevationHelper({
-    repoRoot,
-    stageResourcesDir,
-    platform: options.platform,
-    arch: options.arch,
-    verbose: options.verbose,
-  });
   if (options.platform === "linux") {
     for (const backend of ["kde", "hyprland"] as const)
       yield* stageLinuxCaptureHelper({
@@ -3927,6 +3933,14 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     },
     options.verbose,
   );
+  // After the icons: the Touch ID approver's bundle carries the app's icon.
+  yield* stageElevationHelper({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
