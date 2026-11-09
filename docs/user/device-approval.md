@@ -67,17 +67,17 @@ Web and desktop show requests and can deny them; approving needs the phone.
 
 ## Remove a device or turn it off
 
-In **Settings → Device approval**, open **Details**. **Revoke** removes another
-phone. On a phone, **Remove this phone** removes that phone after a fingerprint
-and deletes its key; other phones keep approving. If you lose a phone, revoke
-it from another device or with the password; the password keeps working for
-`sudo` in a terminal.
+In **Settings → Device approval**, each device that approves is listed under
+its machine, and **Remove** removes it. On a phone, **Remove this phone** removes
+that phone after a fingerprint and deletes its key; other devices keep approving.
+If you lose a phone, remove it from another device or with the password; the
+password keeps working for `sudo` in a terminal.
 
 If `sudo` on a Mac stops with "unable to initialize PAM", macOS's own
 administrator prompt still runs a command as root:
 `osascript -e 'do shell script "<command>" with administrator privileges'`.
 
-Once a phone is set up, adding a phone and revoking are approved on a phone by
+Once a phone is set up, adding a phone and removing one are approved on a phone by
 default. **Turn off** on web or desktop also asks a phone first; on the phone
 itself it asks for the sudo password. You can always use the password instead;
 it passes through the T3 Code server on its way to `sudo`.
