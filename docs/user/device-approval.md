@@ -90,6 +90,18 @@ itself.
 - The T3 Code server only relays requests. It can delay, drop, or deny one, but
   it can't approve one, and neither can an agent running as you.
 
+A Mac or a browser shows the command in T3 Code itself, so trust what it shows
+only as far as you trust where that code comes from:
+
+- When a Mac approves its own `sudo`, an agent running as you on that Mac could
+  open the same Touch ID prompt without a real card. Touch it only right after
+  choosing **Approve**. Approving another machine from the Mac is as safe as
+  the phone.
+- A browser runs the page it loaded. At an address served by the T3 Code server
+  itself, such as Tailscale, T3 Connect or `localhost`, that server could show one command
+  and ask the passkey to approve another. Approve from the phone or the Mac app
+  when you don't trust that server.
+
 ## Remove a device or turn it off
 
 In **Settings → Device approval**, each device that approves is listed under
