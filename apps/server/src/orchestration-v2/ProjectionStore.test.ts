@@ -1788,6 +1788,25 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       assert.lengthOf((yield* humanWindow()).projection.turnItems, 77);
       yield* setNewestTurnType("user_message");
 
+      // A row from a newer server with an item type this one lacks must not fail the window.
+      yield* sql`
+        UPDATE orchestration_v2_projection_turn_items
+        SET type = 'elevation_request', status = 'waiting',
+          payload_json = json_set(payload_json, '$.type', 'elevation_request', '$.status', 'waiting')
+        WHERE thread_id = ${threadId} AND ordinal = 999
+      `;
+      const unknownItem = (yield* humanWindow()).projection.turnItems.find(
+        (item) => item.ordinal === 999,
+      );
+      assert.strictEqual(unknownItem?.type, "system_notice");
+      assert.strictEqual(unknownItem?.status, "cancelled");
+      yield* sql`
+        UPDATE orchestration_v2_projection_turn_items
+        SET type = 'command_execution', status = 'completed',
+          payload_json = json_set(payload_json, '$.type', 'command_execution', '$.status', 'completed')
+        WHERE thread_id = ${threadId} AND ordinal = 999
+      `;
+
       // Fewer than 75 rows still need a byte pass after materializing wire payloads.
       yield* sql`
         UPDATE orchestration_v2_projection_turn_items

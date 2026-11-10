@@ -4,6 +4,7 @@ import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { makeThreadFind } from "./ThreadFind.ts";
+import { decodeTurnItemPayload } from "./TurnItemPayload.ts";
 import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -1079,9 +1080,6 @@ const decodeMessagePayload = Schema.decodeUnknownEffect(
 );
 const decodePlanJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2PlanArtifactSchema),
-);
-const decodeTurnItemPayload = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OrchestrationV2TurnItemJsonSchema),
 );
 const decodeCheckpointScopePayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2CheckpointScopeJsonSchema),
