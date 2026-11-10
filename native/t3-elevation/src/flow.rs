@@ -413,11 +413,13 @@ fn prepare(
     if !crate::install::sudoers_has_settings(&environment.sudoers, &user.name) {
         return None;
     }
-    let keys = keys::load_dir(
+    let mut keys = keys::load_dir(
         &environment.state_dir.join("keys").join(&user.name),
         &environment.policy,
     )
     .ok()?;
+    // A synced passkey isn't an approver while the policy is off, so no client offers it.
+    keys.retain(|key| config.allow_synced_passkeys || !key.file.synced);
     if keys.is_empty() {
         return None;
     }
@@ -1041,8 +1043,11 @@ mod tests {
         let (outcome, exchange) = setup.run(Mode::WebauthnBackupEligible, &sudo);
         assert_eq!(outcome, Outcome::Fail);
         assert_eq!(exchange.result.as_deref(), Some("bad_signature"));
-        // The device-bound phone key still approves.
-        assert_eq!(setup.run(Mode::Approve, &sudo).0, Outcome::Approved);
+        // No longer an approver, so no client offers it; the device-bound phone key still approves.
+        let (outcome, exchange) = setup.run(Mode::Approve, &sudo);
+        assert_eq!(outcome, Outcome::Approved);
+        let listed = exchange.payload.unwrap()["keyIds"].to_string();
+        assert!(!listed.contains(&vector_key("webauthnDevice").key_id));
     }
 
     /// Changing the policy is a sudo of the helper, admitted like adding a

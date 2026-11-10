@@ -438,7 +438,9 @@ Unknown keys are ignored; `version` other than 1 or `enabled = false` means
 `PAM_IGNORE`. `allow_synced_passkeys` lets passkeys a password manager syncs
 enroll and approve: anyone with that account could approve. Only the helper's
 `policy` command changes it, and only in a config `installed-by-t3.json` records;
-a config written by Nix or by hand is changed there.
+a config written by Nix or by hand is changed there. While it is off, the module
+leaves keys whose file says `synced` out of `keyIds`, so no client offers them;
+the BE check still refuses a synced assertion from any other key.
 
 `/etc/t3-elevation/keys/<user>/<keyId>.json`:
 
