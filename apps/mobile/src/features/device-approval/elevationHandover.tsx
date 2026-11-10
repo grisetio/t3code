@@ -62,6 +62,7 @@ export function ElevationCommandRowExit(props: {
   const leaving = phase === "leaving" || phase === "left" || gone;
   const reduceMotion = useReducedMotion();
   const opacity = useAnimatedValue(1);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the native-driver fade as the row starts leaving
   useEffect(() => {
     if (!leaving) return;
     NativeAnimated.timing(opacity, {
