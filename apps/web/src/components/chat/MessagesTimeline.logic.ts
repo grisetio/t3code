@@ -1414,6 +1414,8 @@ export function deriveMessagesTimelineRows(input: {
    * runless entries are the current response instead of settled history.
    */
   runlessWorkActive?: boolean;
+  /** Something else in the live turn says what it's doing, so no Thinking row stands in for it. */
+  liveActivityShownElsewhere?: boolean;
   activeTurnStartedAt?: string | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   supportsConversationRollback: boolean;
@@ -1971,6 +1973,7 @@ export function deriveMessagesTimelineRows(input: {
   if (
     input.isWorking &&
     input.latestRun?.turnEnded !== true &&
+    input.liveActivityShownElsewhere !== true &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
     (!hasActivityRow || latestToolFailed)

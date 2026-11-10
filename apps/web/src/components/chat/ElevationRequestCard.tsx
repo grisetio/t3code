@@ -17,6 +17,7 @@ import {
   elevationCommandDisplay,
   type ElevationCommandDisplay,
 } from "@t3tools/client-runtime/elevation-command";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type {
   ElevationPayloadDecodeFailure,
   EnvironmentId,
@@ -87,7 +88,8 @@ const FRESH_CARD_MS = 3_000;
  * it ends it becomes a work-log row. A card seen ending says how for a moment, however it ended
  * (answered here or elsewhere, or expired), then collapses. The agent's command row the request
  * stands in for stays until then (`useElevationHandoverStore`), and the settled row replaces it in
- * the same commit that removes the card, so nothing around them moves.
+ * the same commit that removes the card, so nothing around them moves. A turn that ended folds
+ * then too, so the rows its fold hides close with the card.
  */
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -99,7 +101,7 @@ export function ElevationRequestCard(props: {
   readonly command?: OrchestrationV2ProjectedTurnItem | undefined;
 }) {
   const { item } = props;
-  const { activeTurnInProgress, latestRunId } = use(TimelineRowActivityCtx);
+  const { activeTurnInProgress, latestRunId, elevationFoldRunIds } = use(TimelineRowActivityCtx);
   const { workspaceRoot } = use(TimelineRowCtx);
   const agent = useElevationAgent(props.environmentId, item.threadId);
   // The turn item doesn't carry how many requests came before; the pending request does.
@@ -130,15 +132,17 @@ export function ElevationRequestCard(props: {
   const settling = phase === "card" && !pendingHere;
 
   const cardKey = `${props.environmentId}\u0000${item.requestId}`;
+  const threadKey = scopedThreadKey(scopeThreadRef(props.environmentId, item.threadId));
   const hold = useElevationHandoverStore((state) => state.hold);
+  const fold = useElevationHandoverStore((state) => state.fold);
   const release = useElevationHandoverStore((state) => state.release);
   const onScreen = phase !== "row";
   const { commandKey } = props;
   useLayoutEffect(() => {
     if (!onScreen) return;
-    hold(cardKey, { commandKey, runId: item.runId });
+    hold(cardKey, { commandKey, runId: item.runId, threadKey });
     return () => release(cardKey);
-  }, [onScreen, cardKey, commandKey, item.runId, hold, release]);
+  }, [onScreen, cardKey, commandKey, item.runId, threadKey, hold, release]);
   // One commit removes the card, shows its row and drops the command row it stands in for.
   const handOver = () =>
     flushSync(() => {
@@ -147,9 +151,13 @@ export function ElevationRequestCard(props: {
       release(cardKey);
     });
   const replacesCommand = props.command !== undefined;
+  const foldsAfter = item.runId !== null && elevationFoldRunIds.has(item.runId);
   const endHold = useEffectEvent(() => {
     if (reduceMotion) return handOver();
-    setRowGrows(!replacesCommand);
+    // A turn that ended folds as the card hands over: the rows it hides, the agent's command row
+    // among them, close with the card while the row opens under the fold's header.
+    if (foldsAfter) fold(cardKey);
+    setRowGrows(foldsAfter || !replacesCommand);
     setPhase("collapsing");
   });
   const endCollapse = useEffectEvent(handOver);

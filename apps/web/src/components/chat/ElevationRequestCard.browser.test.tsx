@@ -42,6 +42,7 @@ vi.mock(import("../elevation/ElevationAgentMark"), async (original) => ({
 import { act, fakeTimers, render, type Screen } from "../../../test/render";
 import { enrollThisBrowser, virtualAuthenticator } from "../../../test/virtualPasskey";
 import { ELEVATION_COLLAPSE_MS, ELEVATION_SETTLE_MS } from "../elevation/ElevationPendingCard";
+import { useElevationHandoverStore } from "../elevation/elevationHandoverStore";
 import { ElevationRequestCard } from "./ElevationRequestCard";
 import {
   TimelineRowActivityCtx,
@@ -117,7 +118,8 @@ function request(
   };
 }
 
-function timeline(item: ElevationRequestItem) {
+/** `foldsAfter`: the turn has ended and folds once the card hands over. */
+function timeline(item: ElevationRequestItem, foldsAfter = false) {
   return (
     <TimelineRowCtx value={{ workspaceRoot: "/repo" } as TimelineRowSharedState}>
       <TimelineRowActivityCtx
@@ -130,6 +132,7 @@ function timeline(item: ElevationRequestItem) {
           isPreparingWorktree: false,
           latestRunId: runId,
           backgroundWorktreeSetup: null,
+          elevationFoldRunIds: new Set(foldsAfter ? [runId] : []),
         }}
       >
         <ElevationRequestCard
@@ -200,5 +203,28 @@ describe("ElevationRequestCard", () => {
       ),
     );
     await expectHoldThenRow(screen, "Approved on Galaxy Z Fold");
+  });
+
+  it("closes its ended turn's fold along with it", async () => {
+    setup();
+    await using screen = await render(timeline(request([PHONE_KEY]), true));
+    using _timers = fakeTimers();
+    await screen.rerender(
+      timeline(
+        request([PHONE_KEY], {
+          elevationStatus: "denied",
+          resolvedBy: { deviceLabel: "Galaxy Z Fold", keyId: PHONE_KEY },
+        }),
+        true,
+      ),
+    );
+    await advance(ELEVATION_SETTLE_MS - 1);
+    expect(useElevationHandoverStore.getState().foldingRunIds.has(runId)).toBe(false);
+    await advance(1);
+    // The timeline closes the rows the fold hides over the same collapse.
+    expect(useElevationHandoverStore.getState().foldingRunIds.has(runId)).toBe(true);
+    await advance(ELEVATION_COLLAPSE_MS);
+    expect(useElevationHandoverStore.getState().runIds.has(runId)).toBe(false);
+    expect(screen.getByRole("button", { name: /^Denied/ }).query()).not.toBeNull();
   });
 });

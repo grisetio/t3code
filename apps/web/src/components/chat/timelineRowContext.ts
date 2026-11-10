@@ -75,6 +75,8 @@ export interface TimelineRowActivityState {
   isPreparingWorktree: boolean;
   latestRunId: RunId | null;
   backgroundWorktreeSetup: WorktreeSetupSnapshot | null;
+  /** Ended turns held open by a sudo card: they fold once the card has handed over. */
+  elevationFoldRunIds: ReadonlySet<RunId>;
 }
 
 export const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
