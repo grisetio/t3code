@@ -53,7 +53,8 @@ pub enum WebauthnFailure {
     RpId,
     UserPresence,
     UserVerification,
-    /// A synced passkey: other devices could approve with it.
+    /// A synced passkey while the user's config doesn't allow them: other
+    /// devices could approve with it.
     BackupEligible,
     Signature,
 }
@@ -85,13 +86,16 @@ pub fn webauthn_challenge(payload: &[u8]) -> [u8; 32] {
 }
 
 /// WebAuthn L3 §7.2 for one enrolled credential. signCount is ignored: synced
-/// and some platform authenticators always report 0.
+/// and some platform authenticators always report 0. BE is checked on every
+/// assertion, whatever enrollment saw, so turning `allow_synced` off stops a
+/// synced key at once.
 pub fn check_webauthn(
     key: &VerifyingKey,
     binding: &WebauthnBinding,
     payload: &[u8],
     assertion: &Assertion,
     signature_der: &[u8],
+    allow_synced: bool,
 ) -> Result<(), WebauthnFailure> {
     use WebauthnFailure as F;
     let authenticator_data = b64::decode(assertion.authenticator_data)
@@ -129,7 +133,7 @@ pub fn check_webauthn(
     if flags & FLAG_UV == 0 {
         return Err(F::UserVerification);
     }
-    if flags & FLAG_BE != 0 {
+    if flags & FLAG_BE != 0 && !allow_synced {
         return Err(F::BackupEligible);
     }
     let Ok(signature) = Signature::from_der(signature_der) else {
@@ -155,13 +159,14 @@ pub fn verify_es256(key: &VerifyingKey, payload: &[u8], signature_der: &[u8]) ->
 }
 
 /// `expires_at` and `now` are the module's own clock; the payload is the exact
-/// bytes the module produced.
+/// bytes the module produced. `allow_synced` is the user's config.
 pub fn verify(
     payload: &[u8],
     expires_at: i64,
     response: &Response,
     keys: &[EnrolledKey],
     now: i64,
+    allow_synced: bool,
 ) -> Result<String, VerifyError> {
     if !matches!(response.alg, "es256-der" | "webauthn-es256") {
         return Err(VerifyError::UnsupportedAlg);
@@ -182,9 +187,15 @@ pub fn verify(
     // good only with the origin and flags checks around them.
     let verified = match (response.alg, &key.file.webauthn, &response.webauthn) {
         ("es256-der", None, None) => verify_es256(&key.verifying_key, payload, &signature),
-        ("webauthn-es256", Some(binding), Some(assertion)) => {
-            check_webauthn(&key.verifying_key, binding, payload, assertion, &signature).is_ok()
-        }
+        ("webauthn-es256", Some(binding), Some(assertion)) => check_webauthn(
+            &key.verifying_key,
+            binding,
+            payload,
+            assertion,
+            &signature,
+            allow_synced,
+        )
+        .is_ok(),
         _ => false,
     };
     if !verified {

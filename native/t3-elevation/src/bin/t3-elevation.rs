@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 use std::io::{IsTerminal as _, Read as _, Write as _};
 use t3_elevation::attestation::{self, Enrollment, Pins, Trust};
-use t3_elevation::enroll::{Proof, UnattestedEnrollment};
-use t3_elevation::install::{self, Admission, KeyError, Layout, Sources};
+use t3_elevation::enroll::{Proof, Registration, UnattestedEnrollment};
+use t3_elevation::install::{self, Admission, KeyError, Layout, PolicyError, Sources};
 use t3_elevation::keys::WebauthnBinding;
 use t3_elevation::{HELPER_VERSION, PROTOCOL_VERSION, b64, config, keys, sys};
 
@@ -144,7 +144,7 @@ struct Admitted {
 enum How {
     Attested(attestation::Verified),
     SecureEnclave,
-    Webauthn(WebauthnBinding),
+    Webauthn(WebauthnBinding, Registration),
 }
 
 impl Admitted {
@@ -152,7 +152,7 @@ impl Admitted {
         match &self.how {
             How::Attested(verified) => Admission::Attested(verified),
             How::SecureEnclave => Admission::SecureEnclave,
-            How::Webauthn(binding) => Admission::Webauthn(binding),
+            How::Webauthn(binding, registration) => Admission::Webauthn(binding, registration),
         }
     }
 }
@@ -170,18 +170,27 @@ fn verify_attested(enrollment: &Enrollment, trust: Trust) -> Result<Admitted, Fa
 }
 
 /// Only with `--unattested` in the approved argv (or the password's install);
-/// the attested path never reads this shape.
-fn verify_unattested(enrollment: UnattestedEnrollment) -> Result<Admitted, Failure> {
-    let spki = t3_elevation::enroll::check_unattested(&enrollment)
+/// the attested path never reads this shape. A synced passkey enrolls only
+/// while the user's config allows synced passkeys.
+fn verify_unattested(
+    enrollment: UnattestedEnrollment,
+    allow_synced: bool,
+) -> Result<Admitted, Failure> {
+    let (spki, registration) = t3_elevation::enroll::check_unattested(&enrollment, allow_synced)
         .map_err(|rejected| fail(rejected.code, rejected.message))?;
     Ok(Admitted {
         label: enrollment.label,
         spki,
-        how: match enrollment.webauthn {
-            Some(binding) => How::Webauthn(binding.binding()),
-            None => How::SecureEnclave,
+        how: match (enrollment.webauthn, registration) {
+            (Some(binding), Some(registration)) => How::Webauthn(binding.binding(), registration),
+            _ => How::SecureEnclave,
         },
     })
+}
+
+/// The installed config's `allow_synced_passkeys`; false before install.
+fn allows_synced(layout: &Layout, user: &str) -> bool {
+    install::read_config(layout, user).is_some_and(|config| config.allow_synced_passkeys)
 }
 
 fn key_error(error: KeyError) -> Failure {
@@ -200,7 +209,11 @@ fn key_result(key_id: &str, admitted: &Admitted) -> Value {
     let (security_level, trust) = match &admitted.how {
         How::Attested(verified) => (verified.security_level, Some(verified.trust)),
         How::SecureEnclave => ("secure_enclave", None),
-        How::Webauthn(_) => ("webauthn", None),
+        How::Webauthn(..) => ("webauthn", None),
+    };
+    let registration = match &admitted.how {
+        How::Webauthn(_, registration) => Some(registration),
+        _ => None,
     };
     json!({
         "keyId": key_id,
@@ -210,6 +223,8 @@ fn key_result(key_id: &str, admitted: &Admitted) -> Value {
         "attested": trust.is_some(),
         "devAttestation": trust.is_some_and(|trust| trust != Trust::Release),
         "testAttestation": trust == Some(Trust::Test),
+        "synced": registration.is_some_and(|registration| registration.synced),
+        "aaguid": registration.and_then(|registration| registration.aaguid.clone()),
     })
 }
 
@@ -314,7 +329,9 @@ fn install(args: &[String]) -> Outcome {
         (false, false, false) => verify_attested(&parse_json(&input)?, Trust::Release)?,
         (true, false, false) => verify_attested(&parse_json(&input)?, Trust::Dev)?,
         (false, true, false) => verify_attested(&parse_json(&input)?, Trust::Test)?,
-        (false, false, true) => verify_unattested(parse_json(&input)?)?,
+        (false, false, true) => {
+            verify_unattested(parse_json(&input)?, allows_synced(&layout, &user))?
+        }
         _ => {
             return Err(fail(
                 "usage",
@@ -375,6 +392,7 @@ fn enroll(args: &[String]) -> Outcome {
             "stdin doesn't start with the t3-elevation-input-v1 line",
         )
     })?;
+    let layout = Layout::system(&user);
     let mismatch = || {
         fail(
             "mismatch",
@@ -408,10 +426,9 @@ fn enroll(args: &[String]) -> Outcome {
             {
                 return Err(mismatch());
             }
-            verify_unattested(enrollment)?
+            verify_unattested(enrollment, allows_synced(&layout, &user))?
         }
     };
-    let layout = Layout::system(&user);
     let (key_id, bytes) = install::key_file_bytes(
         &admitted.spki,
         &admitted.label,
@@ -432,6 +449,35 @@ fn revoke(args: &[String]) -> Outcome {
     let removed = install::revoke(&Layout::system(&user), &user, options.get("--key-id"))
         .map_err(key_error)?;
     Ok(json!({ "ok": true, "revoked": removed }))
+}
+
+/// `policy --user U --allow-synced-passkeys on|off`: changes a config T3
+/// installed. Like enroll and revoke, it runs under sudo, so an enrolled
+/// device's approval of this exact argv, or the password, admits it.
+fn policy(args: &[String]) -> Outcome {
+    let options = Options::parse(args, &["--user", "--allow-synced-passkeys"], &[])?;
+    let allow = match options.require("--allow-synced-passkeys")? {
+        "on" => true,
+        "off" => false,
+        _ => return Err(fail("usage", "--allow-synced-passkeys must be on or off")),
+    };
+    require_root()?;
+    let user = user(&options)?;
+    let changed = install::set_allow_synced_passkeys(&Layout::system(&user), &user, allow)
+        .map_err(|error| match error {
+            PolicyError::NotInstalled => fail(
+                "not_installed",
+                format!("users/{user}.toml is missing, unsafe or invalid; run install first"),
+            ),
+            PolicyError::ManagedElsewhere => fail(
+                "managed_elsewhere",
+                format!(
+                    "users/{user}.toml wasn't written by T3; set allow_synced_passkeys where it is managed"
+                ),
+            ),
+            PolicyError::Io(message) => fail("io", message),
+        })?;
+    Ok(json!({ "ok": true, "allowSyncedPasskeys": allow, "changed": changed }))
 }
 
 fn uninstall(args: &[String]) -> Outcome {
@@ -462,10 +508,11 @@ fn main() {
         "install" => install(rest),
         "enroll" => enroll(rest),
         "revoke" => revoke(rest),
+        "policy" => policy(rest),
         "uninstall" => uninstall(rest),
         _ => Err(fail(
             "usage",
-            "usage: t3-elevation version|status|install|enroll|revoke|uninstall ...",
+            "usage: t3-elevation version|status|install|enroll|revoke|policy|uninstall ...",
         )),
     };
     let (value, code) = match outcome {

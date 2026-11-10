@@ -143,8 +143,10 @@ module fails the stack with `invalid_encoding` instead of building a payload.
     DER signature over `authenticatorData || SHA-256(clientDataJSON)`. The module
     checks, in order: `type` is `webauthn.get`; the challenge; `origin` equals the
     key's origin exactly; `crossOrigin` is absent or false; the rpIdHash; UP, then
-    UV, set; BE clear, since a backup-eligible passkey can sync to devices nobody
-    enrolled; the signature. `signCount` is ignored: device-bound platform passkeys
+    UV, set; BE clear unless the user's config sets `allow_synced_passkeys`, since
+    a backup-eligible passkey can sync to devices nobody enrolled; the signature.
+    BE is read from each assertion, not from the key file, so turning the setting
+    off stops a synced key at once. `signCount` is ignored: device-bound platform passkeys
     report 0. `webauthnVerify` in the test vectors names the failing step.
   - A key signs only in its own format: an `es256` key never in an assertion, and a
     passkey's key only inside an assertion from its site.
@@ -241,11 +243,13 @@ requesting a challenge and enrolling.
 An unattested key's object is `{ label, publicKey, webauthn? }`, where a passkey's
 `webauthn` is `{ rpId, origin, credentialId, authenticatorData }`; the credential
 ID and the registration's authenticator data ride only here, not in the argv.
-A registration with BE set is refused before it is enrolled (`synced_passkey`),
-first by the server and again by the helper, as is one whose rpIdHash or
-credential ID doesn't match (`invalid_passkey`). With `attestation: "none"`
-nothing signs that data, so this only stops an honest mistake early; refusing
-BE in every assertion is the guarantee. The key file keeps only the site. For
+Unless the user's config sets `allow_synced_passkeys`, a registration with BE
+set is refused before it is enrolled (`synced_passkey`), first by the browser and
+server and again by the helper, as is one whose rpIdHash or credential ID doesn't
+match (`invalid_passkey`). With `attestation: "none"` nothing signs that data, so
+this only stops an honest mistake early; the BE check in every assertion is the
+guarantee. The key file keeps the site, whether BE was set (`synced`), and the
+AAGUID, which clients map to a password manager's name. For
 `enroll`, `label`, `publicKey`, `challenge`, and a passkey's `rpId` and `origin`
 must equal the argv values.
 
@@ -427,10 +431,14 @@ enabled = true
 socket = "/Users/kgriset/.t3/userdata/elevation.sock"
 approval_window_seconds = 100 # optional; default 100, clamped to 10..300
 session_max_uses = 16 # optional; default 16, clamped to 0..64; 0 asks for every sudo
+allow_synced_passkeys = false # optional; default false
 ```
 
 Unknown keys are ignored; `version` other than 1 or `enabled = false` means
-`PAM_IGNORE`.
+`PAM_IGNORE`. `allow_synced_passkeys` lets passkeys a password manager syncs
+enroll and approve: anyone with that account could approve. Only the helper's
+`policy` command changes it, and only in a config `installed-by-t3.json` records;
+a config written by Nix or by hand is changed there.
 
 `/etc/t3-elevation/keys/<user>/<keyId>.json`:
 
@@ -445,8 +453,12 @@ Unknown keys are ignored; `version` other than 1 or `enabled = false` means
 
 { "version": 1, "keyId": "...", "alg": "webauthn-es256", "publicKey": "...", "label": "Chrome on Mac",
   "securityLevel": "webauthn", "enrolledAt": "...",
-  "webauthn": { "rpId": "app.t3.codes", "origin": "https://app.t3.codes", "credentialId": "<b64url>" } }
+  "webauthn": { "rpId": "app.t3.codes", "origin": "https://app.t3.codes", "credentialId": "<b64url>" },
+  "synced": true, "aaguid": "d548826e-79b4-db40-a3d8-11116f7e8349" }
 ```
+
+`synced` (absent means false) and `aaguid` (absent when the browser zeroed it)
+appear only on passkeys; older modules and servers ignore them.
 
 The module ignores a key file whose name, `keyId`, and derived keyId disagree,
 and a `webauthn-es256` file without a valid site or with an `attestationSummary`.
@@ -556,6 +568,7 @@ by interrupting the helper when another device answers.
 | `t3-elevation install --user U --socket P --key <-\|file> [--window S] [--allow-dev-attestation \| --allow-test-attestation \| --unattested]` | Writes missing files, enrolls the first key. On a TTY it prints the label and comparison code and asks to confirm.                                                                          |
 | `t3-elevation enroll ...`                                                                                                                     | See the grammar above; marker line and enrollment object on stdin.                                                                                                                          |
 | `t3-elevation revoke --user U (--key-id ID \| --all)`                                                                                         | Removes key files.                                                                                                                                                                          |
+| `t3-elevation policy --user U --allow-synced-passkeys on\|off`                                                                                | Sets `allow_synced_passkeys` in a config T3 installed; `managed_elsewhere` otherwise.                                                                                                       |
 | `t3-elevation uninstall --user U`                                                                                                             | Reverts `installed-by-t3.json`.                                                                                                                                                             |
 
 ## Server and clients

@@ -92,7 +92,7 @@ fn payloads_decode_reencode_and_verify() {
         let issued_at = vector["decoded"]["issuedAt"].as_i64().unwrap();
         let expires_at = vector["decoded"]["expiresAt"].as_i64().unwrap();
         assert!(
-            verify::verify(&raw, expires_at, &response, &keys, issued_at).is_ok(),
+            verify::verify(&raw, expires_at, &response, &keys, issued_at, false).is_ok(),
             "{name}"
         );
     }
@@ -143,7 +143,7 @@ fn verify_vectors() {
             .unwrap_or(0);
         let response = response_of(&vector["response"]);
         let now = vector["now"].as_i64().unwrap();
-        let result = match verify::verify(&raw, expires_at, &response, &keys, now) {
+        let result = match verify::verify(&raw, expires_at, &response, &keys, now, false) {
             Ok(_) => "ok",
             Err(error) => error.as_str(),
         };
@@ -172,6 +172,7 @@ fn webauthn_steps() {
             &bytes(vector, "payload"),
             assertion,
             &signature,
+            false,
         )
         .err()
         .map(|failure| failure.as_str());
@@ -367,6 +368,7 @@ fn webauthn_registrations() {
             &bytes(vector, "authenticatorData"),
             str_of(vector, "rpId"),
             &bytes(vector, "credentialId"),
+            false,
         )
         .err()
         .map(|refusal| match refusal {
@@ -403,14 +405,18 @@ fn unattested_passkeys_carry_their_registration() {
     };
     // The site alone no longer decodes: the registration is required.
     assert!(enrollment(None).is_err());
-    let code = |name: &str| {
-        enroll::check_unattested(&enrollment(Some(registration(name))).unwrap())
-            .err()
-            .map(|rejected| rejected.code)
+    let check = |name: &str, allow_synced: bool| {
+        enroll::check_unattested(&enrollment(Some(registration(name))).unwrap(), allow_synced)
+            .map(|(_, registration)| registration.unwrap().synced)
+            .map_err(|rejected| rejected.code)
     };
-    assert_eq!(code("device_bound"), None);
-    assert_eq!(code("synced"), Some("synced_passkey"));
-    assert_eq!(code("other_credential"), Some("invalid_passkey"));
+    assert_eq!(check("device_bound", false), Ok(false));
+    assert_eq!(check("synced", false), Err("synced_passkey"));
+    assert_eq!(check("other_credential", false), Err("invalid_passkey"));
+    // Allowing synced passkeys admits them, marked synced, and nothing invalid.
+    assert_eq!(check("device_bound", true), Ok(false));
+    assert_eq!(check("synced", true), Ok(true));
+    assert_eq!(check("other_credential", true), Err("invalid_passkey"));
 }
 
 #[test]
