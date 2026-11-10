@@ -40,11 +40,11 @@ export interface ElevationApprover {
   /**
    * Makes the key for "Add device": an SPKI DER public key, plus the passkey's site and
    * registration for a browser. Null when the user cancelled. `account.name` is what a passkey
-   * manager lists the key as.
+   * manager lists the key as; `account.allowSynced` is the machine's synced-passkey setting.
    */
   readonly createKey: (
     signal: AbortSignal,
-    account: { readonly name: string },
+    account: { readonly name: string; readonly allowSynced: boolean },
   ) => Promise<{
     readonly publicKey: string;
     readonly webauthn?: ElevationWebauthnEnrollment;

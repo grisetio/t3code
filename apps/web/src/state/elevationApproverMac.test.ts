@@ -117,7 +117,10 @@ describe("createMacApproverSource", () => {
     t.source.get(ENV);
     await vi.waitFor(() => expect(t.source.get(ENV)).not.toBeNull());
     t.focus.dispatchEvent(new Event("focus"));
-    await t.source.get(ENV)!.createKey(new AbortController().signal, { name: "kgriset on oracle" });
+    await t.source.get(ENV)!.createKey(new AbortController().signal, {
+      name: "kgriset on oracle",
+      allowSynced: false,
+    });
     await vi.waitFor(() => expect(t.source.get(ENV)?.keyId).toBe(KEY));
 
     await t.source.get(ENV)!.forget();

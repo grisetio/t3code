@@ -8,6 +8,7 @@ import {
   deviceApprovalHandoff,
   deviceApprovalSetupChanges,
   deviceApprovalState,
+  deviceApprovalSyncedPasskeysChange,
   deviceApprovalTurnOff,
   pickDeviceApprovalFixProject,
   planDeviceApprovalFix,
@@ -200,6 +201,35 @@ describe("deviceApprovalTurnOff", () => {
     expect(deviceApprovalTurnOff(status({ installedByT3: false }))).toBe("agent");
     expect(deviceApprovalTurnOff(status({ installedByT3: true, helperInstalled: false }))).toBe(
       "agent",
+    );
+  });
+});
+
+describe("deviceApprovalSyncedPasskeysChange", () => {
+  it("lets the helper change a config T3 installed and hands any other to an agent", () => {
+    expect(deviceApprovalSyncedPasskeysChange(status({ allowSyncedPasskeys: false }))).toBe(
+      "helper",
+    );
+    expect(
+      deviceApprovalSyncedPasskeysChange(
+        status({ allowSyncedPasskeys: true, setupOutsideT3: true }),
+      ),
+    ).toBe("agent");
+    // Older servers don't send the setting, and can't change it.
+    expect(deviceApprovalSyncedPasskeysChange(status())).toBeNull();
+  });
+
+  it("asks an agent to change the setting where the config comes from", () => {
+    const { draft } = deviceApprovalHandoff({
+      purpose: "allow_synced_passkeys",
+      machine: "Mac mini",
+      status: status({ allowSyncedPasskeys: false, setupOutsideT3: true }),
+      failing: [],
+      repair: null,
+      projectOwnsConfig: false,
+    });
+    expect(draft).toBe(
+      "Set allow_synced_passkeys = true in /etc/t3-elevation/users/kim.toml on Mac mini, so passkeys saved in a password manager can approve agents' sudo. The file comes from config outside T3; change it there rather than editing the machine directly.",
     );
   });
 });

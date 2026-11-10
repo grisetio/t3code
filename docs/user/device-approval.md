@@ -139,10 +139,17 @@ with nothing set up yet, that password also turns device approval on. After
 that, requests in the browser show **Approve**, which asks for your fingerprint
 or your computer's password. Cancel there denies.
 
-A passkey saved to Google Password Manager, iCloud Keychain, or another password
-manager syncs to your other devices, and each of them could then approve, so
-T3 Code refuses it; set up again and save it to this device only. Safari saves
-every passkey to iCloud Keychain, so it can't approve.
+A passkey saved to a password manager, such as Bitwarden, 1Password, Google
+Password Manager, or iCloud Keychain, syncs to your other devices, so T3 Code
+refuses it unless you allow it. To allow it, open **Details** under the machine
+and turn on **Allow passkeys from password managers**; a device that is already
+set up, or the machine's password, approves the change. Anyone who can open that
+password manager account could then approve agents' sudo, and some managers
+count an unlocked vault as your fingerprint, so turn on the manager's re-prompt
+for the passkey if you want to be asked each time. Turning the setting off stops
+those passkeys approving straight away. If the machine's device approval comes
+from config outside T3, such as Nix, the switch asks an agent to change it there.
+Safari saves every passkey to iCloud Keychain and can't approve.
 
 Passkeys need a secure address: `https`, such as through Tailscale or T3
 Connect, or `localhost`. Over plain `http` on a network address, **Set up** is

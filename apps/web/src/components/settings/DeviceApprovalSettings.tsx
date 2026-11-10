@@ -1,7 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  ELEVATION_SYNCED_PASSKEYS_WARNING,
   ELEVATION_TOUCH_ID_HINT,
   elevationApproverDescription,
+  elevationDeviceBlockedReason,
   elevationDeviceKind,
   elevationFailureMessage,
   elevationPasswordWords,
@@ -12,6 +14,7 @@ import {
   deviceApprovalCheckOwner,
   deviceApprovalFailingChecks,
   deviceApprovalState,
+  deviceApprovalSyncedPasskeysChange,
   deviceApprovalTurnOff,
   planDeviceApprovalFix,
 } from "@t3tools/client-runtime/elevation-fix";
@@ -21,12 +24,13 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type {
-  ElevationApproverKind,
-  ElevationCheck,
-  ElevationDevice,
-  ElevationStatus,
-  EnvironmentId,
+import {
+  ELEVATION_SYNCED_PASSKEYS_SETTING,
+  type ElevationApproverKind,
+  type ElevationCheck,
+  type ElevationDevice,
+  type ElevationStatus,
+  type EnvironmentId,
 } from "@t3tools/contracts";
 import {
   CheckIcon,
@@ -47,6 +51,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { ThisDeviceApproval } from "./ThisDeviceApproval";
 import { useDeviceApprovalAgentHandoff } from "./useDeviceApprovalAgentHandoff";
@@ -153,6 +158,7 @@ function DeviceApprovalStatus(props: {
   const state = deviceApprovalState(status, null);
   const approval = elevationSudoApproval(status);
   const turnOff = deviceApprovalTurnOff(status);
+  const syncedChange = deviceApprovalSyncedPasskeysChange(status);
   const badge = STATE_BADGES[state];
   const fix = () => {
     const plan = planDeviceApprovalFix(status, null, { canRepair: false });
@@ -212,6 +218,7 @@ function DeviceApprovalStatus(props: {
                 key={device.keyId}
                 environmentId={props.environmentId}
                 device={device}
+                blockedReason={elevationDeviceBlockedReason(device, status)}
                 revocable={status.helperInstalled}
                 words={props.words}
               />
@@ -242,6 +249,26 @@ function DeviceApprovalStatus(props: {
           ) : null}
         </SettingsRow>
       )}
+      {detailsOpen && syncedChange !== null ? (
+        <SyncedPasskeysRow
+          environmentId={props.environmentId}
+          machine={props.machine}
+          words={props.words}
+          allowed={status.allowSyncedPasskeys === true}
+          phoneFirst={status.devices.length > 0}
+          passwordRequired={approval.passwordRequired}
+          onAgent={(allow) =>
+            void handoff({
+              purpose: allow ? "allow_synced_passkeys" : "refuse_synced_passkeys",
+              environmentId: props.environmentId,
+              machine: props.machine,
+              status,
+              failing: [],
+            })
+          }
+          viaAgent={syncedChange === "agent"}
+        />
+      ) : null}
       {detailsOpen && turnOff === "uninstall" ? (
         <TurnOffRow
           environmentId={props.environmentId}
@@ -305,6 +332,7 @@ function CheckLine(props: { readonly check: ElevationCheck }) {
 function DeviceRow(props: {
   readonly environmentId: EnvironmentId;
   readonly device: ElevationDevice;
+  readonly blockedReason: string | null;
   readonly revocable: boolean;
   readonly words: ElevationPasswordWords;
 }) {
@@ -321,9 +349,12 @@ function DeviceRow(props: {
           <span className="truncate">{device.label}</span>
         </span>
       }
-      description={`${elevationApproverDescription(device)} · Added ${formatDate(device.enrolledAt)}${
-        device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`
-      }`}
+      description={
+        props.blockedReason ??
+        `${elevationApproverDescription(device)} · Added ${formatDate(device.enrolledAt)}${
+          device.lastUsedAt === null ? "" : ` · Last used ${formatDate(device.lastUsedAt)}`
+        }`
+      }
       control={
         confirming || !props.revocable ? null : (
           <Button
@@ -347,6 +378,66 @@ function DeviceRow(props: {
             revoke({
               environmentId: props.environmentId,
               input: { keyId: device.keyId, ...(password === undefined ? {} : { password }) },
+            })
+          }
+        />
+      ) : null}
+    </SettingsRow>
+  );
+}
+
+/**
+ * Whether passkeys a password manager syncs may set up and approve. The helper rewrites the
+ * machine's config through sudo; config from outside T3 goes to an agent, as Turn off does.
+ */
+function SyncedPasskeysRow(props: {
+  readonly environmentId: EnvironmentId;
+  readonly machine: string;
+  readonly words: ElevationPasswordWords;
+  readonly allowed: boolean;
+  readonly phoneFirst: boolean;
+  readonly passwordRequired: boolean;
+  readonly viaAgent: boolean;
+  readonly onAgent: (allow: boolean) => void;
+}) {
+  const setPolicy = useAtomCommand(elevation.setPolicy, "change the synced passkey setting");
+  const canSetPolicy = useAtomValue(elevation.setPolicy.permissionAtom(props.environmentId));
+  const [confirming, setConfirming] = useState(false);
+  const allow = !props.allowed;
+  return (
+    <SettingsRow
+      title={ELEVATION_SYNCED_PASSKEYS_SETTING}
+      description={
+        props.allowed
+          ? `Passkeys that sync, such as Bitwarden's or Google Password Manager's, can approve agents' sudo on ${props.machine}.`
+          : "Only passkeys that stay on one device can approve."
+      }
+      control={
+        <Switch
+          checked={props.allowed}
+          disabled={confirming || (!props.viaAgent && !canSetPolicy)}
+          aria-label={ELEVATION_SYNCED_PASSKEYS_SETTING}
+          onCheckedChange={() => (props.viaAgent ? props.onAgent(allow) : setConfirming(true))}
+        />
+      }
+    >
+      {confirming && allow ? (
+        <p className="text-xs text-warning">{ELEVATION_SYNCED_PASSKEYS_WARNING}</p>
+      ) : null}
+      {confirming ? (
+        <SudoConfirmForm
+          actionLabel={allow ? "Allow" : "Turn off"}
+          words={props.words}
+          phoneFirst={props.phoneFirst}
+          passwordRequired={props.passwordRequired}
+          onCancel={() => setConfirming(false)}
+          run={(password) =>
+            setPolicy({
+              environmentId: props.environmentId,
+              input: {
+                allowSyncedPasskeys: allow,
+                ...(password === undefined ? {} : { password }),
+              },
             })
           }
         />

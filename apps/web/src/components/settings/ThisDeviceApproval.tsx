@@ -2,6 +2,8 @@ import { useAtomValue } from "@effect/atom-react";
 import { sha256 } from "@noble/hashes/sha2";
 import {
   ELEVATION_TOUCH_ID_HINT,
+  elevationApproverDescription,
+  elevationDeviceBlockedReason,
   elevationFailureMessage,
   uniqueElevationApproverLabel,
   type ElevationPasswordWords,
@@ -190,7 +192,10 @@ export function ThisDeviceApproval(props: {
     prompt.current = controller;
     let created: Awaited<ReturnType<ElevationApprover["createKey"]>>;
     try {
-      created = await approver.createKey(controller.signal, { name: `${user} on ${machine}` });
+      created = await approver.createKey(controller.signal, {
+        name: `${user} on ${machine}`,
+        allowSynced: status.allowSyncedPasskeys === true,
+      });
     } catch (cause) {
       setError(message(cause, "This device couldn't make a key."));
       setStep(IDLE);
@@ -350,7 +355,8 @@ export function ThisDeviceApproval(props: {
     step.kind === "creating" || step.kind === "elsewhere" || step.kind === "password";
   const description =
     enrolled !== undefined
-      ? `${here.key} · Added ${new Date(enrolled.enrolledAt.epochMilliseconds).toLocaleDateString()}`
+      ? (elevationDeviceBlockedReason(enrolled, status) ??
+        `${enrolled.synced === true ? elevationApproverDescription(enrolled) : here.key} · Added ${new Date(enrolled.enrolledAt.epochMilliseconds).toLocaleDateString()}`)
       : (setupBlockedReason ?? here.offer);
   return (
     <SettingsRow

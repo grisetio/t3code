@@ -218,5 +218,11 @@ export function createElevationAtoms<R, E>(
       concurrency: setupConcurrency,
       onSuccess: refreshStatus,
     }),
+    setPolicy: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:elevation:set-policy",
+      tag: WS_METHODS.elevationSetPolicy,
+      concurrency: setupConcurrency,
+      onSuccess: refreshStatus,
+    }),
   };
 }

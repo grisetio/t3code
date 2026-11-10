@@ -70,9 +70,23 @@ describe("browserElevationApproverSource", () => {
     });
     const approver = browserElevationApproverSource.get(environmentId);
     await expect(
-      approver?.createKey(new AbortController().signal, { name: "kgriset on oracle" }),
-    ).rejects.toThrow("That passkey syncs to your other devices.");
+      approver?.createKey(new AbortController().signal, {
+        name: "kgriset on oracle",
+        allowSynced: false,
+      }),
+    ).rejects.toThrow(
+      "That passkey syncs to your other devices. To use it, turn on Allow passkeys from password managers under Details",
+    );
     expect(browserElevationApproverSource.get(environmentId)?.keyId).toBeNull();
+  });
+
+  it("sets up a passkey that can sync while the machine allows them", async () => {
+    await using _authenticator = await virtualAuthenticator(environmentId, {
+      backupEligible: true,
+    });
+    const created = await enrollThisBrowser(environmentId, true);
+    const authenticatorData = decodeElevationBase64Url(created.webauthn?.authenticatorData ?? "");
+    expect((authenticatorData?.[32] ?? 0) & 0x08).toBe(0x08);
   });
 
   it("reads a failed verification as a cancel, which the card sends as Deny", async () => {
