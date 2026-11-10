@@ -121,6 +121,18 @@ const cancelled = (error: unknown) => {
   return name === "NotAllowedError" || name === "AbortError";
 };
 
+/**
+ * Asks the passkey's store to delete one T3 no longer uses. Chrome and Safari do; Firefox has no
+ * such call, so its entry stays in the password manager. Never fails: the binding is already gone.
+ */
+const dropPasskey = async (passkey: { readonly rpId: string; readonly credentialId: string }) => {
+  if (typeof PublicKeyCredential === "undefined") return;
+  await PublicKeyCredential.signalUnknownCredential?.({
+    rpId: passkey.rpId,
+    credentialId: passkey.credentialId,
+  }).catch(() => undefined);
+};
+
 function createBrowserElevationApproverSource(): ElevationApproverSource {
   const listeners = new Set<() => void>();
   const approvers = new Map<EnvironmentId, ElevationApprover>();
@@ -224,22 +236,20 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
         if (!(credential instanceof PublicKeyCredential)) return null;
         const response = credential.response as AuthenticatorAttestationResponse;
         const publicKey = response.getPublicKey();
+        const credentialId = new Uint8Array(credential.rawId);
+        const unused = () => void dropPasskey({ rpId, credentialId: encode(credentialId) });
         if (publicKey === null || response.getPublicKeyAlgorithm() !== -7) {
+          unused();
           throw new Error("This browser made a passkey T3 can't use.");
         }
         const authenticatorData = new Uint8Array(response.getAuthenticatorData());
-        const credentialId = new Uint8Array(credential.rawId);
         const refusal = elevationWebauthnRegistrationRefusal({
           authenticatorData,
           rpIdHash: await sha256(new TextEncoder().encode(rpId)),
           credentialId,
         });
         if (refusal === "synced" && !account.allowSynced) {
-          // Chrome hides a refused Google Password Manager passkey; others may ignore this.
-          void PublicKeyCredential.signalUnknownCredential?.({
-            rpId,
-            credentialId: encode(credentialId),
-          }).catch(() => undefined);
+          unused();
           throw new Error(
             elevationSyncedPasskeyRefusal({
               provider: elevationPasskeyProvider(elevationWebauthnAaguid(authenticatorData)),
@@ -247,7 +257,10 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
             }),
           );
         }
-        if (refusal === "invalid") throw new Error("This browser made a passkey T3 can't use.");
+        if (refusal === "invalid") {
+          unused();
+          throw new Error("This browser made a passkey T3 can't use.");
+        }
         const spki = new Uint8Array(publicKey);
         const keyId = encode((await sha256(spki)).subarray(0, 16));
         write(environmentId, { keyId, credentialId: encode(credentialId), rpId });
@@ -261,7 +274,11 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
           },
         };
       },
-      forget: async () => write(environmentId, null),
+      forget: async () => {
+        const passkey = readStored()[environmentId];
+        write(environmentId, null);
+        if (passkey !== undefined) await dropPasskey(passkey);
+      },
     };
   };
 

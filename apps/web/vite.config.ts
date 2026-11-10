@@ -177,6 +177,14 @@ const browserTestProject = {
             });
           }
         },
+        virtualPasskeyCount: async ({ page }) => {
+          const current = virtualAuthenticators.get(page);
+          if (!current) throw new Error("No virtual authenticator to read.");
+          const { credentials } = await current.cdp.send("WebAuthn.getCredentials", {
+            authenticatorId: current.authenticatorId,
+          });
+          return credentials.length;
+        },
         removeVirtualAuthenticator: async ({ page }) => {
           const current = virtualAuthenticators.get(page);
           virtualAuthenticators.delete(page);

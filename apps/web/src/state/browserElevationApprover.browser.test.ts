@@ -89,6 +89,15 @@ describe("browserElevationApproverSource", () => {
     expect((authenticatorData?.[32] ?? 0) & 0x08).toBe(0x08);
   });
 
+  it("forgetting the passkey deletes it from the browser too", async () => {
+    await using _authenticator = await virtualAuthenticator(environmentId);
+    await enrollThisBrowser(environmentId);
+    expect(await commands.virtualPasskeyCount()).toBe(1);
+    await browserElevationApproverSource.get(environmentId)?.forget();
+    expect(browserElevationApproverSource.get(environmentId)?.keyId).toBeNull();
+    expect(await commands.virtualPasskeyCount()).toBe(0);
+  });
+
   it("reads a failed verification as a cancel, which the card sends as Deny", async () => {
     await using _authenticator = await virtualAuthenticator(environmentId);
     await enrollThisBrowser(environmentId);

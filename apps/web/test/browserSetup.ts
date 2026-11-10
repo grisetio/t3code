@@ -16,6 +16,8 @@ declare module "vite-plus/test/browser" {
       /** False leaves every request waiting for a touch that never comes. */
       readonly presence?: boolean;
     }) => Promise<void>;
+    /** How many passkeys the virtual authenticator still holds. */
+    virtualPasskeyCount: () => Promise<number>;
     removeVirtualAuthenticator: () => Promise<void>;
   }
 }
