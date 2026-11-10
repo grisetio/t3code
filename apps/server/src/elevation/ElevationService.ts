@@ -199,6 +199,10 @@ const fail = (reason: ElevationFailureReason, detail?: string) =>
     }),
   );
 
+/** For text written for no one, such as a check's code or a Node error: it stays in the log. */
+const failLogged = (reason: ElevationFailureReason, logged: unknown) =>
+  Effect.logWarning(`Device approval failed: ${reason}`, logged).pipe(Effect.andThen(fail(reason)));
+
 const HelperReply = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true) }),
   Schema.Struct({
@@ -1017,11 +1021,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
           ...(stdin === undefined ? {} : { stdin }),
           timeout,
         })
-        .pipe(
-          Effect.mapError(
-            (cause) => new ElevationError({ reason: "helper_failed", detail: cause.message }),
-          ),
-        );
+        .pipe(Effect.catch((cause) => failLogged("helper_failed", cause)));
     const output = withPassword
       ? yield* run(
           ["-S", "-k", "-p", "", helper, ...input.args],
@@ -1051,7 +1051,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     if (/incorrect password|try again|password is required|no password/i.test(stderr)) {
       return yield* fail(withPassword ? "wrong_password" : "password_required");
     }
-    return yield* fail("helper_failed", stderr === "" ? `sudo exited with ${output.code}` : stderr);
+    // sudo's own complaint, such as "unable to initialize PAM", is written for a person.
+    if (stderr !== "") return yield* fail("helper_failed", stderr);
+    return yield* failLogged("helper_failed", `sudo exited with ${output.code}`);
   });
 
   const attestationFlag = ATTESTATION_FLAGS[options.attestation];
@@ -1064,15 +1066,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     use: (path: string) => Effect.Effect<A, E, R>,
   ) =>
     Effect.acquireUseRelease(
-      Effect.tryPromise({
-        try: async () => {
-          const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elevation-"));
-          const path = NodePath.join(directory, "key.json");
-          await NodeFSP.writeFile(path, enrollmentObject(device), { mode: 0o600 });
-          return { directory, path };
-        },
-        catch: (cause) => new ElevationError({ reason: "helper_failed", detail: String(cause) }),
-      }),
+      Effect.tryPromise(async () => {
+        const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elevation-"));
+        const path = NodePath.join(directory, "key.json");
+        await NodeFSP.writeFile(path, enrollmentObject(device), { mode: 0o600 });
+        return { directory, path };
+      }).pipe(Effect.catch((cause) => failLogged("helper_failed", cause))),
       ({ path }) => use(path),
       ({ directory }) =>
         Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
@@ -1108,10 +1107,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         NodePath.dirname(options.socketPath),
         `elevation-install-${NodeCrypto.randomUUID()}.json`,
       );
-      yield* Effect.tryPromise({
-        try: () => NodeFSP.writeFile(keyPath, enrollmentObject(input.device), { mode: 0o600 }),
-        catch: (cause) => new ElevationError({ reason: "helper_failed", detail: String(cause) }),
-      });
+      yield* Effect.tryPromise(() =>
+        NodeFSP.writeFile(keyPath, enrollmentObject(input.device), { mode: 0o600 }),
+      ).pipe(Effect.catch((cause) => failLogged("helper_failed", cause)));
       const command = ["sudo", helper, ...installArgs(keyPath)].map(shellQuote).join(" ");
       return {
         type: "terminal_command",
@@ -1281,7 +1279,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       keys,
       allowSynced: yield* allowsSynced,
     });
-    if (check !== "ok") return yield* fail("invalid_signature", check);
+    if (check !== "ok") {
+      return yield* failLogged("invalid_signature", { check, keyId: response.keyId });
+    }
     // Reading the keys yielded; another answer may have won meanwhile.
     if (entry.answer !== null) return yield* fail("already_resolved");
     const key = keys.find((candidate) => candidate.keyId === response.keyId);

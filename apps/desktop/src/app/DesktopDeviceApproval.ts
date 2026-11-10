@@ -211,16 +211,21 @@ export const make = Effect.gen(function* () {
     Effect.mapError(() => fail("Couldn't run Touch ID on this Mac.")),
   );
 
+  // The helper's message carries framework error codes; it goes to the log, not the user.
   const helperFailure = (error: { readonly code: string; readonly message: string }) =>
     error.code === "cancelled"
       ? Effect.succeed(null)
-      : Effect.fail(
-          fail(
-            error.code === "invalidated"
-              ? "This Mac's key stopped working because its fingerprints changed. Remove it and set it up again."
-              : error.code === "unavailable"
-                ? "Touch ID isn't available right now."
-                : `Touch ID failed: ${error.message}`,
+      : Effect.logWarning("Touch ID failed", error).pipe(
+          Effect.andThen(
+            Effect.fail(
+              fail(
+                error.code === "invalidated"
+                  ? "This Mac's key stopped working because its fingerprints changed. Remove it and set it up again."
+                  : error.code === "unavailable"
+                    ? "Touch ID isn't available right now."
+                    : "Touch ID failed.",
+              ),
+            ),
           ),
         );
 
@@ -288,8 +293,10 @@ export const make = Effect.gen(function* () {
         const result = yield* decodeCreate(yield* run(["create", "--key", pending])).pipe(
           Effect.mapError(() => fail("Couldn't make a key on this Mac.")),
         );
-        if (!result.ok)
-          return yield* fail(`Couldn't make a key on this Mac: ${result.error.message}`);
+        if (!result.ok) {
+          yield* Effect.logWarning("Couldn't make a key on this Mac", result.error);
+          return yield* fail("Couldn't make a key on this Mac.");
+        }
         // Like the phone, setup proves the person here can use the new key before anything changes.
         const challenge = yield* crypto
           .randomBytes(32)
