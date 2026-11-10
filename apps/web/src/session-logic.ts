@@ -628,6 +628,8 @@ export interface TimelineEntriesInput {
   readonly attempts?: ReadonlyArray<OrchestrationV2RunAttempt>;
   readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
   readonly plans?: ReadonlyArray<OrchestrationV2PlanArtifact>;
+  /** Command rows a request's card still stands beside; see `elevationCommandRows`. */
+  readonly elevationCommandsBesideCards?: ReadonlySet<string>;
 }
 
 export interface TimelineEntriesProjection {
@@ -663,7 +665,10 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
     return undefined;
   };
 
-  const elevationCommands = elevationCommandRows(input.visibleTurnItems);
+  const elevationCommands = elevationCommandRows(
+    input.visibleTurnItems,
+    input.elevationCommandsBesideCards,
+  );
   const foldedAnswerMessageIds = new Set(
     input.visibleTurnItems.flatMap(({ item }) =>
       item.type === "user_input_request" && item.questionAnswer
@@ -987,7 +992,8 @@ function reuseTimelineEntries(
     !shallow(input.attachmentUrlById, before.attachmentUrlById) ||
     !shallow(input.attempts, before.attempts) ||
     !shallow(input.nodes, before.nodes) ||
-    !shallow(input.plans, before.plans)
+    !shallow(input.plans, before.plans) ||
+    input.elevationCommandsBesideCards !== before.elevationCommandsBesideCards
   ) {
     return null;
   }

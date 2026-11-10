@@ -18,13 +18,17 @@ import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
 import { useElevationApproverHere } from "../../state/elevationApprover";
 import { useElevationAgent } from "./ElevationAgentMark";
-import { ELEVATION_SETTLE_MS, ElevationPendingCard } from "./ElevationPendingCard";
+import {
+  ELEVATION_ARRIVE_CLASS,
+  ELEVATION_COLLAPSE_CLASS,
+  ELEVATION_COLLAPSE_MS,
+  ELEVATION_SETTLE_MS,
+  ElevationPendingCard,
+} from "./ElevationPendingCard";
 import { useElevationSidebarStore } from "./elevationSidebarStore";
 
 // The ring's fade, plus a margin for the sidebar opening first.
 const HIGHLIGHT_MS = 1500;
-const FADE_MS = 140;
-const LEAVE_MS = 240;
 
 const keyOf = (entry: PendingElevationRequest) =>
   `${entry.environmentId}\u0000${entry.request.requestId}`;
@@ -43,8 +47,8 @@ function mergeShown(
 }
 
 /**
- * Once `open` turns false, fades out and then eases its height to nothing, so the rows below
- * follow an empty space rather than a card cut off mid-line; then calls `onGone(id)`.
+ * Grows in as it mounts; once `open` turns false, closes up as it fades, so the rows below follow
+ * on the thread card's curves; then calls `onGone(id)`.
  */
 function Leaving(props: {
   readonly id: string;
@@ -56,26 +60,18 @@ function Leaving(props: {
   const { id, open, onGone } = props;
   useEffect(() => {
     if (open) return;
-    const timer = setTimeout(() => onGone(id), FADE_MS + LEAVE_MS);
+    const timer = setTimeout(() => onGone(id), ELEVATION_COLLAPSE_MS);
     return () => clearTimeout(timer);
   }, [id, open, onGone]);
-  // The rows wait for the fade, so the space closes only once it is empty.
   return (
     <div
       inert={!open}
       className={cn(
-        "grid min-w-0 transition-[grid-template-rows] duration-240 ease-in-out motion-reduce:transition-none",
-        open ? "grid-rows-[1fr]" : "grid-rows-[0fr] delay-140",
+        "grid min-w-0 motion-reduce:transition-none",
+        open ? ELEVATION_ARRIVE_CLASS : ELEVATION_COLLAPSE_CLASS,
       )}
     >
-      <div
-        className={cn(
-          "min-h-0 overflow-hidden transition-opacity duration-140 ease-out motion-reduce:transition-none",
-          open ? "opacity-100" : "opacity-0",
-        )}
-      >
-        {props.children}
-      </div>
+      <div className="min-h-0 overflow-hidden">{props.children}</div>
     </div>
   );
 }
@@ -156,7 +152,7 @@ export function ThreadlessElevationRequests(props: { readonly onScreen: boolean 
             open={groupPresent}
             onGone={forgetMachine}
           >
-            <section className="flex flex-col pb-3 motion-safe:transition-opacity motion-safe:duration-200 motion-safe:starting:opacity-0">
+            <section className="flex flex-col pb-3">
               <MachineHeader environmentId={environmentId} />
               {entries.map((entry) => {
                 const key = keyOf(entry);

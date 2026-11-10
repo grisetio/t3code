@@ -113,6 +113,7 @@ import { V2EventTimelineRow } from "./TimelineV2EventRow";
 import { useTimelinePositionRestore } from "./useTimelinePositionRestore";
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
+import { useElevationHandoverStore } from "../elevation/elevationHandoverStore";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
 
 function timelineListStateFor(identity: string): {
@@ -596,11 +597,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
       ? new Set(paintedExpandedAttemptIds).add(activeFindAttemptId)
       : paintedExpandedAttemptIds;
 
+  // A turn that ends while its sudo card still says how it went stays open until the card has
+  // handed over, so the fold doesn't move the card mid-hold.
+  const elevationHeldRunIds = useElevationHandoverStore((state) => state.runIds);
+  const rowsExpandedRunIds =
+    elevationHeldRunIds.size === 0
+      ? visibleExpandedRunIds
+      : new Set([...visibleExpandedRunIds, ...elevationHeldRunIds]);
   const rawRows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, {
     timelineEntries,
     latestRun,
     runningRunId,
-    expandedRunIds: visibleExpandedRunIds,
+    expandedRunIds: rowsExpandedRunIds,
     expandedAttemptIds: visibleExpandedAttemptIds,
     expandedWorkGroupIds,
     isWorking,
@@ -1229,6 +1237,8 @@ function getItemType(item: MessagesTimelineRow) {
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
+  const isElevationRequest =
+    row.kind === "event" && row.projectedItem.item.type === "elevation_request";
   const isWorkLogRow =
     row.kind === "work" ||
     row.kind === "work-live" ||
@@ -1241,7 +1251,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
   return (
     <div
       className={cn(
-        isWorkLogRow || isSubagentGroup
+        // A sudo request's card collapses its own spacing as it hands over.
+        isWorkLogRow || isSubagentGroup || isElevationRequest
           ? undefined
           : row.kind === "turn-fold" || row.kind === "working"
             ? "pb-1.5"

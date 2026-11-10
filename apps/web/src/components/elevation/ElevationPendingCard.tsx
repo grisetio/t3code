@@ -46,7 +46,22 @@ import { useElevationSidebarStore } from "./elevationSidebarStore";
 import { useElevationRespond } from "./useElevationRespond";
 
 /** How long "✓ Approved on Pixel" stays before the card leaves, as on the phone. */
-export const ELEVATION_SETTLE_MS = 700;
+export const ELEVATION_SETTLE_MS = 500;
+/** The card's collapse once it has said how its request ended. */
+export const ELEVATION_COLLAPSE_MS = 250;
+
+// The phone's curves, tuned on a 120 Hz screen: steeper ones move a card's height by tens of px in
+// one frame and read as a jump. Each runs once, as a CSS transition, inside a one-row grid whose
+// row eases between 0fr and 1fr, so the card's natural height needs no measuring.
+/** Growing in: quick at first, then settling into place (ease-out quad). */
+export const ELEVATION_ARRIVE_CLASS =
+  "grid-rows-[1fr] [transition:grid-template-rows_260ms_cubic-bezier(0.5,1,0.89,1),opacity_260ms_cubic-bezier(0.5,1,0.89,1)] starting:grid-rows-[0fr] starting:opacity-0";
+/** Closing up: gathers speed, then slows into its end (CSS `ease`). The card fades faster than it closes. */
+export const ELEVATION_COLLAPSE_CLASS =
+  "grid-rows-[0fr] opacity-0 [transition:grid-template-rows_250ms_ease,opacity_150ms_ease]";
+/** A settled row opening on the collapse's curve, so the two heights move as one. */
+export const ELEVATION_ROW_GROW_CLASS =
+  "grid-rows-[1fr] [transition:grid-template-rows_250ms_ease] starting:grid-rows-[0fr]";
 
 const SET_UP_HERE: Record<ElevationApproverHere["kind"], string> = {
   phone: "Set up this phone",
@@ -124,8 +139,6 @@ export function ElevationPendingCard(props: {
   readonly signable: ElevationSignable | null;
   /** How the request ended, said in place of Deny while the card settles. */
   readonly ended?: ElevationEndedView | null;
-  /** Called once Approve or Deny is pressed here, so a thread can hold the card while it settles. */
-  readonly onEngaged?: () => void;
   readonly dataItemType?: string;
 }) {
   const { agent } = props;
@@ -182,7 +195,6 @@ export function ElevationPendingCard(props: {
         signable={props.signable}
         enroll={props.enrollKey !== null}
         ended={props.ended ?? null}
-        onEngaged={props.onEngaged}
       />
     </div>
   );
@@ -204,7 +216,6 @@ function ElevationCardActions(props: {
   readonly signable: ElevationSignable | null;
   readonly enroll: boolean;
   readonly ended: ElevationEndedView | null;
-  readonly onEngaged: (() => void) | undefined;
 }) {
   const { environmentId, requestId, signable } = props;
   const canRespond = useAtomValue(elevation.respond.permissionAtom(environmentId));
@@ -229,7 +240,6 @@ function ElevationCardActions(props: {
   const offerSetup = approver !== null && !signsHere && reason === null && !props.enroll;
 
   const answer = async (decision: "approve" | "deny") => {
-    props.onEngaged?.();
     if (decision === "deny" || approver === null || keyId === null || signable === null) {
       const outcome = await respond.run(environmentId, {
         requestId,
@@ -265,16 +275,7 @@ function ElevationCardActions(props: {
     if (outcome === "answered") setAnswered(signed === null ? "denied" : "approved");
   };
 
-  if (answered === "approved") {
-    return (
-      <div className="flex min-w-0 items-center justify-end">
-        <Button type="button" size="xs" variant="outline" disabled>
-          <CheckIcon className="text-success" aria-hidden />
-          Approved
-        </Button>
-      </div>
-    );
-  }
+  if (answered === "approved") return <EndedLine ended={{ kind: "approved", text: "Approved" }} />;
   if (answered === "denied") return <EndedLine ended={{ kind: "denied", text: "Denied" }} />;
   // An answer of ours in flight finishes first; the server reports a lost race as such.
   if (props.ended !== null && !respond.pending) return <EndedLine ended={props.ended} />;

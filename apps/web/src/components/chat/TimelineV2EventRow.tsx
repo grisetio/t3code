@@ -1,4 +1,5 @@
 import { WorkLogBlock } from "./WorkLog";
+import { elevationLinkedCommandKey } from "@t3tools/client-runtime/elevation";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import { environmentThreadDetails } from "../../state/threads";
@@ -44,6 +45,7 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
         environmentId={ctx.activeThreadEnvironmentId}
         item={item}
         visibility={visibility}
+        commandKey={elevationLinkedCommandKey(row.projectedItem)}
         command={row.elevationCommand}
       />
     );
