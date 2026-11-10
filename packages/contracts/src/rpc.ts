@@ -369,6 +369,7 @@ import {
   ElevationRevokeInput,
   ElevationStatus,
   ElevationUninstallInput,
+  ElevationSetPolicyInput,
 } from "./elevation.ts";
 import {
   ProjectCloneActionInput,
@@ -540,6 +541,7 @@ export const WS_METHODS = {
   elevationEnroll: "elevation.enroll",
   elevationRevoke: "elevation.revoke",
   elevationUninstall: "elevation.uninstall",
+  elevationSetPolicy: "elevation.setPolicy",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -1915,6 +1917,12 @@ const WsElevationUninstallRpc = Rpc.make(WS_METHODS.elevationUninstall, {
   error: ElevationRpcError,
 });
 
+const WsElevationSetPolicyRpc = Rpc.make(WS_METHODS.elevationSetPolicy, {
+  payload: ElevationSetPolicyInput,
+  success: ElevationStatus,
+  error: ElevationRpcError,
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2027,6 +2035,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsElevationEnrollRpc,
   WsElevationRevokeRpc,
   WsElevationUninstallRpc,
+  WsElevationSetPolicyRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

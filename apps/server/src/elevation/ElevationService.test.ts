@@ -57,6 +57,13 @@ const registration = (name: string) => {
   return vector.authenticatorData;
 };
 
+/** The `synced` vector's registration, saved by the authenticator `aaguid` names. */
+const syncedRegistrationFrom = (aaguid: string) => {
+  const bytes = Buffer.from(registration("synced"), "base64url");
+  Buffer.from(aaguid.replaceAll("-", ""), "hex").copy(bytes, 37);
+  return bytes.toString("base64url");
+};
+
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
 const adapter = {
@@ -270,6 +277,7 @@ case "$1" in
     echo '{"ok":true}';;
   enroll) cat > "${dir}/helper.stdin"; echo '{"ok":true}';;
   revoke) echo '{"ok":false,"error":{"code":"not_found","message":"No such key"}}'; exit 1;;
+  policy) echo '{"ok":true}';;
 esac
 `;
     // The dev override, and the copy install leaves, closed to others like a root-owned one.
@@ -1030,6 +1038,112 @@ describe("ElevationService helper", () => {
         "invalid_passkey",
       );
       assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.dir, "sudo.args")));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("names the password manager of a refused synced passkey and points to the setting", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const { webauthnDevice } = vectorsJson.keys;
+      const refusal = (authenticatorData: string) =>
+        fixture.service
+          .enroll({
+            device: {
+              label: "Chrome on Mac",
+              publicKey: webauthnDevice.spkiDer,
+              webauthn: { ...webauthnDevice.webauthn, authenticatorData },
+            },
+          })
+          .pipe(Effect.flip);
+      const bitwarden = yield* refusal(
+        syncedRegistrationFrom("d548826e-79b4-db40-a3d8-11116f7e8349"),
+      );
+      assert.strictEqual(bitwarden.provider, "Bitwarden");
+      assert.strictEqual(
+        bitwarden.message,
+        "Bitwarden saved this passkey and syncs it to your other devices. To use it, turn on Allow passkeys from password managers under Details, or set up again and save it to this device.",
+      );
+      const unknown = yield* refusal(
+        syncedRegistrationFrom("00112233-4455-6677-8899-aabbccddeeff"),
+      );
+      assert.isUndefined(unknown.provider);
+      assert.strictEqual(
+        unknown.message,
+        "That passkey syncs to your other devices. To use it, turn on Allow passkeys from password managers under Details, or set up again and save it to this device.",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("enrolls a synced passkey once the machine allows them, and lists it as synced", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const { webauthnDevice } = vectorsJson.keys;
+      yield* Effect.promise(() =>
+        NodeFSP.appendFile(
+          NodePath.join(fixture.dir, "etc", "users", "me.toml"),
+          "allow_synced_passkeys = true\n",
+        ),
+      );
+      yield* fixture.service.enroll({
+        device: {
+          label: "Chrome on Mac",
+          publicKey: webauthnDevice.spkiDer,
+          webauthn: {
+            ...webauthnDevice.webauthn,
+            authenticatorData: syncedRegistrationFrom("d548826e-79b4-db40-a3d8-11116f7e8349"),
+          },
+        },
+      });
+      assert.include(lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))), "enroll");
+      // The helper writes the key file; this stands in for it.
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(fixture.dir, "etc", "keys", "me", `${webauthnDevice.keyId}.json`),
+          JSON.stringify({
+            version: 1,
+            keyId: webauthnDevice.keyId,
+            alg: "webauthn-es256",
+            publicKey: webauthnDevice.spkiDer,
+            label: "Chrome on Mac",
+            securityLevel: "webauthn",
+            enrolledAt: "2026-10-31T12:00:00Z",
+            webauthn: webauthnDevice.webauthn,
+            synced: true,
+            aaguid: "d548826e-79b4-db40-a3d8-11116f7e8349",
+          }),
+        ),
+      );
+      const status = yield* fixture.service.status;
+      assert.isTrue(status.allowSyncedPasskeys);
+      assert.deepStrictEqual(
+        status.devices.map((device) => [device.label, device.synced, device.provider]),
+        [
+          ["Pixel", undefined, undefined],
+          ["Chrome on Mac", true, "Bitwarden"],
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("changes the synced passkey setting through the helper under sudo", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const before = yield* fixture.service.status;
+      assert.isFalse(before.allowSyncedPasskeys);
+      yield* fixture.service.setPolicy({ allowSyncedPasskeys: true });
+      assert.deepStrictEqual(lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))), [
+        "-n",
+        installedHelper(fixture.dir),
+        "policy",
+        "--user",
+        "me",
+        "--allow-synced-passkeys",
+        "on",
+      ]);
+      yield* fixture.service.setPolicy({ allowSyncedPasskeys: false, password: "hunter2" });
+      const sudoArgs = lines(yield* read(NodePath.join(fixture.dir, "sudo.args")));
+      assert.deepStrictEqual(sudoArgs.slice(0, 4), ["-S", "-k", "-p", ""]);
+      assert.deepStrictEqual(sudoArgs.slice(-2), ["--allow-synced-passkeys", "off"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

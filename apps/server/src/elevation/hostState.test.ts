@@ -53,6 +53,7 @@ describe("checkSignature", () => {
         payload: Result.getOrThrow(decodeElevationPayload(payloadBytes)),
         response: vector.response as ElevationSignedResponse,
         keys: [enrolled],
+        allowSynced: false,
       }),
     ).toBe(vector.expected);
   });
@@ -80,6 +81,7 @@ describe("checkSignature with a passkey", () => {
         payload: Result.getOrThrow(decodeElevationPayload(payloadBytes)),
         response,
         keys,
+        allowSynced: false,
       }),
     ).toBe(vector.expected);
     if (vector.failure === null || response.webauthn === undefined) return;
@@ -89,8 +91,27 @@ describe("checkSignature with a passkey", () => {
         payloadBytes,
         ...response.webauthn,
         signature: bytesOf(response.signature),
+        allowSynced: false,
       }),
     ).toBe(vector.failure);
+  });
+
+  // With the setting on, the same assertions pass the BE step and stop only at a real fault.
+  const backupEligible = vectorsJson.webauthnVerify.filter(
+    (vector) => vector.failure === "backup_eligible",
+  );
+  it.each(backupEligible)("accepts $name while synced passkeys are allowed", (vector) => {
+    const payloadBytes = bytesOf(vector.payload);
+    const response = vector.response as ElevationSignedResponse;
+    expect(
+      checkSignature({
+        payloadBytes,
+        payload: Result.getOrThrow(decodeElevationPayload(payloadBytes)),
+        response,
+        keys: [passkey],
+        allowSynced: true,
+      }),
+    ).toBe("ok");
   });
 });
 
@@ -204,6 +225,59 @@ describe("readEnrolledKeys", () => {
         ["MacBook Pro", "secure_enclave", null],
         ["Chrome on Mac", "webauthn", "https://app.t3.codes"],
       ]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("synced passkeys", () => {
+  it.effect("are listed with their AAGUID and count as devices only while allowed", () =>
+    Effect.gen(function* () {
+      const { paths, socketPath } = yield* layout({
+        platform: "linux",
+        pam: {
+          sudo: "#%PAM-1.0\nauth [success=done ignore=ignore default=die] MODULE\nauth include system-auth\n",
+        },
+        protocol: 1,
+      });
+      const keysDir = NodePath.join(paths.etcDir, "keys", "me");
+      const config = (allow: boolean) =>
+        NodeFSP.writeFile(
+          NodePath.join(paths.etcDir, "users", "me.toml"),
+          `version = 1\nenabled = true\nsocket = ${JSON.stringify(socketPath)}\nallow_synced_passkeys = ${allow}\n`,
+        );
+      yield* Effect.promise(async () => {
+        await NodeFSP.rm(NodePath.join(keysDir, `${enrolled.keyId}.json`));
+        await NodeFSP.writeFile(
+          NodePath.join(keysDir, `${webauthnDevice.keyId}.json`),
+          JSON.stringify({
+            version: 1,
+            keyId: webauthnDevice.keyId,
+            alg: "webauthn-es256",
+            publicKey: webauthnDevice.spkiDer,
+            label: "Chrome on Mac",
+            securityLevel: "webauthn",
+            enrolledAt: "2026-10-30T12:00:00Z",
+            webauthn: webauthnDevice.webauthn,
+            synced: true,
+            aaguid: "d548826e-79b4-db40-a3d8-11116f7e8349",
+          }),
+        );
+        await config(true);
+      });
+      const allowed = yield* staticChecks(paths, { user: "me", socketPath });
+      expect(allowed.config?.allowSyncedPasskeys).toBe(true);
+      expect(allowed.keys).toMatchObject([
+        { synced: true, aaguid: "d548826e-79b4-db40-a3d8-11116f7e8349" },
+      ]);
+      expect(okIds(allowed.checks)).toContain("devices:ok");
+
+      yield* Effect.promise(() => config(false));
+      const refused = yield* staticChecks(paths, { user: "me", socketPath });
+      expect(refused.config?.allowSyncedPasskeys).toBe(false);
+      expect(refused.checks.find((check) => check.id === "devices")).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("passkeys from password managers are turned off"),
+      });
     }).pipe(Effect.scoped),
   );
 });

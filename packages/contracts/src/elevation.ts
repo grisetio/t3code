@@ -443,9 +443,9 @@ const AUTHENTICATOR_DATA_FLAGS = { BE: 0x08, AT: 0x40 } as const;
 
 /**
  * Why a passkey's registration can't be enrolled: `synced` when it is backup eligible, so it can
- * sync to devices nobody enrolled; `invalid` when its authenticator data isn't for this site or
- * doesn't carry this credential. The helper checks the same (`check_registration` in
- * native/t3-elevation/src/enroll.rs).
+ * sync to devices nobody enrolled, which the machine accepts only with `allowSyncedPasskeys`;
+ * `invalid` when its authenticator data isn't for this site or doesn't carry this credential. The
+ * helper checks the same (`check_registration` in native/t3-elevation/src/enroll.rs).
  */
 export function elevationWebauthnRegistrationRefusal(input: {
   readonly authenticatorData: Uint8Array;
@@ -472,6 +472,53 @@ export function elevationWebauthnRegistrationRefusal(input: {
   return (flags & AUTHENTICATOR_DATA_FLAGS.BE) === 0 ? null : "synced";
 }
 
+/** A registration's AAGUID as a lowercase UUID; null when absent or zeroed, as `attestation: "none"` may. */
+export function elevationWebauthnAaguid(authenticatorData: Uint8Array): string | null {
+  const aaguid = authenticatorData.subarray(37, 53);
+  if (aaguid.length !== 16 || aaguid.every((byte) => byte === 0)) return null;
+  const hex = Array.from(aaguid, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Well-known passkey providers by AAGUID, as passkeydeveloper/passkey-authenticator-aaguids
+ * (aaguid.json at 22c5ac904d) names them. Only entries checked against that list belong here.
+ */
+const PASSKEY_PROVIDERS: Readonly<Record<string, string>> = {
+  "d548826e-79b4-db40-a3d8-11116f7e8349": "Bitwarden",
+  "bada5566-a7aa-401f-bd96-45619a55120d": "1Password",
+  "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4": "Google Password Manager",
+  "fbfc3007-154e-4ecc-8c0b-6e020557d7bd": "Apple Passwords",
+  "531126d6-e717-415c-9320-3d9aa6981239": "Dashlane",
+  "50726f74-6f6e-5061-7373-50726f746f6e": "Proton Pass",
+  "adce0002-35bc-c60a-648b-0b25f1f05503": "Chrome on Mac",
+  "08987058-cadc-4b81-b6e1-30de50dcbe96": "Windows Hello",
+  "9ddd1817-af5a-4672-a2b9-3e3dd95000a9": "Windows Hello",
+  "6028b017-b1d4-4c02-b4b3-afcdafc96bb2": "Windows Hello",
+};
+
+/** The password manager or platform an AAGUID names; null for one this table doesn't know. */
+export const elevationPasskeyProvider = (aaguid: string | null | undefined): string | null =>
+  (aaguid === null || aaguid === undefined ? undefined : PASSKEY_PROVIDERS[aaguid]) ?? null;
+
+/** The setting's name wherever a client points to it. */
+export const ELEVATION_SYNCED_PASSKEYS_SETTING = "Allow passkeys from password managers";
+
+/**
+ * Why a synced passkey wasn't set up, and the two ways forward. `saveTo` names where a
+ * device-bound passkey goes, when the browser knows ("Windows Hello").
+ */
+export function elevationSyncedPasskeyRefusal(input: {
+  readonly provider: string | null;
+  readonly saveTo?: string;
+}): string {
+  const first =
+    input.provider === null
+      ? "That passkey syncs to your other devices."
+      : `${input.provider} saved this passkey and syncs it to your other devices.`;
+  return `${first} To use it, turn on ${ELEVATION_SYNCED_PASSKEYS_SETTING} under Details, or set up again and save it to ${input.saveTo ?? "this device"}.`;
+}
+
 export const ElevationDevice = Schema.Struct({
   keyId: ElevationKeyId,
   label: Schema.String,
@@ -480,6 +527,10 @@ export const ElevationDevice = Schema.Struct({
   kind: Schema.optionalKey(ElevationApproverKind),
   /** Set for a browser's passkey. */
   webauthn: Schema.optionalKey(ElevationWebauthnBinding),
+  /** A passkey a password manager syncs; it approves only while `allowSyncedPasskeys` is on. */
+  synced: Schema.optionalKey(Schema.Boolean),
+  /** The password manager that holds the passkey, when its AAGUID is a known one. */
+  provider: Schema.optionalKey(Schema.String),
   enrolledAt: Schema.DateTimeUtc,
   lastUsedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
@@ -520,6 +571,11 @@ export const ElevationStatus = Schema.Struct({
   installedByT3: Schema.optionalKey(Schema.Boolean),
   /** The root-owned helper that adds and removes devices is in place, so T3 can manage them. */
   helperInstalled: Schema.Boolean,
+  /**
+   * The installed config lets passkeys a password manager syncs enroll and approve. Absent when
+   * there is no config, and from older servers, which can't change it.
+   */
+  allowSyncedPasskeys: Schema.optionalKey(Schema.Boolean),
   checks: Schema.Array(ElevationCheck),
   /** What install would change, shown before it runs. */
   plannedChanges: Schema.Array(Schema.Struct({ path: Schema.String, summary: Schema.String })),
@@ -600,6 +656,13 @@ export const ElevationUninstallInput = Schema.Struct({
 });
 export type ElevationUninstallInput = typeof ElevationUninstallInput.Type;
 
+/** Like revoke, an enrolled device approves the helper's sudo call, or the password does. */
+export const ElevationSetPolicyInput = Schema.Struct({
+  allowSyncedPasskeys: Schema.Boolean,
+  password: Schema.optionalKey(ElevationPassword),
+});
+export type ElevationSetPolicyInput = typeof ElevationSetPolicyInput.Type;
+
 const ELEVATION_FAILURE_MESSAGES = {
   not_available: "Device approval isn't available on this server.",
   unsupported: "Device approval isn't supported on this machine.",
@@ -609,8 +672,7 @@ const ELEVATION_FAILURE_MESSAGES = {
   wrong_password: "The password was not accepted.",
   password_required: "No device approved this, so sudo needs the password.",
   helper_failed: "The device approval helper failed.",
-  synced_passkey:
-    "This passkey syncs to your other devices, so it can't approve. Save one on this device only.",
+  synced_passkey: elevationSyncedPasskeyRefusal({ provider: null }),
   invalid_passkey: "This passkey's registration doesn't match this site.",
 } as const;
 
@@ -623,8 +685,13 @@ export class ElevationError extends Schema.TaggedError<ElevationError>()("Elevat
   reason: ElevationFailureReason,
   /** The helper's own error text, shown under the generic message. */
   detail: Schema.optionalKey(Schema.String),
+  /** For `synced_passkey`: the password manager that saved it, when known. */
+  provider: Schema.optionalKey(Schema.String),
 }) {
   override get message(): string {
+    if (this.reason === "synced_passkey" && this.provider !== undefined) {
+      return elevationSyncedPasskeyRefusal({ provider: this.provider });
+    }
     return ELEVATION_FAILURE_MESSAGES[this.reason];
   }
 }

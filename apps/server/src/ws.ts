@@ -2128,6 +2128,7 @@ export const layerWsRpc = (
         [WS_METHODS.elevationEnroll]: (input) => elevation.enroll(input),
         [WS_METHODS.elevationRevoke]: (input) => elevation.revoke(input),
         [WS_METHODS.elevationUninstall]: (input) => elevation.uninstall(input),
+        [WS_METHODS.elevationSetPolicy]: (input) => elevation.setPolicy(input),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),
