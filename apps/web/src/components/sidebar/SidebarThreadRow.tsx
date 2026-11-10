@@ -63,6 +63,7 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
+import { useElevationHandoverStore } from "../elevation/elevationHandoverStore";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { vcsEnvironment } from "../../state/vcs";
@@ -706,7 +707,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : null;
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
+  // A sudo card on screen says how its request ended until it hands over; the run finishing in
+  // between would otherwise blink Working.
+  const elevationCardShown = useElevationHandoverStore((state) => state.threadKeys.has(threadKey));
+  const resolvedStatus = resolveSidebarThreadStatus(thread);
+  const status = resolvedStatus === "working" && elevationCardShown ? "approval" : resolvedStatus;
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =

@@ -14,10 +14,12 @@ import {
   elevationRequestSource,
   elevationSeriesLine,
   elevationRequestFacts,
+  elevationApproverDescription,
   elevationEndedLine,
   elevationResolvedSummary,
   elevationRequestFallbackView,
   elevationRequestStatusView,
+  uniqueElevationApproverLabel,
   elevationSudoApproval,
 } from "./elevation.ts";
 import {
@@ -233,6 +235,8 @@ describe("elevationRequestFallbackView", () => {
   });
 });
 
+const phoneHere = { kind: "phone", keyId: "doBaY6aYDBgHVCShPzJ3LQ" } as const;
+
 describe("elevationRequestStatusView", () => {
   const at = DateTime.makeUnsafe(Date.UTC(2026, 9, 31, 13, 18));
   const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
@@ -246,9 +250,7 @@ describe("elevationRequestStatusView", () => {
       elevationStatus: "approved" as const,
       resolvedBy: { deviceLabel: "Fold\n", keyId: "doBaY6aYDBgHVCShPzJ3LQ" },
     };
-    expect(
-      elevationRequestStatusView(item, { finished: false, thisKeyId: "doBaY6aYDBgHVCShPzJ3LQ" }),
-    ).toEqual({
+    expect(elevationRequestStatusView(item, { finished: false, here: phoneHere })).toEqual({
       kind: "approved",
       label: "Approved",
       time,
@@ -271,9 +273,16 @@ describe("elevationRequestStatusView", () => {
       elevationStatus: "denied" as const,
       resolvedBy: { deviceLabel: "Fold", keyId: "doBaY6aYDBgHVCShPzJ3LQ" },
     };
+    expect(elevationRequestStatusView(item, { finished: true, here: phoneHere })).toMatchObject({
+      label: "Denied",
+      how: `Denied on this phone · ${time}`,
+    });
     expect(
-      elevationRequestStatusView(item, { finished: true, thisKeyId: "doBaY6aYDBgHVCShPzJ3LQ" }),
-    ).toMatchObject({ label: "Denied", how: `Denied on this phone · ${time}` });
+      elevationRequestStatusView(item, {
+        finished: true,
+        here: { kind: "mac", keyId: "doBaY6aYDBgHVCShPzJ3LQ" },
+      }),
+    ).toMatchObject({ how: `Denied on this Mac · ${time}` });
     expect(elevationRequestStatusView(item, { finished: true })).toMatchObject({
       how: `Denied on Fold · ${time}`,
     });
@@ -346,21 +355,62 @@ describe("elevationHeadline", () => {
 });
 
 describe("elevationEndedLine", () => {
-  it("names the device that answered, this phone by its key", () => {
+  it("names the device that answered, this one by its key and kind", () => {
     const resolvedBy = { deviceLabel: "Fixture key\n", keyId: "doBaY6aYDBgHVCShPzJ3LQ" };
     expect(elevationEndedLine({ elevationStatus: "approved", resolvedBy }, null)).toEqual({
       kind: "approved",
       text: "Approved on Fixture key\\n",
     });
+    expect(elevationEndedLine({ elevationStatus: "denied", resolvedBy }, phoneHere)).toEqual({
+      kind: "denied",
+      text: "Denied on this phone",
+    });
     expect(
-      elevationEndedLine({ elevationStatus: "denied", resolvedBy }, "doBaY6aYDBgHVCShPzJ3LQ"),
-    ).toEqual({ kind: "denied", text: "Denied on this phone" });
+      elevationEndedLine(
+        { elevationStatus: "approved", resolvedBy },
+        { kind: "browser", keyId: resolvedBy.keyId },
+      ).text,
+    ).toBe("Approved on this browser");
     expect(elevationEndedLine({ elevationStatus: "denied", resolvedBy: null }, null).text).toBe(
       "Denied",
     );
     expect(elevationEndedLine({ elevationStatus: "expired", resolvedBy: null }, null).text).toBe(
       "Expired",
     );
+  });
+});
+
+describe("elevationApproverDescription", () => {
+  it("says what each kind of approver is, phones for servers that send no kind", () => {
+    expect(elevationApproverDescription({})).toBe("Phone");
+    expect(elevationApproverDescription({ kind: "mac" })).toBe("Touch ID");
+    expect(
+      elevationApproverDescription({
+        kind: "browser",
+        webauthn: { rpId: "t3.codes", origin: "https://app.t3.codes", credentialId: "AAEC" },
+      }),
+    ).toBe("Passkey · app.t3.codes");
+  });
+});
+
+describe("uniqueElevationApproverLabel", () => {
+  it("adds the computer's name only when the label is taken", () => {
+    expect(uniqueElevationApproverLabel("MacBook Pro", "studio", ["Galaxy Z Fold"])).toBe(
+      "MacBook Pro",
+    );
+    expect(uniqueElevationApproverLabel("MacBook Pro", " studio ", ["MacBook Pro"])).toBe(
+      "MacBook Pro (studio)",
+    );
+    expect(uniqueElevationApproverLabel("MacBook Pro", null, ["MacBook Pro"])).toBe("MacBook Pro");
+    expect(
+      uniqueElevationApproverLabel("MacBook Pro", "studio", [
+        "MacBook Pro",
+        "MacBook Pro (studio)",
+      ]),
+    ).toBe("MacBook Pro");
+    expect(
+      uniqueElevationApproverLabel("MacBook Pro", "x".repeat(80), ["MacBook Pro"]),
+    ).toHaveLength(64);
   });
 });
 

@@ -1395,6 +1395,8 @@ export function deriveMessagesTimelineRows(input: {
   isWorking: boolean;
   /** Native subagent work has no app run; runless entries form the live response. */
   runlessWorkActive?: boolean;
+  /** Something else in the live turn says what it's doing, so no Thinking row stands in for it. */
+  liveActivityShownElsewhere?: boolean;
   activeTurnStartedAt?: string | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   supportsConversationRollback: boolean;
@@ -2101,6 +2103,7 @@ export function deriveMessagesTimelineRows(input: {
   if (
     input.isWorking &&
     input.latestRun?.turnEnded !== true &&
+    input.liveActivityShownElsewhere !== true &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
     !compactionOnlyRunFinished &&

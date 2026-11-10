@@ -87,7 +87,7 @@ describe("removeThisPhoneMessage", () => {
       "This phone stops approving sudo on oracle. Pixel 9 can still approve.",
     );
     expect(removeThisPhoneMessage("oracle", ["Pixel 9", "Fold"])).toBe(
-      "This phone stops approving sudo on oracle. Your 2 other phones can still approve.",
+      "This phone stops approving sudo on oracle. Your 2 other devices can still approve.",
     );
   });
 });

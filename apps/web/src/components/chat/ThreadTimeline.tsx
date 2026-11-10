@@ -9,6 +9,7 @@ import {
   resolveThreadSwitchTimeline,
   timelineHasEphemeralPreviewUrls,
 } from "../ChatView.logic";
+import { useElevationHandoverStore } from "../elevation/elevationHandoverStore";
 import { MessagesTimeline } from "./MessagesTimeline";
 
 /**
@@ -35,9 +36,11 @@ export function ThreadTimeline({
   detailLoading: boolean;
 }) {
   const visibleTurnItems = useThreadVisibleTurnItems(threadDetailRef);
+  const elevationCommandsBesideCards = useElevationHandoverStore((state) => state.commandKeys);
   const serverEntries = useIncrementalTimelineEntries(activeThreadKey, {
     ...entriesInput,
     visibleTurnItems,
+    elevationCommandsBesideCards,
   });
   const entries = draftEntries ?? serverEntries;
   const displayedEntries = resolveThreadSwitchTimeline({

@@ -9,7 +9,8 @@ the command itself. Deny refuses it, and the agent is told not to retry.
 ## Set up
 
 On the phone, open **Settings → Device approval** and choose **Set up** for the
-machine. Setup asks for your fingerprint first, then the sudo password once.
+machine. Before it asks for anything, setup lists the files it will change on
+that machine. It then asks for your fingerprint, then the sudo password once.
 Enter it, or choose **Use a terminal command instead** to get a command to paste
 into a terminal on that machine. The password goes to the server once and is
 never stored. Setup trusts your account on that machine, the same as typing the sudo
@@ -17,9 +18,11 @@ password into T3 Code: anything running as you, including an agent, could
 change what it installs. On a Mac that uses Touch ID for `sudo`, a Touch ID
 prompt may appear on the Mac first; Cancel continues with the password.
 
-After setup, T3 Code runs a test `sudo` for you to approve on the phone. Run it
-again any time with **Test** in **Settings → Device approval** on the phone,
-web, or desktop.
+Setup doesn't run a test `sudo`. The next `sudo` an agent runs asks on the
+phone.
+
+If the T3 Code build on that machine doesn't include the device approval
+helper, **Set up** is unavailable and Settings says so.
 
 To add another phone, choose **Add this phone** on it. Approve on a phone that
 is already set up after checking that both show the same code, or enter the
@@ -39,28 +42,82 @@ password. Until a phone is set up, only the password can approve it.
   usual way, not the phone.
 - A request nobody answers expires after about 100 seconds, and the command
   fails.
+- Setup changes these files: the `sudo` PAM config (`/etc/pam.d/sudo_local` on
+  macOS, `/etc/pam.d/sudo` on Linux), `/etc/sudoers.d/t3-elevation`, the
+  approval config and phone keys in `/etc/t3-elevation`, and the helper and PAM
+  module it copies to `/usr/local/lib`. **Turn off** restores them.
 
 Requests show up in the app as a banner, and in the agent's thread, while the
 app is connected to the environment. A request T3 Code can't match to a thread
 waits at the top of the threads list instead. With T3 Connect linked, the phone also
 gets a push for requests that belong to a thread; without it there is no push.
-Web and desktop show requests and can deny them; approving needs the phone.
+Web and desktop show requests and can deny them. The Mac desktop app approves
+with Touch ID, and a browser with a passkey, once set up there (see below);
+otherwise approving needs the phone.
+
+## Approve on your Mac
+
+The T3 Code desktop app on a Mac with Touch ID can approve too, for any machine
+it connects to. In **Settings → Device approval**, choose **Set up** under the
+machine. macOS asks for Touch ID to "set up approvals on this Mac". Then
+approve the new Mac on a device that is already set up, after checking that
+both show the same code, or enter the password.
+
+A request then shows **Approve** on the Mac, and Touch ID asks to "approve an
+admin request". Check the command in T3 Code; the Touch ID prompt doesn't show
+it. Cancel denies. If you answer on another device first, the prompt closes by
+itself.
+
+- Touch ID needs the lid open, or a Touch ID keyboard connected. When it can't
+  be used, the request says why; approve on another device instead.
+- The key is made in the Mac's Secure Enclave and never leaves it. Unlike a
+  phone, the Mac can't prove that to the machine, which is why an approved
+  device or the password has to admit it.
+- Adding a fingerprint to the Mac disables its key, and T3 Code says this Mac
+  needs fixing. Remove it and add it again.
+- **Remove** on this Mac asks Touch ID to "remove this Mac as an approver", then
+  deletes its key.
+
+## Why the T3 Code server can't approve
+
+- The phone creates its approval key in its secure hardware (StrongBox, or the
+  TEE when there is none), and the key never leaves it. Every signature needs
+  your fingerprint, and adding a fingerprint to the phone disables the key.
+- At setup, the machine checks Android's proof that the key is hardware-backed,
+  needs a fingerprint for every use, and belongs to the T3 Code app.
+- The phone signs the exact command, user, and working directory it shows you.
+  `sudo` checks that signature itself, as root, before anything runs.
+- The T3 Code server only relays requests. It can delay, drop, or deny one, but
+  it can't approve one, and neither can an agent running as you.
+
+A Mac or a browser shows the command in T3 Code itself, so trust what it shows
+only as far as you trust where that code comes from:
+
+- When a Mac approves its own `sudo`, an agent running as you on that Mac could
+  open the same Touch ID prompt without a real card. Touch it only right after
+  choosing **Approve**. Approving another machine from the Mac is as safe as
+  the phone.
+- A browser runs the page it loaded. At an address served by the T3 Code server
+  itself, such as Tailscale, T3 Connect or `localhost`, that server could show one command
+  and ask the passkey to approve another. Approve from the phone or the Mac app
+  when you don't trust that server.
 
 ## Remove a device or turn it off
 
-In **Settings → Device approval**, open **Details**. **Revoke** removes another
-phone. On a phone, **Remove this phone** removes that phone after a fingerprint
-and deletes its key; other phones keep approving. If you lose a phone, revoke
-it from another device or with the password; the password keeps working for
-`sudo` in a terminal.
+In **Settings → Device approval**, each device that approves is listed under
+its machine, and **Remove** removes it. On a phone, **Remove this phone** removes
+that phone after a fingerprint and deletes its key; other devices keep approving.
+If you lose a phone, remove it from another device or with the password; the
+password keeps working for `sudo` in a terminal.
 
 If `sudo` on a Mac stops with "unable to initialize PAM", macOS's own
 administrator prompt still runs a command as root:
 `osascript -e 'do shell script "<command>" with administrator privileges'`.
 
-Once a phone is set up, adding a phone, revoking, and turning off are approved
-on a phone by default. You can still use the sudo password instead; it passes
-through the T3 Code server on its way to `sudo`.
+Once a phone is set up, adding a phone and removing one are approved on a phone by
+default. **Turn off** on web or desktop also asks a phone first; on the phone
+itself it asks for the sudo password. You can always use the password instead;
+it passes through the T3 Code server on its way to `sudo`.
 
 **Turn off**, also under **Details**, restores the files T3 Code changed, and
 agent `sudo` asks for the password again. When the setup comes from config
@@ -71,9 +128,30 @@ Enrolling a new fingerprint on the phone invalidates its key, and Settings shows
 **Needs fixing**. **Fix** replaces the key with your fingerprint and the
 password.
 
+## Approve in a browser
+
+A browser can approve with a passkey kept only on that computer, such as
+**Your Chrome profile** in Chrome on a Mac, or **Windows Hello** on Windows. In
+the browser, open **Settings → Device approval** and choose **Set up** under the
+machine. A device that is already set up approves the new passkey after checking
+that both show the same code, or you enter the machine's password; on a machine
+with nothing set up yet, that password also turns device approval on. After
+that, requests in the browser show **Approve**, which asks for your fingerprint
+or your computer's password. Cancel there denies.
+
+A passkey saved to Google Password Manager, iCloud Keychain, or another password
+manager syncs to your other devices, and each of them could then approve, so
+T3 Code refuses it; set up again and save it to this device only. Safari saves
+every passkey to iCloud Keychain, so it can't approve.
+
+Passkeys need a secure address: `https`, such as through Tailscale or T3
+Connect, or `localhost`. Over plain `http` on a network address, **Set up** is
+unavailable. A passkey works only at the address it was set up at.
+
 ## Requirements
 
-- An Android phone with Android 11 or later and a fingerprint sensor. iPhone
+- An Android phone with Android 11 or later and a fingerprint sensor, or the
+  T3 Code desktop app on a Mac with Touch ID and macOS 13 or later. iPhone
   isn't supported yet.
 - The machine runs Linux or macOS. On Fedora and other SELinux systems, confined
   SELinux users aren't supported; setup says so, and `sudo` keeps asking for the

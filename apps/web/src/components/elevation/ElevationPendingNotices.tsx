@@ -32,15 +32,17 @@ export function ElevationPendingNotices() {
   const respond = useAtomCommand(elevation.respond, "deny device approval");
   const listOnScreen = useElevationSidebarStore((state) => state.listOnScreen);
   const reveal = useElevationSidebarStore((state) => state.reveal);
+  const claimed = useElevationSidebarStore((state) => state.claimed);
   // A key maps to null once the user dismissed its notice, so it isn't reopened.
   const shown = useRef(new Map<string, ToastId | null>());
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens and closes imperative toasts to match the pending requests
   useEffect(() => {
     const shownElsewhere = (entry: PendingElevationRequest) =>
-      entry.request.threadId === null
+      claimed?.(entry) === true ||
+      (entry.request.threadId === null
         ? listOnScreen
-        : entry.environmentId === openEnvironmentId && entry.request.threadId === openThreadId;
+        : entry.environmentId === openEnvironmentId && entry.request.threadId === openThreadId);
     const live = new Set(pending.filter((entry) => !shownElsewhere(entry)).map(requestKey));
     const stillPending = new Set(pending.map(requestKey));
     for (const [key, id] of shown.current) {
@@ -105,7 +107,7 @@ export function ElevationPendingNotices() {
       });
       shown.current.set(key, id);
     }
-  }, [listOnScreen, navigate, openEnvironmentId, openThreadId, pending, respond, reveal]);
+  }, [claimed, listOnScreen, navigate, openEnvironmentId, openThreadId, pending, respond, reveal]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the toasts this component opened when it unmounts
   useEffect(() => {

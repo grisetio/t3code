@@ -128,6 +128,8 @@ import {
 } from "./timelineViewport";
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
+import { useElevationHandoverStore } from "../elevation/elevationHandoverStore";
+import { ELEVATION_COLLAPSE_MS } from "../elevation/ElevationPendingCard";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
 
 function timelineListStateFor(identity: string): {
@@ -668,15 +670,25 @@ const ConversationTimeline = memo(function ConversationTimeline({
       .map((approval) => [approval.requestId, approval]),
   );
   const pendingApprovalRequestIds = new Set(pendingApprovalsByRequestId.keys());
+  // A turn that ends while its sudo card still says how it went stays open until the card has
+  // handed over, so the fold doesn't move the card mid-hold.
+  const elevationHeldRunIds = useElevationHandoverStore((state) => state.runIds);
+  const elevationFoldingRunIds = useElevationHandoverStore((state) => state.foldingRunIds);
+  const rowsExpandedRunIds =
+    elevationHeldRunIds.size === 0
+      ? visibleExpandedRunIds
+      : new Set([...visibleExpandedRunIds, ...elevationHeldRunIds]);
   const rawRows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, {
     timelineEntries,
     pendingApprovalRequestIds,
     latestRun,
     runningRunId,
-    expandedRunIds: visibleExpandedRunIds,
+    expandedRunIds: rowsExpandedRunIds,
     expandedAttemptIds: visibleExpandedAttemptIds,
     expandedWorkGroupIds,
     isWorking,
+    // The card says what the turn is doing; a Thinking row under it would only blink as it ends.
+    liveActivityShownElsewhere: latestRun !== null && elevationHeldRunIds.has(latestRun.runId),
     runlessWorkActive,
     activeTurnStartedAt,
     turnDiffSummaries,
@@ -686,6 +698,33 @@ const ConversationTimeline = memo(function ConversationTimeline({
     worktreeSetup,
   });
   const rows = useStableRows(rawRows, listIdentityKey);
+  const elevationFoldRunIds =
+    elevationHeldRunIds.size === 0
+      ? EMPTY_RUN_IDS
+      : new Set(
+          rows.flatMap((row) =>
+            row.kind === "turn-fold" &&
+            elevationHeldRunIds.has(row.runId) &&
+            !visibleExpandedRunIds.has(row.runId)
+              ? [row.runId]
+              : [],
+          ),
+        );
+  // Rows the fold hides close with the card that held it open, so it lands with nothing to move.
+  const foldingRowIds =
+    elevationFoldingRunIds.size === 0
+      ? null
+      : new Set(
+          [
+            ...timelineTurnFoldRunIdsByEntryId({
+              timelineEntries,
+              latestRun,
+              runningRunId,
+              isWorking,
+              runlessWorkActive,
+            }),
+          ].flatMap(([entryId, runId]) => (elevationFoldingRunIds.has(runId) ? [entryId] : [])),
+        );
   const unmatchedPendingApprovals = new Map(pendingApprovalsByRequestId);
   if (unmatchedPendingApprovals.size > 0) {
     for (const row of rows) {
@@ -1070,6 +1109,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     awaitingUser: awaitingUser !== null,
     isPreparingWorktree,
     latestRunId: latestRun?.runId ?? null,
+    elevationFoldRunIds,
   };
   // Mounted in both the empty and filled timeline so a thread's first turn
   // starts from a baseline instead of a fresh, silent region.
@@ -1229,13 +1269,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
           data-timeline-root="true"
         >
           <AudioPreviewUnmountContext value={onAudioUnmount}>
-            <TimelineRowContent row={item} />
+            <TimelineRowContent row={item} folding={foldingRowIds?.has(item.id) ?? false} />
           </AudioPreviewUnmountContext>
         </div>
       </div>
     </TimelineRowCtx>
   );
-  const listExtraData = { identity: listIdentityKey, rowCount: rows.length, sharedState };
+  const listExtraData = {
+    identity: listIdentityKey,
+    rowCount: rows.length,
+    sharedState,
+    foldingRowIds,
+  };
   const timelineListFooter = (
     <TimelineListFooter
       composerInset={anchoredEndSpace ? 0 : contentInsetEndAdjustment}
@@ -1418,9 +1463,33 @@ function getItemType(item: MessagesTimelineRow) {
   return `message:${item.message.role}:${lengthBucket}`;
 }
 
-const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+const TimelineRowContent = memo(function TimelineRowContent({
+  row,
+  folding,
+}: {
+  row: TimelineRow;
+  /** Hidden by a fold that lands once a sudo card hands over: closes with the card. */
+  folding: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!folding || element === null) return;
+    const { paddingBottom } = getComputedStyle(element);
+    const animation = element.animate(
+      [
+        { height: `${element.offsetHeight}px`, paddingBottom, opacity: 1 },
+        { opacity: 0, offset: 0.6 },
+        { height: "0px", paddingBottom: "0px", opacity: 0 },
+      ],
+      { duration: ELEVATION_COLLAPSE_MS, easing: "ease", fill: "forwards" },
+    );
+    return () => animation.cancel();
+  }, [folding]);
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
+  const isElevationRequest =
+    row.kind === "event" && row.projectedItem.item.type === "elevation_request";
   const isWorkLogRow =
     row.kind === "work" ||
     row.kind === "work-live" ||
@@ -1432,8 +1501,11 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 
   return (
     <div
+      ref={ref}
       className={cn(
-        isWorkLogRow || isSubagentGroup
+        folding && "overflow-hidden",
+        // A sudo request's card collapses its own spacing as it hands over.
+        isWorkLogRow || isSubagentGroup || isElevationRequest
           ? undefined
           : row.kind === "turn-fold" || row.kind === "working"
             ? "pb-1.5"

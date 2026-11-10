@@ -56,17 +56,35 @@ pub struct AttestationSummary {
     pub test_attestation: bool,
 }
 
+/// Where a `webauthn-es256` key signs: assertions must come from exactly this
+/// origin, for this rpId.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebauthnBinding {
+    pub rp_id: String,
+    /// `scheme://host[:port]`, as browsers write it in clientDataJSON.
+    pub origin: String,
+    /// base64url; clients pass it in `allowCredentials`. The module never uses it.
+    pub credential_id: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyFile {
     pub version: u32,
     pub key_id: String,
+    /// `es256` (responses sign with `es256-der`) or `webauthn-es256`.
     pub alg: String,
     pub public_key: String,
     pub label: String,
     pub security_level: String,
     pub enrolled_at: String,
-    pub attestation_summary: AttestationSummary,
+    /// Absent for keys enrolled with `--unattested`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation_summary: Option<AttestationSummary>,
+    /// Present exactly when `alg` is `webauthn-es256`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webauthn: Option<WebauthnBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -77,11 +95,23 @@ pub struct EnrolledKey {
 }
 
 /// A key file is used only when its name, its `keyId`, and the keyId derived
-/// from its public key agree, and the key is P-256.
+/// from its public key agree, and the key is P-256. A WebAuthn key also needs a
+/// valid binding and no attestation, which WebAuthn keys never have.
 pub fn parse_key_file(file_name: &str, bytes: &[u8]) -> Option<EnrolledKey> {
     let name_id = file_name.strip_suffix(".json")?;
     let file: KeyFile = serde_json::from_slice(bytes).ok()?;
-    if file.version != 1 || file.alg != "es256" || !is_key_id(name_id) || file.key_id != name_id {
+    if file.version != 1 || !is_key_id(name_id) || file.key_id != name_id {
+        return None;
+    }
+    let kind_ok = match (file.alg.as_str(), &file.webauthn) {
+        ("es256", None) => true,
+        ("webauthn-es256", Some(binding)) => {
+            file.attestation_summary.is_none()
+                && crate::enroll::webauthn_site(&binding.rp_id, &binding.origin).is_some()
+        }
+        _ => false,
+    };
+    if !kind_ok {
         return None;
     }
     let spki = b64::decode(&file.public_key)?;

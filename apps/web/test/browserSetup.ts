@@ -5,6 +5,18 @@ declare module "vite-plus/test/browser" {
   interface BrowserCommands {
     /** Defined in vite.config.ts. Moves Playwright's mouse off the page. */
     resetPointer: () => Promise<void>;
+    /** Defined in vite.config.ts. A platform passkey authenticator, replacing any previous one. */
+    addVirtualAuthenticator: (options?: {
+      /** Makes passkeys that can sync, as Google Password Manager or iCloud Keychain do. */
+      readonly backupEligible?: boolean;
+    }) => Promise<void>;
+    setVirtualAuthenticator: (options: {
+      /** False fails user verification, as cancelling the prompt does. */
+      readonly userVerified?: boolean;
+      /** False leaves every request waiting for a touch that never comes. */
+      readonly presence?: boolean;
+    }) => Promise<void>;
+    removeVirtualAuthenticator: () => Promise<void>;
   }
 }
 

@@ -11,6 +11,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import { ElevationBase64Url, ElevationKeyId, ElevationSignedResponse } from "./elevation.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -334,6 +335,50 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
   launcherPath: Schema.NullOr(Schema.String),
 });
 export type DesktopCliCommandState = typeof DesktopCliCommandStateSchema.Type;
+
+/** Why this Mac's Touch ID can't approve now; `needs_fixing` when new fingerprints voided its key. */
+export const DesktopTouchIdUnavailableSchema = Schema.Literals([
+  "lid_closed",
+  "keyboard_away",
+  "locked_out",
+  "no_fingerprints",
+  "needs_fixing",
+  "unavailable",
+]);
+export type DesktopTouchIdUnavailable = typeof DesktopTouchIdUnavailableSchema.Type;
+
+/** This Mac as a device approval approver for one environment. */
+export const DesktopDeviceApprovalStateSchema = Schema.Union([
+  Schema.Struct({ supported: Schema.Literal(false) }),
+  Schema.Struct({
+    supported: Schema.Literal(true),
+    /** The key this Mac holds for the environment; it approves only once the machine enrolls it. */
+    keyId: Schema.NullOr(ElevationKeyId),
+    unavailable: Schema.NullOr(DesktopTouchIdUnavailableSchema),
+    /** "MacBook Pro". */
+    model: Schema.String,
+    computerName: Schema.NullOr(Schema.String),
+  }),
+]);
+export type DesktopDeviceApprovalState = typeof DesktopDeviceApprovalStateSchema.Type;
+
+/** `operationId` names the Touch ID sheet, so `abort` can close it. */
+export const DesktopDeviceApprovalOperationSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  operationId: TrimmedNonEmptyString,
+});
+
+export const DesktopDeviceApprovalSignInputSchema = Schema.Struct({
+  ...DesktopDeviceApprovalOperationSchema.fields,
+  /** The payload bytes the card rendered, base64url. */
+  payload: ElevationBase64Url,
+});
+
+/** Null when the sheet was cancelled or aborted. */
+export const DesktopDeviceApprovalCreateKeyResultSchema = Schema.NullOr(
+  Schema.Struct({ publicKey: ElevationBase64Url }),
+);
+export const DesktopDeviceApprovalSignResultSchema = Schema.NullOr(ElevationSignedResponse);
 
 export interface DesktopUpdateActionResult {
   accepted: boolean;
@@ -1119,6 +1164,18 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopCliCommandState>;
     install: () => Promise<DesktopCliCommandState>;
     uninstall: () => Promise<DesktopCliCommandState>;
+  };
+  /** macOS only: this Mac's Touch ID key. The key file stays in the main process. */
+  deviceApproval?: {
+    getState: (environmentId: EnvironmentId) => Promise<DesktopDeviceApprovalState>;
+    createKey: (
+      input: typeof DesktopDeviceApprovalOperationSchema.Type,
+    ) => Promise<typeof DesktopDeviceApprovalCreateKeyResultSchema.Type>;
+    sign: (
+      input: typeof DesktopDeviceApprovalSignInputSchema.Type,
+    ) => Promise<typeof DesktopDeviceApprovalSignResultSchema.Type>;
+    abort: (operationId: string) => Promise<void>;
+    forget: (environmentId: EnvironmentId) => Promise<void>;
   };
   webLinks: {
     setReady: (ready: boolean) => Promise<void>;

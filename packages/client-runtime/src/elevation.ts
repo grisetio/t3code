@@ -3,6 +3,8 @@ import {
   decodeElevationPayload,
   escapeElevationDisplayText,
   parseElevationEnrollCommand,
+  type ElevationApproverKind,
+  type ElevationDevice,
   type ElevationEndedRequest,
   type ElevationPayload,
   type ElevationPayloadDecodeFailure,
@@ -41,6 +43,67 @@ export const ELEVATION_CANT_APPROVE_HERE =
 /** pam_tid sits before the password in a nix-darwin or Apple sudo stack; no sudo option skips it. */
 export const ELEVATION_TOUCH_ID_HINT =
   "On a Mac that uses Touch ID for sudo, a Touch ID prompt may appear there first; Cancel continues with the password.";
+
+/** The approver the user is looking at: this phone, this Mac or this browser, and its key. */
+export interface ElevationApproverHere {
+  readonly kind: ElevationApproverKind;
+  readonly keyId: string;
+}
+
+const HERE_WORDS: Record<ElevationApproverKind, string> = {
+  phone: "this phone",
+  mac: "this Mac",
+  browser: "this browser",
+};
+
+/** " on this Mac" when this approver answered, " on Galaxy Z Fold" when another did. */
+function answeredOn(
+  resolvedBy: ElevationEndedRequest["resolvedBy"],
+  here: ElevationApproverHere | null | undefined,
+): string {
+  if (resolvedBy === null) return "";
+  return resolvedBy.keyId !== undefined && resolvedBy.keyId === here?.keyId
+    ? ` on ${HERE_WORDS[here.kind]}`
+    : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
+}
+
+/** Older servers send no kind; every device they enrolled is a phone. */
+export const elevationDeviceKind = (device: Pick<ElevationDevice, "kind">): ElevationApproverKind =>
+  device.kind ?? "phone";
+
+/** What an approver row says it is, before its dates: "Phone", "Touch ID", "Passkey · app.t3.codes". */
+export function elevationApproverDescription(
+  device: Pick<ElevationDevice, "kind" | "webauthn">,
+): string {
+  switch (elevationDeviceKind(device)) {
+    case "phone":
+      return "Phone";
+    case "mac":
+      return "Touch ID";
+    case "browser": {
+      const host = device.webauthn?.origin.replace(/^https?:\/\//, "");
+      return host === undefined ? "Passkey" : `Passkey · ${escapeElevationDisplayText(host)}`;
+    }
+  }
+}
+
+/**
+ * A new approver's label: the model name ("MacBook Pro", "Chrome on Mac"), with the computer's
+ * name added only when another approver on the machine already has that label. With no name to
+ * add, or when that collides too, the label stays as it is; there is no rename.
+ */
+export function uniqueElevationApproverLabel(
+  base: string,
+  computerName: string | null,
+  existing: ReadonlyArray<string>,
+): string {
+  if (!existing.includes(base)) return base;
+  const name = computerName?.trim() ?? "";
+  if (name === "" || name === base) return base;
+  // The helper caps labels at 64 characters.
+  const labeled = `${base} (${name.slice(0, Math.max(0, 61 - base.length))})`;
+  return labeled.length > 64 || existing.includes(labeled) ? base : labeled;
+}
 
 export interface ElevationPasswordWords {
   /** On its own, in titles, fields and buttons: "Mac password", "oracle password". */
@@ -210,7 +273,7 @@ function elevationReason(explanation: string | null | undefined): string | null 
 
 /**
  * What a request leads with on every surface: the agent's reason in quotes, "Add device X" for a
- * new phone, or T3's fixed line, unquoted so it never reads as the agent's words. Never the
+ * new approver, or T3's fixed line, unquoted so it never reads as the agent's words. Never the
  * command: a command as the headline is the line nobody reads.
  */
 export function elevationHeadline(input: {
@@ -456,22 +519,16 @@ export function elevationRequestStatusView(
   options: {
     /** The approved command's run has ended. */
     readonly finished: boolean;
-    /** This phone's key on the machine; null on clients without one. */
-    readonly thisKeyId?: string | null;
-    /** This phone denied it, for servers that don't record the denying device. */
+    /** The approver on this client; null on clients without one. */
+    readonly here?: ElevationApproverHere | null;
+    /** This approver denied it, for servers that don't record the denying device. */
     readonly deniedHere?: boolean;
   },
 ): ElevationRequestStatusView {
   if (item.elevationStatus === "pending") return { kind: "pending", label: "Waiting for approval" };
   const time = timeFormat.format((item.completedAt ?? item.updatedAt).epochMilliseconds);
   const detail = item.failure === undefined ? null : ELEVATION_FAILURE_MESSAGES[item.failure];
-  const { resolvedBy } = item;
-  const approvedOn =
-    resolvedBy === null
-      ? ""
-      : resolvedBy.keyId !== undefined && resolvedBy.keyId === options.thisKeyId
-        ? " on this phone"
-        : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
+  const approvedOn = answeredOn(item.resolvedBy, options.here);
   switch (item.elevationStatus) {
     case "approved":
       // "Approved" stays the status after the run ends; only the detail says it finished.
@@ -487,7 +544,7 @@ export function elevationRequestStatusView(
         kind: "denied",
         label: "Denied",
         time,
-        how: `Denied${options.deniedHere ? " on this phone" : approvedOn} · ${time}`,
+        how: `Denied${options.deniedHere ? ` on ${HERE_WORDS[options.here?.kind ?? "phone"]}` : approvedOn} · ${time}`,
         detail,
       };
     case "expired":
@@ -579,15 +636,9 @@ export interface ElevationEndedView {
  */
 export function elevationEndedLine(
   ended: Pick<ElevationEndedRequest, "elevationStatus" | "resolvedBy">,
-  thisKeyId: string | null,
+  here: ElevationApproverHere | null,
 ): ElevationEndedView {
-  const { resolvedBy } = ended;
-  const on =
-    resolvedBy === null
-      ? ""
-      : resolvedBy.keyId !== undefined && resolvedBy.keyId === thisKeyId
-        ? " on this phone"
-        : ` on ${escapeElevationDisplayText(resolvedBy.deviceLabel)}`;
+  const on = answeredOn(ended.resolvedBy, here);
   switch (ended.elevationStatus) {
     case "approved":
       return { kind: "approved", text: `Approved${on}` };

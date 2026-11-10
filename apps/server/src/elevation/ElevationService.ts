@@ -26,6 +26,9 @@ import {
   type ElevationEndedRequest,
   type ElevationEnrollInput,
   ElevationEnrollmentDevice,
+  elevationApproverKind,
+  elevationWebauthnRegistrationRefusal,
+  isElevationUnattestedDevice,
   type ElevationFailureReason,
   type ElevationInstallInput,
   type ElevationInstallResult,
@@ -123,6 +126,7 @@ const FINISHED_ITEM_STATUSES = new Set(["completed"]);
 const ENDED_KEPT = 8;
 // With no thread to bound a series, a machine's requests this close together read as one.
 const MACHINE_SERIES_WINDOW_MS = 5 * 60_000;
+const NO_HELPER_MESSAGE = "This build of T3 Code doesn't include the device approval helper.";
 
 export interface ElevationOptions {
   readonly user: string;
@@ -130,7 +134,7 @@ export interface ElevationOptions {
   readonly hostPaths: HostPaths;
   /** `T3_ELEVATION_HELPER`, a dev build of the helper; used ahead of the installed copy for setup. */
   readonly helperOverride: string | null;
-  /** The helper shipped with T3, for the first install only; null while none is packaged. */
+  /** The helper shipped with T3, for the first install only; null in builds that ship none. */
   readonly bundledHelperPath: string | null;
   readonly sudoPath: string;
   readonly attestation: ElevationAttestation;
@@ -217,6 +221,27 @@ const lastLine = (text: string) => text.trim().split("\n").at(-1) ?? "";
 
 /** The helper's enrollment object has exactly the device's fields. */
 const enrollmentObject = Schema.encodeSync(Schema.fromJsonString(ElevationEnrollmentDevice));
+
+/**
+ * A synced passkey is refused before anything asks for an approval it would only waste; the
+ * helper refuses it too (`check_registration`).
+ */
+const refuseUnenrollablePasskey = (device: ElevationEnrollmentDevice) => {
+  if (!isElevationUnattestedDevice(device) || device.webauthn === undefined) return Effect.void;
+  const { webauthn } = device;
+  const authenticatorData = decodeElevationBase64Url(webauthn.authenticatorData);
+  const credentialId = decodeElevationBase64Url(webauthn.credentialId);
+  const refusal =
+    authenticatorData === null || credentialId === null
+      ? "invalid"
+      : elevationWebauthnRegistrationRefusal({
+          authenticatorData,
+          rpIdHash: NodeCrypto.createHash("sha256").update(webauthn.rpId).digest(),
+          credentialId,
+        });
+  if (refusal === null) return Effect.void;
+  return fail(refusal === "synced" ? "synced_passkey" : "invalid_passkey");
+};
 
 export class ElevationService extends Context.Service<
   ElevationService,
@@ -840,9 +865,10 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     return (yield* installedHelper) ?? options.bundledHelperPath;
   });
 
+  /** The helper's own status, or why setup can't run, said before the phone makes its key. */
   const helperStatus = Effect.gen(function* () {
     const helper = yield* setupHelper;
-    if (helper === null) return null;
+    if (helper === null) return { status: null, setupUnavailableReason: NO_HELPER_MESSAGE };
     const output = yield* processRunner
       .run({
         command: helper,
@@ -850,8 +876,12 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         timeout: "10 seconds",
       })
       .pipe(Effect.option);
-    if (Option.isNone(output)) return null;
-    return Option.getOrNull(decodeHelperStatus(lastLine(output.value.stdout)));
+    const status = Option.isNone(output)
+      ? null
+      : Option.getOrNull(decodeHelperStatus(lastLine(output.value.stdout)));
+    return status === null
+      ? { status, setupUnavailableReason: "T3 Code's device approval helper didn't run here." }
+      : { status, setupUnavailableReason: null };
   });
 
   const untrustedHelperMessage = `${options.hostPaths.helperPath} is missing, or it or a folder above it isn't root-owned and closed to other users.`;
@@ -863,7 +893,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       user: options.user,
       socketPath: options.socketPath,
     });
-    const helper = yield* helperStatus;
+    const { status: helper, setupUnavailableReason } = yield* helperStatus;
     const helperInstalled = (yield* installedHelper) !== null;
     const configured =
       host.config !== null &&
@@ -875,6 +905,8 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       keyId: key.keyId,
       label: key.label,
       securityLevel: key.securityLevel,
+      kind: elevationApproverKind(key.securityLevel),
+      ...(key.webauthn === undefined ? {} : { webauthn: key.webauthn }),
       enrolledAt: Option.getOrElse(DateTime.make(key.enrolledAt), () => DateTime.makeUnsafe(0)),
       lastUsedAt: Option.getOrNull(DateTime.make(lastUsed.get(key.keyId) ?? "")),
     }));
@@ -908,6 +940,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     return {
       supported: unsupported === null,
       ...(unsupported === null ? {} : { unsupportedReason: unsupported }),
+      ...(setupUnavailableReason === null ? {} : { setupUnavailableReason }),
       ready: unsupported === null && listening && host.checks.every((check) => check.ok),
       ownsApprovals: listening,
       user: options.user,
@@ -923,7 +956,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   const requireSetupHelper = Effect.gen(function* () {
     const helper = yield* setupHelper;
     if (helper === null) {
-      return yield* fail("not_available", "This build doesn't include the device approval helper.");
+      return yield* fail("not_available", NO_HELPER_MESSAGE);
     }
     return helper;
   });
@@ -997,6 +1030,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   });
 
   const attestationFlag = ATTESTATION_FLAGS[options.attestation];
+  // A Mac's or browser's key has no attestation to check; the flag puts that in the approved argv.
+  const proofFlags = (device: ElevationEnrollmentDevice) =>
+    isElevationUnattestedDevice(device) ? ["--unattested"] : attestationFlag;
 
   const withKeyFile = <A, E, R>(
     device: ElevationEnrollmentDevice,
@@ -1024,6 +1060,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const install = Effect.fn("ElevationService.install")(function* (input: ElevationInstallInput) {
     yield* requireSupported;
+    yield* refuseUnenrollablePasskey(input.device);
     const helper = yield* requireSetupHelper;
     const installArgs = (keyPath: string) => [
       "install",
@@ -1033,7 +1070,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       options.socketPath,
       "--key",
       keyPath,
-      ...attestationFlag,
+      ...proofFlags(input.device),
     ];
     if (input.password === null) {
       // The key file outlives this call, so it sits in the private state dir.
@@ -1065,6 +1102,13 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const enroll = Effect.fn("ElevationService.enroll")(function* (input: ElevationEnrollInput) {
     yield* requireSupported;
+    yield* refuseUnenrollablePasskey(input.device);
+    const { device } = input;
+    const proof = !isElevationUnattestedDevice(device)
+      ? ["--challenge", device.challenge, ...attestationFlag]
+      : device.webauthn === undefined
+        ? ["--unattested"]
+        : ["--unattested", "--rp-id", device.webauthn.rpId, "--origin", device.webauthn.origin];
     yield* runHelper({
       helper: yield* requireInstalledHelper,
       args: [
@@ -1075,9 +1119,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         input.device.label,
         "--public-key",
         input.device.publicKey,
-        "--challenge",
-        input.device.challenge,
-        ...attestationFlag,
+        ...proof,
       ],
       password: input.password,
       stdin: enrollmentObject(input.device),
@@ -1256,8 +1298,24 @@ export const instructionsLayer = Layer.sync(DeviceApprovalInstructions, () => {
   };
 });
 
-// No package ships the helper yet, so first setup needs T3_ELEVATION_HELPER until one does.
-const BUNDLED_HELPER_PATH: string | null = null;
+/**
+ * The helper a release ships beside the server, which first setup runs once:
+ * the CLI archive keeps it next to `t3`, and the desktop app under Resources,
+ * because its server runs from Resources/app.asar/apps/server/dist and sudo
+ * can't run a file inside an asar. A build from source ships none.
+ */
+export function bundledElevationHelperPath(input: {
+  readonly serverDir: string;
+  readonly packaged: boolean;
+  readonly exists: (path: string) => boolean;
+}): string | null {
+  if (!input.packaged) return null;
+  const candidates = [
+    NodePath.join(input.serverDir, "t3-elevation", "t3-elevation"),
+    NodePath.resolve(input.serverDir, "../../../..", "t3-elevation", "t3-elevation"),
+  ];
+  return candidates.find(input.exists) ?? null;
+}
 
 /** Which helper attestation option setup and enroll pass; docs/internals/device-approval.md. */
 export type ElevationAttestation = "release" | "dev" | "test";
@@ -1303,6 +1361,7 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const platform = yield* HostProcess.Platform;
     const host = { platform, arch: yield* HostProcess.Architecture };
+    const packaged = typeof __T3CODE_BUILD_CHANNEL__ !== "undefined";
     return yield* make({
       user: NodeOS.userInfo().username,
       socketPath: NodePath.join(config.stateDir, "elevation.sock"),
@@ -1315,12 +1374,13 @@ export const layer = Layer.effect(
         platform,
       },
       helperOverride: process.env.T3_ELEVATION_HELPER ?? null,
-      bundledHelperPath: BUNDLED_HELPER_PATH,
-      sudoPath: elevationSudoPath(platform, NodeFS.existsSync),
-      attestation: elevationAttestation({
-        env: process.env,
-        packaged: typeof __T3CODE_BUILD_CHANNEL__ !== "undefined",
+      bundledHelperPath: bundledElevationHelperPath({
+        serverDir: import.meta.dirname,
+        packaged,
+        exists: NodeFS.existsSync,
       }),
+      sudoPath: elevationSudoPath(platform, NodeFS.existsSync),
+      attestation: elevationAttestation({ env: process.env, packaged }),
       devicesStatePath: NodePath.join(config.stateDir, "elevation-devices.json"),
       server: () => ({ pid: process.pid, startTime: processStartTime(host, process.pid) }),
       trustedPeerUid: 0,

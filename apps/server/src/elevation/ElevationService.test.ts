@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Plays the PAM module over a real Unix socket and fakes sudo with scripts.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
@@ -22,6 +23,7 @@ import {
   ThreadId,
   TurnItemId,
   decodeElevationBase64Url,
+  type ElevationError,
   type ElevationKeyId,
   type ElevationRequestId,
   type OrchestrationV2ServerCommand,
@@ -48,6 +50,12 @@ import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderRepl
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ElevationService from "./ElevationService.ts";
+
+const registration = (name: string) => {
+  const vector = vectorsJson.webauthnRegistrations.find((candidate) => candidate.name === name);
+  if (vector === undefined) throw new Error(`No registration vector ${name}`);
+  return vector.authenticatorData;
+};
 
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
@@ -205,6 +213,8 @@ const makeFixture = Effect.fn("test.makeFixture")(function* (options?: {
   readonly providerProcesses?: ReadonlyArray<ProviderProcess>;
   /** Set to run without peer credentials, as under Electron's Node. */
   readonly plausiblePeer?: (hello: { readonly chain: ReadonlyArray<{ pid: number }> }) => boolean;
+  /** A fresh machine: no override, nothing installed, and this helper (or none) shipped. */
+  readonly bundledOnly?: "helper" | null;
 }) {
   const dir = yield* Effect.acquireRelease(
     Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elev-"))),
@@ -267,7 +277,7 @@ esac
     await NodeFSP.mkdir(NodePath.dirname(installedHelper(dir)), { recursive: true });
     await NodeFSP.chmod(NodePath.join(dir, "lib"), 0o755);
     await NodeFSP.chmod(NodePath.dirname(installedHelper(dir)), 0o755);
-    await writeScript(installedHelper(dir), helper);
+    if (options?.bundledOnly === undefined) await writeScript(installedHelper(dir), helper);
   });
 
   const commands = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
@@ -297,8 +307,8 @@ esac
       rootUid: NodeOS.userInfo().uid,
       platform: "darwin",
     },
-    helperOverride: NodePath.join(dir, "helper"),
-    bundledHelperPath: null,
+    helperOverride: options?.bundledOnly === undefined ? NodePath.join(dir, "helper") : null,
+    bundledHelperPath: options?.bundledOnly === "helper" ? NodePath.join(dir, "helper") : null,
     sudoPath: NodePath.join(dir, "sudo"),
     attestation: "release",
     devicesStatePath: NodePath.join(dir, "elevation-devices.json"),
@@ -794,6 +804,19 @@ describe("ElevationService", () => {
 describe("ElevationService helper", () => {
   const read = (path: string) => Effect.promise(() => NodeFSP.readFile(path, "utf8"));
   const lines = (text: string) => text.trimEnd().split("\n");
+  const exists = (path: string) =>
+    Effect.promise(() =>
+      NodeFSP.access(path).then(
+        () => true,
+        () => false,
+      ),
+    );
+  const setupDevice = {
+    label: "Pixel",
+    publicKey: vectorsJson.keys.newDevice.spkiDer,
+    challenge: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    attestationChain: ["AAAA"] as [string],
+  };
 
   it.live("installs with the password on sudo's stdin and the key in a removed 0600 file", () =>
     Effect.gen(function* () {
@@ -917,6 +940,96 @@ describe("ElevationService helper", () => {
         yield* read(NodePath.join(fixture.dir, "helper.stdin")),
         `${vectorsJson.helperInput.marker}\n${JSON.stringify(device)}`,
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("enrolls and installs a Mac or browser key as --unattested, and lists it by kind", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const { webauthnDevice } = vectorsJson.keys;
+      const passkey = {
+        label: "Chrome on Mac",
+        publicKey: webauthnDevice.spkiDer,
+        webauthn: { ...webauthnDevice.webauthn, authenticatorData: registration("device_bound") },
+      };
+      yield* fixture.service.enroll({ device: passkey });
+      assert.deepStrictEqual(lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))).slice(2), [
+        "enroll",
+        "--user",
+        "me",
+        "--label",
+        "Chrome on Mac",
+        "--public-key",
+        passkey.publicKey,
+        "--unattested",
+        "--rp-id",
+        "app.t3.codes",
+        "--origin",
+        "https://app.t3.codes",
+      ]);
+      assert.strictEqual(
+        yield* read(NodePath.join(fixture.dir, "helper.stdin")),
+        `${vectorsJson.helperInput.marker}\n${JSON.stringify(passkey)}`,
+      );
+
+      const mac = { label: "MacBook Pro", publicKey: vectorsJson.keys.newDevice.spkiDer };
+      yield* fixture.service.install({ password: "hunter2", device: mac });
+      const sudoArgs = lines(yield* read(NodePath.join(fixture.dir, "sudo.args")));
+      assert.deepStrictEqual(sudoArgs.slice(sudoArgs.indexOf("--key") + 2), ["--unattested"]);
+
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(fixture.dir, "etc", "keys", "me", `${webauthnDevice.keyId}.json`),
+          JSON.stringify({
+            version: 1,
+            keyId: webauthnDevice.keyId,
+            alg: "webauthn-es256",
+            publicKey: webauthnDevice.spkiDer,
+            label: "Chrome on Mac",
+            securityLevel: "webauthn",
+            enrolledAt: "2026-10-31T12:00:00Z",
+            webauthn: webauthnDevice.webauthn,
+          }),
+        ),
+      );
+      const status = yield* fixture.service.status;
+      assert.deepStrictEqual(
+        status.devices.map((device) => [device.label, device.kind, device.webauthn?.origin]),
+        [
+          ["Pixel", "phone", undefined],
+          ["Chrome on Mac", "browser", "https://app.t3.codes"],
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("refuses a passkey that can sync before sudo asks anyone to approve it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const { webauthnDevice } = vectorsJson.keys;
+      const passkey = (name: string) => ({
+        label: "Chrome on Mac",
+        publicKey: webauthnDevice.spkiDer,
+        webauthn: { ...webauthnDevice.webauthn, authenticatorData: registration(name) },
+      });
+      const reason = <A>(effect: Effect.Effect<A, ElevationError>) =>
+        effect.pipe(
+          Effect.flip,
+          Effect.map((error) => error.reason),
+        );
+      assert.strictEqual(
+        yield* reason(fixture.service.enroll({ device: passkey("synced") })),
+        "synced_passkey",
+      );
+      assert.strictEqual(
+        yield* reason(fixture.service.install({ password: "hunter2", device: passkey("synced") })),
+        "synced_passkey",
+      );
+      assert.strictEqual(
+        yield* reason(fixture.service.enroll({ device: passkey("other_rp_id") })),
+        "invalid_passkey",
+      );
+      assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.dir, "sudo.args")));
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
@@ -1085,6 +1198,63 @@ describe("ElevationService helper", () => {
       assert.isFalse(sudoRan);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+
+  it.live("says setup can't run before anything asks for a key or a password", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ bundledOnly: null });
+      const status = yield* fixture.service.status;
+      assert.strictEqual(
+        status.setupUnavailableReason,
+        "This build of T3 Code doesn't include the device approval helper.",
+      );
+      assert.deepStrictEqual(status.plannedChanges, []);
+      const refused = yield* fixture.service
+        .install({ password: "hunter2", device: setupDevice })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused.reason, "not_available");
+      assert.isFalse(yield* exists(NodePath.join(fixture.dir, "sudo.args")));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("sets up with the helper the build ships", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ bundledOnly: "helper" });
+      const status = yield* fixture.service.status;
+      assert.isUndefined(status.setupUnavailableReason);
+      assert.isFalse(status.helperInstalled);
+      assert.deepStrictEqual(status.plannedChanges, [
+        { path: "/etc/pam.d/sudo", summary: "Add the device approval line" },
+      ]);
+      yield* fixture.service.install({ password: "hunter2", device: setupDevice });
+      assert.include(
+        lines(yield* read(NodePath.join(fixture.dir, "sudo.args"))),
+        NodePath.join(fixture.dir, "helper"),
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+});
+
+describe("bundledElevationHelperPath", () => {
+  it("finds the helper beside the CLI archive's server or under the desktop app's Resources", () => {
+    const archive = "/opt/t3-1.0.0-darwin-arm64";
+    const desktop = "/Applications/T3 Code.app/Contents/Resources";
+    const find = (serverDir: string, present: ReadonlyArray<string>, packaged = true) =>
+      ElevationService.bundledElevationHelperPath({
+        serverDir,
+        packaged,
+        exists: (path) => present.includes(path),
+      });
+    assert.deepStrictEqual(
+      [
+        find(archive, [`${archive}/t3-elevation/t3-elevation`]),
+        find(`${desktop}/app.asar/apps/server/dist`, [`${desktop}/t3-elevation/t3-elevation`]),
+        find(archive, []),
+        // A server run from source never picks up a helper lying around.
+        find(archive, [`${archive}/t3-elevation/t3-elevation`], false),
+      ],
+      [`${archive}/t3-elevation/t3-elevation`, `${desktop}/t3-elevation/t3-elevation`, null, null],
+    );
+  });
 });
 
 describe("elevationSudoPath", () => {

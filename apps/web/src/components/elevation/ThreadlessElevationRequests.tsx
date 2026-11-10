@@ -16,16 +16,19 @@ import { cn } from "~/lib/utils";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
+import { useElevationApproverHere } from "../../state/elevationApprover";
 import { useElevationAgent } from "./ElevationAgentMark";
-import { ElevationPendingCard } from "./ElevationPendingCard";
+import {
+  ELEVATION_ARRIVE_CLASS,
+  ELEVATION_COLLAPSE_CLASS,
+  ELEVATION_COLLAPSE_MS,
+  ELEVATION_SETTLE_MS,
+  ElevationPendingCard,
+} from "./ElevationPendingCard";
 import { useElevationSidebarStore } from "./elevationSidebarStore";
 
 // The ring's fade, plus a margin for the sidebar opening first.
 const HIGHLIGHT_MS = 1500;
-// How long "✓ Approved on Pixel" stays before the card leaves, as on the phone.
-const SETTLE_MS = 700;
-const FADE_MS = 140;
-const LEAVE_MS = 240;
 
 const keyOf = (entry: PendingElevationRequest) =>
   `${entry.environmentId}\u0000${entry.request.requestId}`;
@@ -44,8 +47,8 @@ function mergeShown(
 }
 
 /**
- * Once `open` turns false, fades out and then eases its height to nothing, so the rows below
- * follow an empty space rather than a card cut off mid-line; then calls `onGone(id)`.
+ * Grows in as it mounts; once `open` turns false, closes up as it fades, so the rows below follow
+ * on the thread card's curves; then calls `onGone(id)`.
  */
 function Leaving(props: {
   readonly id: string;
@@ -58,26 +61,18 @@ function Leaving(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the leave timer that removes the card once its fade and collapse have played
   useEffect(() => {
     if (open) return;
-    const timer = setTimeout(() => onGone(id), FADE_MS + LEAVE_MS);
+    const timer = setTimeout(() => onGone(id), ELEVATION_COLLAPSE_MS);
     return () => clearTimeout(timer);
   }, [id, open, onGone]);
-  // The rows wait for the fade, so the space closes only once it is empty.
   return (
     <div
       inert={!open}
       className={cn(
-        "grid min-w-0 transition-[grid-template-rows] duration-240 ease-in-out motion-reduce:transition-none",
-        open ? "grid-rows-[1fr]" : "grid-rows-[0fr] delay-140",
+        "grid min-w-0 motion-reduce:transition-none",
+        open ? ELEVATION_ARRIVE_CLASS : ELEVATION_COLLAPSE_CLASS,
       )}
     >
-      <div
-        className={cn(
-          "min-h-0 overflow-hidden transition-opacity duration-140 ease-out motion-reduce:transition-none",
-          open ? "opacity-100" : "opacity-0",
-        )}
-      >
-        {props.children}
-      </div>
+      <div className="min-h-0 overflow-hidden">{props.children}</div>
     </div>
   );
 }
@@ -88,8 +83,9 @@ function Leaving(props: {
  * view, their notices stay away.
  */
 export function ThreadlessElevationRequests(props: { readonly onScreen: boolean }) {
+  const claimed = useElevationSidebarStore((state) => state.claimed);
   const pending = useAtomValue(elevation.pendingAcrossEnvironmentsAtom).filter(
-    (entry) => entry.request.threadId === null,
+    (entry) => entry.request.threadId === null && claimed?.(entry) !== true,
   );
   const endedByEnvironment = useAtomValue(elevation.endedAcrossEnvironmentsAtom);
   const currentKeys = new Set(pending.map(keyOf));
@@ -159,7 +155,7 @@ export function ThreadlessElevationRequests(props: { readonly onScreen: boolean 
             open={groupPresent}
             onGone={forgetMachine}
           >
-            <section className="flex flex-col pb-3 motion-safe:transition-opacity motion-safe:duration-200 motion-safe:starting:opacity-0">
+            <section className="flex flex-col pb-3">
               <MachineHeader environmentId={environmentId} />
               {entries.map((entry) => {
                 const key = keyOf(entry);
@@ -192,7 +188,7 @@ function Settle(props: { readonly id: string; readonly onSettled: (id: string) =
   const { id, onSettled } = props;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the timer that lets the card show how its request ended before it leaves
   useEffect(() => {
-    const timer = setTimeout(() => onSettled(id), SETTLE_MS);
+    const timer = setTimeout(() => onSettled(id), ELEVATION_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [id, onSettled]);
   return null;
@@ -216,6 +212,7 @@ function ThreadlessRequestCard(props: {
   const { environmentId, request, decoded } = props.entry;
   const agent = useElevationAgent(environmentId, null, request.driver);
   const success = Result.isSuccess(decoded) ? decoded.success : null;
+  const here = useElevationApproverHere(environmentId);
   const highlight = useElevationSidebarStore((state) => state.highlight);
   const clearHighlight = useElevationSidebarStore((state) => state.clearHighlight);
   const highlighted =
@@ -252,9 +249,12 @@ function ThreadlessRequestCard(props: {
           Result.isFailure(decoded) ? elevationDecodeFailureMessage(decoded.failure) : null
         }
         changes={null}
+        signable={
+          success === null ? null : { bytes: success.bytes, keyIds: success.payload.keyIds }
+        }
         series={request.series}
         raisedByT3={request.raisedByT3}
-        ended={props.ended === null ? null : elevationEndedLine(props.ended, null)}
+        ended={props.ended === null ? null : elevationEndedLine(props.ended, here)}
         inMachineSection
       />
       {highlighted ? (

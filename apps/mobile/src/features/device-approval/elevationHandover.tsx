@@ -7,15 +7,14 @@ import { Animated as NativeAnimated, useAnimatedValue } from "react-native";
 import { useReducedMotion } from "react-native-reanimated";
 
 import { appAtomRegistry } from "../../state/atom-registry";
-import { FEED_ROW_MAX_STEP, FeedRowHeight } from "../threads/feed-row-height";
+import { FEED_ROW_COLLAPSE, FeedRowHeight } from "../threads/feed-row-height";
 
 type ElevationHandover = "held" | "leaving" | "left";
 
 /**
- * Command rows a sudo request stands beside, by `elevationCommandRowKey`: "held" while it waits or
- * its card shows, "leaving" as the row eases out, "left" at no height. The feed keeps them so a row
- * never drops out of the list in one frame. The card drops its entry only after its own collapse:
- * dropping it rebuilds the feed, which must not land while the card's height is still easing.
+ * Command rows a sudo request stands beside, by `elevationCommandRowKey`. The feed keeps them so
+ * a row eases out ("leaving") to no height ("left") instead of dropping out in one frame. The card
+ * drops the entry after its own collapse, as that rebuilds the feed and must not land mid-ease.
  */
 export const elevationHandoversAtom = Atom.make<ReadonlyMap<string, ElevationHandover>>(
   new Map(),
@@ -30,17 +29,10 @@ const elevationCommandPhaseAtom = Atom.family((commandKey: string) =>
   Atom.make((get) => get(elevationHandoversAtom).get(commandKey) ?? null),
 );
 
-/** Where the command row linked to this request is in its exit. */
-export function useElevationCommandPhase(commandKey: string | null): ElevationHandover | null {
-  return useAtomValue(elevationCommandPhaseAtom(commandKey ?? ""));
+/** The command row linked to this request has eased out to no height. */
+export function useElevationCommandLeft(commandKey: string | null): boolean {
+  return useAtomValue(elevationCommandPhaseAtom(commandKey ?? "")) === "left";
 }
-
-/**
- * The command row and the card's collapse under it ease in the same frames, and the rows above
- * move by both steps. Split one row's step between them, so the feed moves no faster than one row.
- */
-const ROW_EXIT_STEP = 2;
-export const ELEVATION_CARD_STEP_BESIDE_ROW = FEED_ROW_MAX_STEP - ROW_EXIT_STEP;
 
 export function setElevationHandover(commandKey: string, phase: ElevationHandover | null) {
   const current = appAtomRegistry.get(elevationHandoversAtom);
@@ -70,7 +62,6 @@ export function ElevationCommandRowExit(props: {
   const leaving = phase === "leaving" || phase === "left" || gone;
   const reduceMotion = useReducedMotion();
   const opacity = useAnimatedValue(1);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the native-driver fade as the row starts leaving
   useEffect(() => {
     if (!leaving) return;
     NativeAnimated.timing(opacity, {
@@ -83,7 +74,8 @@ export function ElevationCommandRowExit(props: {
     // A row that mounts already leaving was never seen: it starts at no height and leaves at once.
     <FeedRowHeight
       height={leaving ? 0 : null}
-      maxStep={ROW_EXIT_STEP}
+      // The card under it collapses on the same curve, so the rows above move on one curve.
+      motion={FEED_ROW_COLLAPSE}
       onEased={phase === "leaving" ? () => setElevationHandover(commandKey, "left") : undefined}
     >
       {/* The row's content leaves with it: its layout transition starts once the row is at no

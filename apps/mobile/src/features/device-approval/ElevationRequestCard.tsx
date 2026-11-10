@@ -34,7 +34,7 @@ import { elevation } from "../../state/elevation";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useTurnItemDetail } from "../../state/queries";
 import { ThreadCommandOutput, useCommandOutputStreaming } from "../threads/thread-command-output";
-import { FeedRowHeight } from "../threads/feed-row-height";
+import { FEED_ROW_ARRIVE, FEED_ROW_COLLAPSE, FeedRowHeight } from "../threads/feed-row-height";
 import {
   isFreshRow,
   THREAD_DISCLOSURE_TRANSITION_MS,
@@ -54,11 +54,7 @@ import {
   useElevationRequestContext,
 } from "./ElevationApprovalCard";
 import { ELEVATION_SETTLE_MS } from "./elevationApproval";
-import {
-  ELEVATION_CARD_STEP_BESIDE_ROW,
-  setElevationHandover,
-  useElevationCommandPhase,
-} from "./elevationHandover";
+import { setElevationHandover, useElevationCommandLeft } from "./elevationHandover";
 import { wasDeniedHere } from "./elevationApprovalTarget";
 
 const SYMBOL: Record<"approved" | "denied" | "expired" | "cancelled", AppSymbolName> = {
@@ -72,10 +68,12 @@ const CARD_FADE_MS = 140;
 const ROW_LAYOUT = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 
 /**
- * A request in its thread: the card while it waits here, then its resolved row. A card arriving
- * while the thread is open grows in as it fades in; it hands over in place, easing to the row's
- * height as it fades, with its command row easing out alongside (`ElevationCommandRowExit`).
- * Approving here holds "✓ Approved" a moment first. Heights ease through `FeedRowHeight`.
+ * A request in its thread: the card while it waits here, then its resolved row. A card that
+ * arrives while the thread is open grows in from nothing as it fades in. The card hands over to
+ * the row in place: its height eases down to the row's while it fades. Approving here holds
+ * "✓ Approved" for a moment first. The agent's command row the request stands in for stays until
+ * then and eases out with the card (`ElevationCommandRowExit`). Heights ease through
+ * `FeedRowHeight`, so the feed moves the rows around the card in the same frame.
  */
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -97,7 +95,6 @@ export function ElevationRequestCard(props: {
   // Approved on this card: it stays, showing "✓ Approved", a moment after the request resolves.
   const [held, setHeld] = useState(false);
   const [settled, setSettled] = useState(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the held card on a timer after the approval settles
   useEffect(() => {
     if (!settled) return;
     const timer = setTimeout(() => setHeld(false), ELEVATION_SETTLE_MS);
@@ -146,24 +143,20 @@ export function ElevationRequestCard(props: {
   const [seenPending, setSeenPending] = useState(pending);
   if (pending && !seenPending) setSeenPending(true);
   const commandKey = elevationLinkedCommandKey(props.projectedItem);
-  const commandPhase = useElevationCommandPhase(commandKey);
-  const commandLeft = commandPhase === "left";
+  const commandLeft = useElevationCommandLeft(commandKey);
   const [handedOver, setHandedOver] = useState(false);
   if (commandLeft && !showCard && !pending && !collapsing && !handedOver) setHandedOver(true);
   const handover =
     showCard || pending ? "held" : (seenPending || wasCard) && !handedOver ? "leaving" : null;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps this request's entry in the handover registry the feed reads
   useEffect(() => {
     if (commandKey !== null) setElevationHandover(commandKey, handover);
   }, [commandKey, handover]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- removes the handover registry entry on unmount
   useEffect(
     () => (commandKey === null ? undefined : () => setElevationHandover(commandKey, null)),
     [commandKey],
   );
 
   const cardOpacity = useAnimatedValue(arriving ? 0 : 1);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the card's native-driver fade as it arrives or collapses
   useEffect(() => {
     if (!arriving && !collapsing) return;
     NativeAnimated.timing(cardOpacity, {
@@ -217,9 +210,7 @@ export function ElevationRequestCard(props: {
   return (
     <FeedRowHeight
       height={wrapperHeight}
-      maxStep={
-        collapsing && commandPhase === "leaving" ? ELEVATION_CARD_STEP_BESIDE_ROW : undefined
-      }
+      motion={arriving ? FEED_ROW_ARRIVE : FEED_ROW_COLLAPSE}
       onEased={onWrapperEased}
       style={{ overflow: "hidden" }}
     >
@@ -285,7 +276,7 @@ function ResolvedElevationRow(props: {
   const thisKeyId = useThisPhoneKeyId(props.environmentId);
   const status = elevationRequestStatusView(item, {
     finished: !props.runActive,
-    thisKeyId,
+    here: thisKeyId === null ? null : { kind: "phone", keyId: thisKeyId },
     deniedHere: wasDeniedHere(item.requestId),
   });
   const decodedSuccess =
@@ -298,7 +289,6 @@ function ResolvedElevationRow(props: {
 
   // A light tick when an approved command finishes while its row is on screen.
   const wasRunning = useRef(props.runActive);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fires a haptic when this row's approved command finishes
   useEffect(() => {
     if (wasRunning.current && !props.runActive && status.kind === "approved") {
       approvalHaptic("done");

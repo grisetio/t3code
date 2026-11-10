@@ -375,6 +375,24 @@ describe("deriveMessagesTimelineRows", () => {
     },
   );
 
+  it("leaves the live turn to a card that already says what it's doing", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const input = {
+      timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: fixture.visibleTurnItems,
+        optimisticMessages: [],
+      }),
+      isWorking: true,
+      runningRunId: fixture.runId,
+      activeTurnStartedAt: fixture.time(5),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    };
+    expect(deriveMessagesTimelineRows(input).at(-1)?.kind).toBe("thinking");
+    const rows = deriveMessagesTimelineRows({ ...input, liveActivityShownElsewhere: true });
+    expect(rows.some((row) => row.kind === "thinking")).toBe(false);
+  });
+
   it.each([false, true])(
     "gives live compaction the activity slot and restores Thinking (runless: %s)",
     (runless) => {

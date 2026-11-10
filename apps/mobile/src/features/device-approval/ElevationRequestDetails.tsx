@@ -2,7 +2,7 @@ import { elevationComparisonCode } from "@t3tools/contracts";
 import * as ExpoCrypto from "expo-crypto";
 import { useEffect, useState } from "react";
 
-/** The code a new phone shows for its key; both phones must show the same one. */
+/** The code a new device shows for its key; both devices must show the same one. */
 export function useComparisonCode(publicKey: Uint8Array | null): string | null {
   const [computed, setComputed] = useState<{
     readonly publicKey: Uint8Array;

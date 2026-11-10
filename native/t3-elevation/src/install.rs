@@ -367,12 +367,12 @@ impl Step {
     }
     pub fn summary(&self) -> String {
         match self {
+            Self::CreateDir { path, .. } if path.contains("/keys/") => {
+                "create the folder for device keys".into()
+            }
             Self::CreateDir { .. } => "create directory".into(),
             Self::CreateFile { path, .. } if path == SUDOERS_DROP_IN => {
-                format!(
-                    "add sudoers drop-in: noninteractive_auth, !requiretty, timestamp_timeout=0, always_set_home, !env_editor, and don't pass {} from your environment",
-                    ENV_NOT_KEPT.replace(' ', ", ")
-                )
+                "let sudo ask without a terminal, ask every time, and run with root's home and a clean environment".into()
             }
             Self::CreateFile { path, .. } if path.ends_with(".toml") => {
                 "create device approval config".into()
@@ -380,8 +380,11 @@ impl Step {
             Self::CreateFile { path, .. } if path.ends_with(".so") => {
                 "install the PAM module".into()
             }
+            Self::CreateFile { path, .. } if path.starts_with("/etc/pam.d/") => {
+                "make sudo check device approval first".into()
+            }
             Self::CreateFile { .. } => "install the t3-elevation helper".into(),
-            Self::ModifyFile { .. } => "add the pam_t3_elevation auth line first".into(),
+            Self::ModifyFile { .. } => "make sudo check device approval first".into(),
         }
     }
 }
@@ -600,14 +603,22 @@ impl Planner<'_> {
 
     fn sudoers(&mut self, user: &str) {
         let sudoers = self.layout.path("/etc/sudoers");
-        // Only root can read sudoers; unprivileged status leaves this to the
-        // live `sudo -n true` test.
+        let wanted = sudoers_drop_in(user);
+        // Only root can read sudoers. Unprivileged status still lists the
+        // drop-in it would add, and install as root decides for real.
         if std::fs::File::open(&sudoers)
             .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
         {
+            if std::fs::symlink_metadata(self.layout.path(SUDOERS_DROP_IN)).is_err() {
+                self.plan.steps.push(Step::CreateFile {
+                    path: SUDOERS_DROP_IN.into(),
+                    contents: wanted.into_bytes(),
+                    mode: 0o440,
+                    sudoers: true,
+                });
+            }
             return;
         }
-        let wanted = sudoers_drop_in(user);
         let existing = std::fs::read(self.layout.path(SUDOERS_DROP_IN)).ok();
         if existing.as_deref().is_some_and(|bytes| {
             bytes == wanted.as_bytes() || bytes == without_requiretty(&wanted).as_bytes()
@@ -1403,27 +1414,49 @@ pub fn status(layout: &Layout, user: &str, sources: &Sources) -> Status {
 // ---------------------------------------------------------------------------
 // Keys
 
+/// What admitted a key, for its key file.
+pub enum Admission<'a> {
+    Attested(&'a crate::attestation::Verified),
+    /// `--unattested` without a site: a Secure Enclave key.
+    SecureEnclave,
+    /// `--unattested` with a site.
+    Webauthn(&'a keys::WebauthnBinding),
+}
+
 pub fn key_file_bytes(
     spki: &[u8],
     label: &str,
-    verified: &crate::attestation::Verified,
+    admission: &Admission,
     now: i64,
 ) -> (String, Vec<u8>) {
     let key_id = keys::key_id(spki);
+    let (alg, security_level, attestation_summary, webauthn) = match admission {
+        Admission::Attested(verified) => (
+            "es256",
+            verified.security_level,
+            Some(keys::AttestationSummary {
+                package_name: verified.package_name.clone(),
+                signing_cert_digest: verified.signing_cert_digest.clone(),
+                dev_attestation: verified.trust != Trust::Release,
+                test_attestation: verified.trust == Trust::Test,
+            }),
+            None,
+        ),
+        Admission::SecureEnclave => ("es256", "secure_enclave", None, None),
+        Admission::Webauthn(binding) => {
+            ("webauthn-es256", "webauthn", None, Some((*binding).clone()))
+        }
+    };
     let file = keys::KeyFile {
         version: 1,
         key_id: key_id.clone(),
-        alg: "es256".into(),
+        alg: alg.into(),
         public_key: crate::b64::encode(spki),
         label: label.into(),
-        security_level: verified.security_level.into(),
+        security_level: security_level.into(),
         enrolled_at: rfc3339(now),
-        attestation_summary: keys::AttestationSummary {
-            package_name: verified.package_name.clone(),
-            signing_cert_digest: verified.signing_cert_digest.clone(),
-            dev_attestation: verified.trust != Trust::Release,
-            test_attestation: verified.trust == Trust::Test,
-        },
+        attestation_summary,
+        webauthn,
     };
     let mut bytes = serde_json::to_vec(&file).unwrap_or_default();
     bytes.push(b'\n');
@@ -1767,11 +1800,7 @@ mod tests {
             .iter()
             .find(|step| step.path() == SUDOERS_DROP_IN)
             .expect("drop-in planned");
-        assert!(
-            drop_in
-                .summary()
-                .contains("HOME, EDITOR, VISUAL, SUDO_EDITOR, PATH")
-        );
+        assert!(drop_in.summary().contains("a clean environment"));
         let Step::CreateFile { contents, .. } = drop_in else {
             panic!("{drop_in:?}");
         };
@@ -1840,6 +1869,50 @@ mod tests {
         assert!(root.check("pam_sudo_local"));
         uninstall(&root.layout, "alice").unwrap();
         assert_eq!(root.snapshot(), before);
+    }
+
+    #[test]
+    fn unprivileged_status_on_a_fresh_mac_lists_every_file_setup_writes() {
+        let sudo = "auth       include        sudo_local\n";
+        let root = Root::new(
+            Platform::Macos,
+            &[
+                ("/etc/pam.d/sudo", sudo),
+                ("/etc/sudoers", "#includedir /private/etc/sudoers.d\n"),
+            ],
+        );
+        // As on a real Mac, only root can read sudoers.
+        std::fs::set_permissions(
+            root.layout.path("/etc/sudoers"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o000),
+        )
+        .unwrap();
+        let planned = status(&root.layout, "alice", &root.sources()).planned_changes;
+        let summary = |path: &str| {
+            planned
+                .iter()
+                .find(|change| change.path == path)
+                .map(|change| change.summary.clone())
+                .unwrap_or_else(|| panic!("{path} not planned: {planned:?}"))
+        };
+        assert_eq!(
+            summary("/etc/pam.d/sudo_local"),
+            "make sudo check device approval first"
+        );
+        assert!(summary(SUDOERS_DROP_IN).starts_with("let sudo ask without a terminal"));
+        assert_eq!(summary(MODULE_INSTALL_PATH), "install the PAM module");
+        assert_eq!(
+            summary(crate::HELPER_INSTALL_PATH),
+            "install the t3-elevation helper"
+        );
+        assert_eq!(
+            summary("/etc/t3-elevation/users/alice.toml"),
+            "create device approval config"
+        );
+        assert_eq!(
+            summary("/etc/t3-elevation/keys/alice"),
+            "create the folder for device keys"
+        );
     }
 
     #[test]

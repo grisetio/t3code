@@ -16,11 +16,13 @@ import * as Result from "effect/Result";
 
 import {
   checkSignature,
+  checkWebauthnAssertion,
   type FixContext,
   isManagedPath,
   isTrustedHelper,
   moduleProtocol,
   pathOwner,
+  readEnrolledKeys,
   readT3Install,
   staticChecks,
   withFixBy,
@@ -53,6 +55,42 @@ describe("checkSignature", () => {
         keys: [enrolled],
       }),
     ).toBe(vector.expected);
+  });
+});
+
+const webauthnDevice = vectorsJson.keys.webauthnDevice;
+const passkey = {
+  keyId: webauthnDevice.keyId as ElevationKeyId,
+  publicKey: bytesOf(webauthnDevice.spkiDer),
+  label: "Chrome on Mac",
+  securityLevel: "webauthn" as const,
+  enrolledAt: "2026-10-30T12:00:00Z",
+  webauthn: webauthnDevice.webauthn,
+};
+
+describe("checkSignature with a passkey", () => {
+  const vectors = vectorsJson.webauthnVerify.filter((vector) => vector.expected !== "expired");
+  it.each(vectors)("classifies $name as $expected", (vector) => {
+    const payloadBytes = bytesOf(vector.payload);
+    const keys = [enrolled, passkey].filter((key) => vector.enrolledKeyIds.includes(key.keyId));
+    const response = vector.response as ElevationSignedResponse;
+    expect(
+      checkSignature({
+        payloadBytes,
+        payload: Result.getOrThrow(decodeElevationPayload(payloadBytes)),
+        response,
+        keys,
+      }),
+    ).toBe(vector.expected);
+    if (vector.failure === null || response.webauthn === undefined) return;
+    expect(
+      checkWebauthnAssertion({
+        key: passkey,
+        payloadBytes,
+        ...response.webauthn,
+        signature: bytesOf(response.signature),
+      }),
+    ).toBe(vector.failure);
   });
 });
 
@@ -122,6 +160,53 @@ const layout = Effect.fn("test.layout")(function* (input: {
 
 const okIds = (checks: ReadonlyArray<{ readonly id: string; readonly ok: boolean }>) =>
   checks.map((check) => `${check.id}:${check.ok ? "ok" : "fail"}`);
+
+describe("readEnrolledKeys", () => {
+  it.effect("reads Mac and passkey files the way the module does", () =>
+    Effect.gen(function* () {
+      const { paths } = yield* layout({ platform: "darwin", pam: {}, protocol: 1 });
+      const write = (key: { readonly keyId: string; readonly spkiDer: string }, fields: object) =>
+        NodeFSP.writeFile(
+          NodePath.join(paths.etcDir, "keys", "me", `${key.keyId}.json`),
+          JSON.stringify({
+            version: 1,
+            keyId: key.keyId,
+            publicKey: key.spkiDer,
+            enrolledAt: "2026-10-30T12:00:00Z",
+            ...fields,
+          }),
+        );
+      yield* Effect.promise(async () => {
+        await write(webauthnDevice, {
+          alg: "webauthn-es256",
+          label: "Chrome on Mac",
+          securityLevel: "webauthn",
+          webauthn: webauthnDevice.webauthn,
+        });
+        await write(vectorsJson.keys.newDevice, {
+          alg: "es256",
+          label: "MacBook Pro",
+          securityLevel: "secure_enclave",
+        });
+        // A passkey whose origin its rpId doesn't cover is skipped, as the module skips it.
+        await write(vectorsJson.keys.other, {
+          alg: "webauthn-es256",
+          label: "Elsewhere",
+          securityLevel: "webauthn",
+          webauthn: { ...webauthnDevice.webauthn, origin: "https://t3.codes" },
+        });
+      });
+      const keys = yield* readEnrolledKeys(paths, "me");
+      expect(
+        keys.map((key) => [key.label, key.securityLevel, key.webauthn?.origin ?? null]),
+      ).toEqual([
+        ["Pixel", "strongbox", null],
+        ["MacBook Pro", "secure_enclave", null],
+        ["Chrome on Mac", "webauthn", "https://app.t3.codes"],
+      ]);
+    }).pipe(Effect.scoped),
+  );
+});
 
 describe("staticChecks", () => {
   it.effect("passes a complete Linux-PAM setup", () =>

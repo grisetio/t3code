@@ -8,6 +8,7 @@ import compression from "compression";
 import { playwright } from "vite-plus/test/browser-playwright";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
+import type { CDPSession, Page } from "playwright";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import * as Hash from "effect/Hash";
 import pkg from "./package.json" with { type: "json" };
@@ -96,6 +97,16 @@ const unitTestProject = {
 // Hash checkout paths to ports 61000-64999; Vitest's fixed port collides under inherited strictPort.
 const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
 
+interface VirtualAuthenticator {
+  readonly cdp: CDPSession;
+  readonly authenticatorId: string;
+}
+const virtualAuthenticators = new WeakMap<Page, VirtualAuthenticator>();
+async function removeVirtualAuthenticator({ cdp, authenticatorId }: VirtualAuthenticator) {
+  await cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId });
+  await cdp.detach();
+}
+
 const browserTestProject = {
   extends: true,
   // Pre-bundle lazy browser and worker dependencies to avoid mid-run reloads.
@@ -140,6 +151,54 @@ const browserTestProject = {
         // position starts hovered. test/browserSetup.ts parks it off the page before each test.
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
+        },
+        // A platform passkey authenticator for the tab, so WebAuthn runs without a real prompt;
+        // the test frame inherits it from the page. Adding one removes the previous one.
+        addVirtualAuthenticator: async ({ page }, options: { backupEligible?: boolean } = {}) => {
+          const previous = virtualAuthenticators.get(page);
+          if (previous) await removeVirtualAuthenticator(previous);
+          const cdp = await page.context().newCDPSession(page);
+          await cdp.send("WebAuthn.enable", { enableUI: false });
+          const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
+            options: {
+              protocol: "ctap2",
+              ctap2Version: "ctap2_1",
+              transport: "internal",
+              hasResidentKey: true,
+              hasUserVerification: true,
+              isUserVerified: true,
+              automaticPresenceSimulation: true,
+              defaultBackupEligibility: options.backupEligible ?? false,
+              defaultBackupState: options.backupEligible ?? false,
+            },
+          });
+          virtualAuthenticators.set(page, { cdp, authenticatorId });
+        },
+        // Cancelling the prompt fails user verification; a missing touch leaves it waiting.
+        setVirtualAuthenticator: async (
+          { page },
+          options: { userVerified?: boolean; presence?: boolean },
+        ) => {
+          const current = virtualAuthenticators.get(page);
+          if (!current) throw new Error("No virtual authenticator to change.");
+          const { cdp, authenticatorId } = current;
+          if (options.userVerified !== undefined) {
+            await cdp.send("WebAuthn.setUserVerified", {
+              authenticatorId,
+              isUserVerified: options.userVerified,
+            });
+          }
+          if (options.presence !== undefined) {
+            await cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
+              authenticatorId,
+              enabled: options.presence,
+            });
+          }
+        },
+        removeVirtualAuthenticator: async ({ page }) => {
+          const current = virtualAuthenticators.get(page);
+          virtualAuthenticators.delete(page);
+          if (current) await removeVirtualAuthenticator(current);
         },
       },
     },

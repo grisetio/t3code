@@ -3,10 +3,13 @@
 //!
 //!   test-server serve --socket PATH --mode-file FILE --log FILE
 //!   test-server enrollment [--key enrolled|newDevice] [--label L] [--challenge B64URL]
+//!   test-server enrollment --unattested [--key K] [--label L] [--webauthn]
 //!
 //! `serve` reads the mode (approve, deny, expire, bad_signature, wrong_payload,
-//! cancel, close, not_mine, garbage) from the mode file for each connection
-//! and appends one JSON line per connection to the log.
+//! cancel, close, not_mine, garbage, approve_webauthn, webauthn_backup_eligible,
+//! webauthn_wrong_origin) from the mode file for each connection and appends
+//! one JSON line per connection to the log. `--webauthn` binds the key to the
+//! vectors' site, for the `webauthnDevice` key.
 
 use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt as _;
@@ -48,6 +51,17 @@ fn serve(args: &[String]) {
 fn enrollment(args: &[String]) {
     let key = option(args, "--key").unwrap_or_else(|| "enrolled".into());
     let label = option(args, "--label").unwrap_or_else(|| "Test Pixel".into());
+    if args.iter().any(|arg| arg == "--unattested") {
+        let mut value = serde_json::json!({
+            "label": label,
+            "publicKey": b64::encode(&fixture_server::vector_key(&key).spki),
+        });
+        if args.iter().any(|arg| arg == "--webauthn") {
+            value["webauthn"] = serde_json::json!(fixture_server::vector_webauthn_binding());
+        }
+        println!("{value}");
+        return;
+    }
     let challenge: [u8; 32] = match option(args, "--challenge") {
         Some(text) => b64::decode(&text)
             .and_then(|bytes| bytes.try_into().ok())

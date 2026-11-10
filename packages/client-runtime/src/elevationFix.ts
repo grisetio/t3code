@@ -208,6 +208,36 @@ export function deviceApprovalTurnOff(
     : "agent";
 }
 
+/** The helper's prefix for a planned change it refuses to make. */
+const BLOCKED_PREFIX = "can't change: ";
+
+export interface DeviceApprovalSetupChange {
+  readonly path: string;
+  readonly summary: string;
+  /** Setup changes nothing while any change is blocked; the summary says why. */
+  readonly blocked: boolean;
+}
+
+/**
+ * What setup will write, shown before it asks for anything: each file, without
+ * the folders that only hold one of them.
+ */
+export function deviceApprovalSetupChanges(
+  plannedChanges: ElevationStatus["plannedChanges"],
+): readonly DeviceApprovalSetupChange[] {
+  return plannedChanges
+    .filter((change) => !plannedChanges.some((other) => other.path.startsWith(`${change.path}/`)))
+    .map((change) => {
+      const blocked = change.summary.startsWith(BLOCKED_PREFIX);
+      const summary = blocked ? change.summary.slice(BLOCKED_PREFIX.length) : change.summary;
+      return {
+        path: change.path,
+        summary: `${summary.charAt(0).toUpperCase()}${summary.slice(1)}`,
+        blocked,
+      };
+    });
+}
+
 export const DEVICE_APPROVAL_DIAGNOSIS_FILE_NAME = "Device approval diagnosis.txt";
 
 export interface DeviceApprovalHandoff {

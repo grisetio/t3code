@@ -272,6 +272,21 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     install: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_INSTALL_CHANNEL),
     uninstall: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_UNINSTALL_CHANNEL),
   },
+  ...(clientPlatform === "darwin"
+    ? {
+        deviceApproval: {
+          getState: (environmentId) =>
+            ipcRenderer.invoke(IpcChannels.DEVICE_APPROVAL_GET_STATE_CHANNEL, environmentId),
+          createKey: (input) =>
+            ipcRenderer.invoke(IpcChannels.DEVICE_APPROVAL_CREATE_KEY_CHANNEL, input),
+          sign: (input) => ipcRenderer.invoke(IpcChannels.DEVICE_APPROVAL_SIGN_CHANNEL, input),
+          abort: (operationId) =>
+            ipcRenderer.invoke(IpcChannels.DEVICE_APPROVAL_ABORT_CHANNEL, operationId),
+          forget: (environmentId) =>
+            ipcRenderer.invoke(IpcChannels.DEVICE_APPROVAL_FORGET_CHANNEL, environmentId),
+        },
+      }
+    : {}),
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
       if (typeof state !== "object" || state === null) return;

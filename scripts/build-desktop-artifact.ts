@@ -1090,6 +1090,18 @@ export const DESKTOP_EXTRA_RESOURCES = [
     to: "resource-monitor",
   },
 ] as const;
+// Outside the asar, because sudo runs the helper by path; the server finds it there.
+export const MAC_ELEVATION_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/t3-elevation",
+    to: "t3-elevation",
+  },
+] as const;
+// SHA-256 of the signing certificate of the Android app whose keys the helper
+// enrolls (this fork's `com.t3tools.t3code`, signed with its preview key).
+// Builds for another app set T3_ELEVATION_ANDROID_SIGNING_DIGESTS.
+const ELEVATION_ANDROID_SIGNING_DIGESTS =
+  "6aee6c8e44d094ed275fe898dd768c012a6c8d929a83dbe774397b363b079eb3";
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/hyprland-capture",
@@ -2421,6 +2433,86 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
   }
 });
 
+/**
+ * Device approval's helper and PAM module, and the Touch ID approver. First setup
+ * runs the helper with sudo, and it copies itself and the module beside it into
+ * root-owned paths.
+ */
+export const stageElevationHelper = Effect.fn("stageElevationHelper")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  if (input.platform !== "mac") return;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const crateDir = path.join(input.repoRoot, "native/t3-elevation");
+  const digests = yield* Config.String("T3_ELEVATION_ANDROID_SIGNING_DIGESTS").pipe(
+    Config.withDefault(ELEVATION_ANDROID_SIGNING_DIGESTS),
+  );
+  const rustTargets = resolveResourceMonitorRustTargets(input.platform, input.arch);
+  for (const rustTarget of rustTargets) {
+    // From the crate's own folder, so its cargo config picks Apple's linker.
+    yield* runCommand(
+      ChildProcess.make(
+        "cargo",
+        [
+          "build",
+          "--locked",
+          "--release",
+          "--target",
+          rustTarget,
+          "-p",
+          "t3-elevation",
+          "-p",
+          "pam_t3_elevation",
+        ],
+        {
+          cwd: crateDir,
+          env: { T3_ELEVATION_ANDROID_SIGNING_DIGESTS: digests },
+          extendEnv: true,
+        },
+      ),
+      { label: `cargo build device approval helper (${rustTarget})`, verbose: input.verbose },
+    );
+  }
+  const destinationDirectory = path.join(input.stageResourcesDir, "t3-elevation");
+  yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
+  yield* fs.makeDirectory(destinationDirectory, { recursive: true });
+  // The helper finds the module by this name next to itself.
+  for (const [built, name] of [
+    ["t3-elevation", "t3-elevation"],
+    ["libpam_t3_elevation.dylib", "pam_t3_elevation.so"],
+  ] as const) {
+    const sources = rustTargets.map((rustTarget) =>
+      path.join(crateDir, "target", rustTarget, "release", built),
+    );
+    const destination = path.join(destinationDirectory, name);
+    yield* runCommand(ChildProcess.make("lipo", ["-create", ...sources, "-output", destination]), {
+      label: `lipo ${name}`,
+      verbose: input.verbose,
+    });
+    yield* runCommand(ChildProcess.make("codesign", ["--force", "--sign", "-", destination]), {
+      label: `codesign ${name}`,
+      verbose: input.verbose,
+    });
+  }
+  // Signs approvals with Touch ID on this Mac; its own bundle, so the sheet names T3 Code.
+  yield* runCommand(
+    ChildProcess.make(path.join(input.repoRoot, "native/t3-se-sign/build.sh"), [
+      "--out",
+      destinationDirectory,
+      "--arch",
+      input.arch,
+      "--icon",
+      path.join(input.stageResourcesDir, "icon.icns"),
+    ]),
+    { label: "build Touch ID approver", verbose: input.verbose },
+  );
+});
+
 export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -2792,6 +2884,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       : {}),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "mac" ? MAC_ELEVATION_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
@@ -3789,6 +3882,14 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     },
     options.verbose,
   );
+  // After the icons: the Touch ID approver's bundle carries the app's icon.
+  yield* stageElevationHelper({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");

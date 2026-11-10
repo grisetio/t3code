@@ -5,12 +5,14 @@ import {
   elevationRequestSource,
   elevationSeriesLine,
   type ElevationEndedView,
+  type ElevationApproverHere,
   type ElevationRequestFact,
   type ElevationWarningView,
 } from "@t3tools/client-runtime/elevation";
 import type { ElevationCommandDisplay } from "@t3tools/client-runtime/elevation-command";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
+  ElevationKeyId,
   ElevationPendingRequest,
   ElevationRequestId,
   ElevationRequestSeries,
@@ -22,22 +24,50 @@ import {
   ChevronRightIcon,
   ClockIcon,
   FileDiffIcon,
+  FingerprintIcon,
   MinusIcon,
   RotateCwIcon,
   SmartphoneIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { useDiffPanelStore } from "../../diffPanelStore";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useEnvironment } from "../../state/environments";
 import { elevation } from "../../state/elevation";
+import { useElevationApprover } from "../../state/elevationApprover";
 import { Button } from "../ui/button";
 import { ElevationAgentMark, type ElevationAgentView } from "./ElevationAgentMark";
 import { ElevationComparisonCode, ElevationRequestFactLines } from "./ElevationRequestDetails";
-import { useElevationDeny } from "./useElevationDeny";
+import { useElevationSidebarStore } from "./elevationSidebarStore";
+import { useElevationRespond } from "./useElevationRespond";
+
+/** How long "✓ Approved on Pixel" stays before the card leaves, as on the phone. */
+export const ELEVATION_SETTLE_MS = 500;
+/** The card's collapse once it has said how its request ended. */
+export const ELEVATION_COLLAPSE_MS = 250;
+
+// The phone's curves, tuned on a 120 Hz screen: steeper ones move a card's height by tens of px in
+// one frame and read as a jump. Each runs once, as a CSS transition, inside a one-row grid whose
+// row eases between 0fr and 1fr, so the card's natural height needs no measuring.
+/** Growing in: quick at first, then settling into place (ease-out quad). */
+export const ELEVATION_ARRIVE_CLASS =
+  "grid-rows-[1fr] [transition:grid-template-rows_260ms_cubic-bezier(0.5,1,0.89,1),opacity_260ms_cubic-bezier(0.5,1,0.89,1)] starting:grid-rows-[0fr] starting:opacity-0";
+/** Closing up: gathers speed, then slows into its end (CSS `ease`). The card fades faster than it closes. */
+export const ELEVATION_COLLAPSE_CLASS =
+  "grid-rows-[0fr] opacity-0 [transition:grid-template-rows_250ms_ease,opacity_150ms_ease]";
+/** A settled row opening on the collapse's curve, so the two heights move as one. */
+export const ELEVATION_ROW_GROW_CLASS =
+  "grid-rows-[1fr] [transition:grid-template-rows_250ms_ease] starting:grid-rows-[0fr]";
+
+const SET_UP_HERE: Record<ElevationApproverHere["kind"], string> = {
+  phone: "Set up this phone",
+  mac: "Set up this Mac",
+  browser: "Set up this browser",
+};
 
 export function DisclosureChevron(props: { readonly open: boolean }) {
   return (
@@ -84,8 +114,9 @@ function ElevationSeriesLine(props: {
 }
 
 /**
- * A pending request as a card that leads with words, never the command, like the phone's. Web
- * can't sign, so approving happens on the phone; Deny works here.
+ * A pending request as a card that leads with words, never the command, like the phone's. Where
+ * this client holds a key the machine accepts, it approves here; otherwise approving happens on
+ * the phone, and Deny works here.
  */
 export function ElevationPendingCard(props: {
   readonly environmentId: EnvironmentId;
@@ -105,13 +136,13 @@ export function ElevationPendingCard(props: {
   readonly raisedByT3?: boolean | undefined;
   /** Under a header that names the machine, which the card then leaves out. */
   readonly inMachineSection?: boolean;
+  /** The exact bytes an approval signs and the keys that may sign them; null when unreadable. */
+  readonly signable: ElevationSignable | null;
   /** How the request ended, said in place of Deny while the card settles. */
   readonly ended?: ElevationEndedView | null;
   readonly dataItemType?: string;
 }) {
   const { agent } = props;
-  const canRespond = useAtomValue(elevation.respond.permissionAtom(props.environmentId));
-  const deny = useElevationDeny();
   const machine = useEnvironment(props.environmentId)?.label ?? null;
   const source = elevationRequestSource({
     explanation: props.explanation,
@@ -159,35 +190,158 @@ export function ElevationPendingCard(props: {
           changes={props.changes}
         />
       ) : null}
-      {props.ended ? (
-        <EndedLine ended={props.ended} />
-      ) : (
-        <>
-          {deny.error ? (
-            <p role="alert" className="text-xs text-destructive">
-              {deny.error}
-            </p>
-          ) : null}
-          <div className="flex min-w-0 items-center justify-between gap-2">
-            <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <SmartphoneIcon className="size-3.5 shrink-0" aria-hidden />
-              {ELEVATION_APPROVE_ON_PHONE}
-            </p>
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost-muted"
-              disabled={!canRespond || deny.pending}
-              onClick={() =>
-                void deny.run({ environmentId: props.environmentId, requestId: props.requestId })
-              }
-            >
-              Deny
-            </Button>
-          </div>
-        </>
-      )}
+      <ElevationCardActions
+        environmentId={props.environmentId}
+        requestId={props.requestId}
+        signable={props.signable}
+        enroll={props.enrollKey !== null}
+        ended={props.ended ?? null}
+      />
     </div>
+  );
+}
+
+export interface ElevationSignable {
+  readonly bytes: Uint8Array;
+  readonly keyIds: readonly ElevationKeyId[];
+}
+
+/**
+ * Deny and Approve where this client's key may sign; "Approve on your phone" and Deny otherwise,
+ * with why this client can't approve, or a way to set it up. Cancelling the passkey or Touch ID
+ * prompt denies, as on the phone.
+ */
+function ElevationCardActions(props: {
+  readonly environmentId: EnvironmentId;
+  readonly requestId: ElevationRequestId;
+  readonly signable: ElevationSignable | null;
+  readonly enroll: boolean;
+  readonly ended: ElevationEndedView | null;
+}) {
+  const { environmentId, requestId, signable } = props;
+  const canRespond = useAtomValue(elevation.respond.permissionAtom(environmentId));
+  const respond = useElevationRespond();
+  const approver = useElevationApprover(environmentId);
+  const navigate = useNavigate();
+  const requestSetup = useElevationSidebarStore((state) => state.requestSetup);
+  const [answered, setAnswered] = useState<"approved" | "denied" | null>(null);
+  const [signing, setSigning] = useState(false);
+  const prompt = useRef<AbortController | null>(null);
+  const endedElsewhere = props.ended !== null;
+  // Another device answered while the prompt was open: close it, and the line says who.
+  useEffect(() => {
+    if (endedElsewhere) prompt.current?.abort();
+  }, [endedElsewhere]);
+  useEffect(() => () => prompt.current?.abort(), []);
+
+  const keyId = approver?.keyId ?? null;
+  const signsHere = keyId !== null && signable !== null && signable.keyIds.includes(keyId);
+  const reason = approver?.unavailableReason ?? null;
+  // Adding a device is approved by one already set up, so it never offers to set this one up.
+  const offerSetup = approver !== null && !signsHere && reason === null && !props.enroll;
+
+  const answer = async (decision: "approve" | "deny") => {
+    if (decision === "deny" || approver === null || keyId === null || signable === null) {
+      const outcome = await respond.run(environmentId, {
+        requestId,
+        decision: "deny",
+        ...(signsHere && keyId !== null ? { keyId } : {}),
+      });
+      if (outcome === "answered") setAnswered("denied");
+      return;
+    }
+    const controller = new AbortController();
+    prompt.current = controller;
+    setSigning(true);
+    respond.setError(null);
+    let signed;
+    try {
+      signed = await approver.sign(signable.bytes, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        respond.setError(error instanceof Error ? error.message : "Could not approve. Try again.");
+      }
+      return;
+    } finally {
+      prompt.current = null;
+      setSigning(false);
+    }
+    if (controller.signal.aborted) return;
+    const outcome = await respond.run(
+      environmentId,
+      signed === null
+        ? { requestId, decision: "deny", keyId }
+        : { requestId, decision: "approve", ...signed },
+    );
+    if (outcome === "answered") setAnswered(signed === null ? "denied" : "approved");
+  };
+
+  if (answered === "approved") return <EndedLine ended={{ kind: "approved", text: "Approved" }} />;
+  if (answered === "denied") return <EndedLine ended={{ kind: "denied", text: "Denied" }} />;
+  // An answer of ours in flight finishes first; the server reports a lost race as such.
+  if (props.ended !== null && !respond.pending) return <EndedLine ended={props.ended} />;
+  const busy = !canRespond || signing || respond.pending;
+  return (
+    <>
+      {respond.error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {respond.error}
+        </p>
+      ) : null}
+      {signsHere && reason === null ? (
+        <div className="flex min-w-0 items-center justify-end gap-2">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void answer("deny")}
+          >
+            Deny
+          </Button>
+          <Button type="button" size="xs" disabled={busy} onClick={() => void answer("approve")}>
+            <FingerprintIcon aria-hidden />
+            Approve
+          </Button>
+        </div>
+      ) : (
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <SmartphoneIcon className="size-3.5 shrink-0" aria-hidden />
+            <span className="shrink-0">{ELEVATION_APPROVE_ON_PHONE}</span>
+            {signsHere && reason !== null ? (
+              <>
+                <span aria-hidden>·</span>
+                <span className="truncate">{reason}</span>
+              </>
+            ) : offerSetup ? (
+              <>
+                <span aria-hidden>·</span>
+                <button
+                  type="button"
+                  className="truncate underline decoration-muted-foreground/45 underline-offset-2 hover:text-foreground"
+                  onClick={() => {
+                    requestSetup(environmentId);
+                    void navigate({ to: "/settings/device-approval" });
+                  }}
+                >
+                  {SET_UP_HERE[approver.kind]}
+                </button>
+              </>
+            ) : null}
+          </p>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost-muted"
+            disabled={busy}
+            onClick={() => void answer("deny")}
+          >
+            Deny
+          </Button>
+        </div>
+      )}
+    </>
   );
 }
 

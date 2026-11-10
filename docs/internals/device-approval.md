@@ -137,9 +137,17 @@ module fails the stack with `invalid_encoding` instead of building a payload.
   - `es256-der`: ECDSA P-256 with SHA-256 over the message; `signature` is the
     DER `SEQUENCE { r, s }`. Android `SHA256withECDSA` produces this directly.
     High-S signatures are accepted; signatures are never used as identifiers.
-  - `webauthn-es256`: reserved. The challenge will be `SHA-256(context || payload)`
-    and `webauthn` carries `authenticatorData` and `clientDataJSON` (base64url).
-    The v1 module returns `unsupported_alg`.
+  - `webauthn-es256`: a browser passkey's assertion. The challenge is
+    base64url(`SHA-256(context || payload)`), `webauthn` carries
+    `authenticatorData` and `clientDataJSON` (base64url), and `signature` is the
+    DER signature over `authenticatorData || SHA-256(clientDataJSON)`. The module
+    checks, in order: `type` is `webauthn.get`; the challenge; `origin` equals the
+    key's origin exactly; `crossOrigin` is absent or false; the rpIdHash; UP, then
+    UV, set; BE clear, since a backup-eligible passkey can sync to devices nobody
+    enrolled; the signature. `signCount` is ignored: device-bound platform passkeys
+    report 0. `webauthnVerify` in the test vectors names the failing step.
+  - A key signs only in its own format: an `es256` key never in an assertion, and a
+    passkey's key only inside an assertion from its site.
 
 The module verifies in this order and stops at the first failure:
 `unsupported_alg` → `unknown_key` (keyId not enrolled) → `expired` (module clock
@@ -177,14 +185,27 @@ as a plain command:
 
 ```
 <path>/t3-elevation enroll --user <user> --label <label> --public-key <b64url SPKI>
-                           --challenge <b64url>
-                           [--allow-dev-attestation | --allow-test-attestation]
+                           ( --challenge <b64url>
+                             [--allow-dev-attestation | --allow-test-attestation]
+                           | --unattested [--rp-id <rpId> --origin <origin>] )
 ```
 
 Each value is its own argv element; options may come in any order, each at
 most once, and nothing else is allowed. The basename of `argv[0]` is
 `t3-elevation`. Clients still show the full argv and warnings, and flag
 either attestation option.
+
+**Unattested keys.** A Mac's Secure Enclave key and a browser's passkey carry no
+attestation the helper can check, so `--unattested` says so in the argv the
+approver sees. Nothing but that approval admits them: an enrolled device
+approving the "Add device" code, or the sudo password, which also lets the first
+one in through `install --unattested`. Without the option the helper requires a
+verified attestation chain, so an unattested key never takes the phone's path.
+`--rp-id` and `--origin` make the key a passkey bound to that site. The origin
+must be exactly what a browser writes into clientDataJSON: `https://host[:port]`
+or `http://localhost[:port]`, with no default port, and the rpId must be the host
+or a parent of it (`elevationWebauthnSite`, mirrored by `webauthn_site` in the
+helper).
 
 **Attestation trust.** Release builds of the helper pin the Google attestation
 roots, the app package, and the app's signing digests
@@ -217,7 +238,23 @@ requesting a challenge and enrolling.
 }
 ```
 
-For `enroll`, `label`, `publicKey` and `challenge` must equal the argv values.
+An unattested key's object is `{ label, publicKey, webauthn? }`, where a passkey's
+`webauthn` is `{ rpId, origin, credentialId, authenticatorData }`; the credential
+ID and the registration's authenticator data ride only here, not in the argv.
+A registration with BE set is refused before it is enrolled (`synced_passkey`),
+first by the server and again by the helper, as is one whose rpIdHash or
+credential ID doesn't match (`invalid_passkey`). With `attestation: "none"`
+nothing signs that data, so this only stops an honest mistake early; refusing
+BE in every assertion is the guarantee. The key file keeps only the site. For
+`enroll`, `label`, `publicKey`, `challenge`, and a passkey's `rpId` and `origin`
+must equal the argv values.
+
+**Which key is this client's.** Status lists every key on a machine but not
+which client holds it, so a browser keeps its own map from environment to
+`{ keyId, credentialId, rpId }` in localStorage, the same profile and origin
+its passkey belongs to (`browserElevationApprover.ts`). It is written when the
+passkey is made, before the machine accepts it, so the card and Settings treat
+the browser as an approver only while the machine's keys include that keyId.
 
 **Enroll stdin.** `enroll` reads the line `t3-elevation-input-v1`, then the
 enrollment object. With a password, the server puts the password line first for
@@ -402,9 +439,19 @@ Unknown keys are ignored; `version` other than 1 or `enabled = false` means
   "label": "Pixel 9 Pro Fold", "securityLevel": "strongbox" | "tee" | "software",
   "enrolledAt": "2026-10-30T12:00:00Z",
   "attestationSummary": { "packageName": "...", "signingCertDigest": "<b64url SHA-256>", "devAttestation": false, "testAttestation": false } }
+
+{ "version": 1, "keyId": "...", "alg": "es256", "publicKey": "...", "label": "MacBook Pro",
+  "securityLevel": "secure_enclave", "enrolledAt": "..." }
+
+{ "version": 1, "keyId": "...", "alg": "webauthn-es256", "publicKey": "...", "label": "Chrome on Mac",
+  "securityLevel": "webauthn", "enrolledAt": "...",
+  "webauthn": { "rpId": "app.t3.codes", "origin": "https://app.t3.codes", "credentialId": "<b64url>" } }
 ```
 
-The module ignores a key file whose name, `keyId`, and derived keyId disagree.
+The module ignores a key file whose name, `keyId`, and derived keyId disagree,
+and a `webauthn-es256` file without a valid site or with an `attestationSummary`.
+The version stays 1: older modules skip both new shapes (no `attestationSummary`,
+or an unknown `alg`), and older servers skip them for their `securityLevel`.
 `devAttestation` is set by either option and `testAttestation` only by
 `--allow-test-attestation`; `software` only appears with the latter. Last-used times are
 the server's own state, never written here.
@@ -463,7 +510,10 @@ Any tool may produce this state; T3 verifies it whoever installed it.
   never manage its contents; the helper writes keys.
 
 Static checks cover the PAM line, the marker, the config, and the keys dir. The
-rest is proven by a live `sudo -n true` approved on a device. Only root can read
+rest is proven only by a sudo approved on a device. Clients don't offer a test
+`sudo -n true` (a fingerprint that approves nothing teaches users to approve
+blind), so the first agent sudo is the proof; the service's `test` remains for
+tooling. Only root can read
 sudoers, so the module checks the six lines itself on every request (any binding
 order or file, as long as each appears as `Defaults:<user>` or a global
 `Defaults`); without one of them it returns `PAM_IGNORE`, and the live test
@@ -483,16 +533,30 @@ between approval and sudo's exec. Status reports that copy as `helperInstalled`;
 while it is false, clients don't offer adding or removing devices, and a failed
 `helper` check says why. The first install has no such copy, so it
 runs a helper this OS account could have changed, the same trust as typing the
-sudo password into T3.
+sudo password into T3. That helper is `T3_ELEVATION_HELPER`, else the installed
+copy, else the one the build ships (`bundledElevationHelperPath`): the macOS
+desktop app carries it and the module under `Resources/t3-elevation/`, outside
+the asar because sudo can't exec a file inside one. A build with none reports
+`setupUnavailableReason`, and clients disable Set up before the fingerprint.
+The release helper's `option_env!` pins fail the build when the signing digest
+is missing (`T3_ELEVATION_UNPINNED=1` opts test fixtures out).
 
-| Command                                                                                                                       | Result                                                                                                                                                                                      |
-| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `t3-elevation version`                                                                                                        | `{ ok, protocol: 1, version }`                                                                                                                                                              |
-| `t3-elevation status --user U`                                                                                                | `{ ok, protocol, platform, checks: [{ id, ok, message }], config \| null, keys: [{ keyId, label, securityLevel, enrolledAt }], plannedChanges: [{ path, summary }], setupOutsideT3: bool }` |
-| `t3-elevation install --user U --socket P --key <-\|file> [--window S] [--allow-dev-attestation \| --allow-test-attestation]` | Writes missing files, enrolls the first key. On a TTY it prints the label and comparison code and asks to confirm.                                                                          |
-| `t3-elevation enroll ...`                                                                                                     | See the grammar above; marker line and enrollment object on stdin.                                                                                                                          |
-| `t3-elevation revoke --user U (--key-id ID \| --all)`                                                                         | Removes key files.                                                                                                                                                                          |
-| `t3-elevation uninstall --user U`                                                                                             | Reverts `installed-by-t3.json`.                                                                                                                                                             |
+The desktop's Touch ID approver (`native/t3-se-sign`) ships beside the helper as its own
+bundle, `Resources/t3-elevation/T3 Code.app`: macOS names the Touch ID sheet after
+the calling bundle, so a bare binary would read as its file name. Its key is a
+CryptoKit Secure Enclave blob in the desktop's userData, one per environment, not a
+keychain item, so it needs no entitlements and deleting the file deletes the key.
+Main signs only bytes that `decodeElevationPayload` accepts, and closes the sheet
+by interrupting the helper when another device answers.
+
+| Command                                                                                                                                       | Result                                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `t3-elevation version`                                                                                                                        | `{ ok, protocol: 1, version }`                                                                                                                                                              |
+| `t3-elevation status --user U`                                                                                                                | `{ ok, protocol, platform, checks: [{ id, ok, message }], config \| null, keys: [{ keyId, label, securityLevel, enrolledAt }], plannedChanges: [{ path, summary }], setupOutsideT3: bool }` |
+| `t3-elevation install --user U --socket P --key <-\|file> [--window S] [--allow-dev-attestation \| --allow-test-attestation \| --unattested]` | Writes missing files, enrolls the first key. On a TTY it prints the label and comparison code and asks to confirm.                                                                          |
+| `t3-elevation enroll ...`                                                                                                                     | See the grammar above; marker line and enrollment object on stdin.                                                                                                                          |
+| `t3-elevation revoke --user U (--key-id ID \| --all)`                                                                                         | Removes key files.                                                                                                                                                                          |
+| `t3-elevation uninstall --user U`                                                                                                             | Reverts `installed-by-t3.json`.                                                                                                                                                             |
 
 ## Server and clients
 
