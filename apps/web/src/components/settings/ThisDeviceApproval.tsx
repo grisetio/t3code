@@ -134,6 +134,7 @@ export function ThisDeviceApproval(props: {
   const answeredRevoke = useRef<string | null>(null);
   const deniedAbandoned = useRef<string | null>(null);
   const declined = useRef(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the open Touch ID or passkey prompt on unmount
   useEffect(() => () => prompt.current?.abort(), []);
 
   const here = HERE[approver.kind];
@@ -273,6 +274,7 @@ export function ThisDeviceApproval(props: {
     step.kind === "removing" && user !== undefined && keyId !== null
       ? pending.find((entry) => isOwnRevokeRequest(entry, user, keyId))
       : undefined;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens this device's signing prompt for its own removal request once the server raises it
   useEffect(() => {
     if (ownRevoke === undefined || !Result.isSuccess(ownRevoke.decoded) || keyId === null) return;
     const { requestId } = ownRevoke.request;
@@ -306,6 +308,7 @@ export function ThisDeviceApproval(props: {
 
   const abandonedRequest =
     abandoned === null ? undefined : pending.find((entry) => isOwnEnrollRequest(entry, abandoned));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- denies this device's abandoned setup request once the server lists it
   useEffect(() => {
     if (abandonedRequest === undefined) return;
     const { requestId } = abandonedRequest.request;
@@ -316,6 +319,7 @@ export function ThisDeviceApproval(props: {
 
   const claimEnroll = step.kind === "elsewhere" ? step.key.publicKey : abandoned;
   const claimRevoke = step.kind === "removing" ? approver.keyId : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds this device's claim on its own setup or removal request in the sidebar store until unmount
   useEffect(() => {
     if (claimEnroll === null && claimRevoke === null) return;
     claim(
@@ -333,6 +337,7 @@ export function ThisDeviceApproval(props: {
     (state) => state.setupRequested === environmentId,
   );
   const requestSetup = useElevationSidebarStore((state) => state.requestSetup);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the setup a sudo card asked for through the sidebar store, once this device can set up
   useEffect(() => {
     if (!setupRequested || enrolled !== undefined || !canSetUp) return;
     requestSetup(null);

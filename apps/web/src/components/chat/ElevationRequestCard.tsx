@@ -84,12 +84,10 @@ function itemView(item: ElevationRequestItem) {
 const FRESH_CARD_MS = 3_000;
 
 /**
- * Matches the phone: a pending request is a card that leads with words, never the command; once
- * it ends it becomes a work-log row. A card seen ending says how for a moment, however it ended
- * (answered here or elsewhere, or expired), then collapses. The agent's command row the request
- * stands in for stays until then (`useElevationHandoverStore`), and the settled row replaces it in
- * the same commit that removes the card, so nothing around them moves. A turn that ended folds
- * then too, so the rows its fold hides close with the card.
+ * Matches the phone: a pending request is a card that leads with words, then a work-log row. A card
+ * seen ending says how a moment, then collapses; its command row stays until then, and the row
+ * replaces it in the card's last commit (`useElevationHandoverStore`), so nothing around moves.
+ * An ended turn folds then too, so the rows its fold hides close with the card.
  */
 export function ElevationRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -138,6 +136,7 @@ export function ElevationRequestCard(props: {
   const release = useElevationHandoverStore((state) => state.release);
   const onScreen = phase !== "row";
   const { commandKey } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds this card's handover registry entry, which the timeline reads, while the card is on screen
   useLayoutEffect(() => {
     if (!onScreen) return;
     hold(cardKey, { commandKey, runId: item.runId, threadKey });
@@ -161,11 +160,13 @@ export function ElevationRequestCard(props: {
     setPhase("collapsing");
   });
   const endCollapse = useEffectEvent(handOver);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the timer that ends the outcome hold
   useEffect(() => {
     if (!settling) return;
     const timer = setTimeout(endHold, ELEVATION_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [settling]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the timer that hands over once the collapse has run
   useEffect(() => {
     if (phase !== "collapsing") return;
     const timer = setTimeout(endCollapse, ELEVATION_COLLAPSE_MS);

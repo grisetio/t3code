@@ -229,9 +229,11 @@ function ElevationCardActions(props: {
   const prompt = useRef<AbortController | null>(null);
   const endedElsewhere = props.ended !== null;
   // Another device answered while the prompt was open: close it, and the line says who.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the open Touch ID or passkey prompt when another device answers
   useEffect(() => {
     if (endedElsewhere) prompt.current?.abort();
   }, [endedElsewhere]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the open Touch ID or passkey prompt on unmount
   useEffect(() => () => prompt.current?.abort(), []);
 
   const keyId = approver?.keyId ?? null;

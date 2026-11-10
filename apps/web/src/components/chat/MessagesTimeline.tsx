@@ -1472,6 +1472,7 @@ const TimelineRowContent = memo(function TimelineRowContent({
   folding: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- runs the DOM height animation that closes a row the sudo fold hides
   useLayoutEffect(() => {
     const element = ref.current;
     if (!folding || element === null) return;
