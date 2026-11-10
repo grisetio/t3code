@@ -43,6 +43,8 @@ export interface UserConfig {
   readonly version: number | undefined;
   readonly enabled: boolean;
   readonly socket: string | undefined;
+  /** As the module reads it: anything but `true` keeps synced passkeys out. */
+  readonly allowSyncedPasskeys: boolean;
 }
 
 export interface EnrolledKey {
@@ -53,6 +55,9 @@ export interface EnrolledKey {
   readonly enrolledAt: string;
   /** A passkey's site; it signs only WebAuthn assertions from there. */
   readonly webauthn?: ElevationWebauthnBinding;
+  /** A passkey whose registration was backup eligible. */
+  readonly synced?: boolean;
+  readonly aaguid?: string;
 }
 
 const KeyFile = Schema.Struct({
@@ -65,6 +70,8 @@ const KeyFile = Schema.Struct({
   enrolledAt: Schema.String,
   attestationSummary: Schema.optionalKey(Schema.Unknown),
   webauthn: Schema.optionalKey(ElevationWebauthnBinding),
+  synced: Schema.optionalKey(Schema.Boolean),
+  aaguid: Schema.optionalKey(Schema.String),
 });
 const decodeKeyFile = Schema.decodeUnknownOption(Schema.fromJsonString(KeyFile));
 
@@ -130,6 +137,7 @@ function parseUserConfig(text: string): UserConfig {
     version: typeof version === "number" ? version : undefined,
     enabled: values.get("enabled") !== false,
     socket: typeof socket === "string" ? socket : undefined,
+    allowSyncedPasskeys: values.get("allow_synced_passkeys") === true,
   };
 }
 
@@ -161,7 +169,7 @@ export const readEnrolledKeys = Effect.fn("ElevationHostState.readEnrolledKeys")
     const publicKey = decodeElevationBase64Url(file.value.publicKey);
     if (publicKey === null || name !== `${file.value.keyId}.json`) continue;
     if (derivedKeyId(publicKey) !== file.value.keyId) continue;
-    const { alg, webauthn, attestationSummary } = file.value;
+    const { alg, webauthn, attestationSummary, synced, aaguid } = file.value;
     // As the module's parse_key_file: a passkey has a valid site and no attestation.
     const passkey =
       webauthn !== undefined &&
@@ -175,6 +183,8 @@ export const readEnrolledKeys = Effect.fn("ElevationHostState.readEnrolledKeys")
       securityLevel: file.value.securityLevel,
       enrolledAt: file.value.enrolledAt,
       ...(webauthn === undefined ? {} : { webauthn }),
+      ...(passkey && synced === true ? { synced } : {}),
+      ...(passkey && aaguid !== undefined ? { aaguid } : {}),
     });
   }
   return keys;
@@ -229,7 +239,8 @@ export type WebauthnFailure =
 /**
  * The module's `check_webauthn`, in its order. The challenge is the SHA-256 of what an
  * `es256-der` key signs, so an assertion answers one payload only. A backup-eligible
- * credential can sync to devices the user never enrolled, so it never approves.
+ * credential can sync to devices the user never enrolled, so it approves only while the
+ * user's config allows synced passkeys.
  */
 export function checkWebauthnAssertion(input: {
   readonly key: EnrolledKey & { readonly webauthn: ElevationWebauthnBinding };
@@ -237,6 +248,7 @@ export function checkWebauthnAssertion(input: {
   readonly authenticatorData: string;
   readonly clientDataJSON: string;
   readonly signature: Uint8Array;
+  readonly allowSynced: boolean;
 }): WebauthnFailure | null {
   const authenticatorData = decodeElevationBase64Url(input.authenticatorData);
   const clientDataBytes = decodeElevationBase64Url(input.clientDataJSON);
@@ -262,7 +274,7 @@ export function checkWebauthnAssertion(input: {
   const flags = authenticatorData[32] ?? 0;
   if ((flags & FLAG_UP) === 0) return "user_presence";
   if ((flags & FLAG_UV) === 0) return "user_verification";
-  if ((flags & FLAG_BE) !== 0) return "backup_eligible";
+  if ((flags & FLAG_BE) !== 0 && !input.allowSynced) return "backup_eligible";
   const signed = Buffer.concat([authenticatorData, sha256(clientDataBytes)]);
   return verifyDer(input.key.publicKey, signed, input.signature) ? null : "signature";
 }
@@ -276,6 +288,7 @@ export function checkSignature(input: {
   readonly payload: ElevationPayload;
   readonly response: ElevationSignedResponse;
   readonly keys: ReadonlyArray<EnrolledKey>;
+  readonly allowSynced: boolean;
 }): SignatureCheck {
   const { alg } = input.response;
   if (alg !== "es256-der" && alg !== "webauthn-es256") return "unsupported_alg";
@@ -298,6 +311,7 @@ export function checkSignature(input: {
     authenticatorData: assertion.authenticatorData,
     clientDataJSON: assertion.clientDataJSON,
     signature,
+    allowSynced: input.allowSynced,
   });
   return failure === null ? "ok" : "bad_signature";
 }
@@ -443,7 +457,14 @@ export const staticChecks = Effect.fn("ElevationHostState.staticChecks")(functio
   else pass("keys", `${keysPath} is root-owned`, keysPath);
 
   const keys = yield* readEnrolledKeys(paths, input.user);
+  // A synced passkey stays listed after the setting goes off, but it can't approve.
+  const usable = keys.filter((key) => key.synced !== true || config?.allowSyncedPasskeys === true);
   if (keys.length === 0) fail("devices", "No device is enrolled");
+  else if (usable.length === 0)
+    fail(
+      "devices",
+      "No enrolled device can approve: passkeys from password managers are turned off",
+    );
   else pass("devices", keys.length === 1 ? "1 device enrolled" : `${keys.length} devices enrolled`);
 
   return { checks, config, keys } satisfies StaticChecks;

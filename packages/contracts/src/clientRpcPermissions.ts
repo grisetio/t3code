@@ -76,6 +76,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.elevationEnroll]: AuthEnvironmentMaintainScope,
   [WS_METHODS.elevationRevoke]: AuthEnvironmentMaintainScope,
   [WS_METHODS.elevationUninstall]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.elevationSetPolicy]: AuthEnvironmentMaintainScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

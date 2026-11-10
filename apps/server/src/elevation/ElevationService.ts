@@ -27,6 +27,8 @@ import {
   type ElevationEnrollInput,
   ElevationEnrollmentDevice,
   elevationApproverKind,
+  elevationPasskeyProvider,
+  elevationWebauthnAaguid,
   elevationWebauthnRegistrationRefusal,
   isElevationUnattestedDevice,
   type ElevationFailureReason,
@@ -38,6 +40,7 @@ import {
   type ElevationRequestSeries,
   type ElevationRespondInput,
   type ElevationRevokeInput,
+  type ElevationSetPolicyInput,
   type ElevationStatus,
   type ElevationUninstallInput,
   type OrchestrationV2ElevationChanges,
@@ -223,11 +226,11 @@ const lastLine = (text: string) => text.trim().split("\n").at(-1) ?? "";
 const enrollmentObject = Schema.encodeSync(Schema.fromJsonString(ElevationEnrollmentDevice));
 
 /**
- * A synced passkey is refused before anything asks for an approval it would only waste; the
- * helper refuses it too (`check_registration`).
+ * A synced passkey is refused, unless the machine allows them, before anything asks for an
+ * approval it would only waste; the helper refuses it too (`check_registration`).
  */
 const refuseUnenrollablePasskey = Effect.fn("ElevationService.refuseUnenrollablePasskey")(
-  function* (device: ElevationEnrollmentDevice) {
+  function* (device: ElevationEnrollmentDevice, allowSynced: boolean) {
     if (!isElevationUnattestedDevice(device) || device.webauthn === undefined) return;
     const { webauthn } = device;
     const authenticatorData = decodeElevationBase64Url(webauthn.authenticatorData);
@@ -240,8 +243,13 @@ const refuseUnenrollablePasskey = Effect.fn("ElevationService.refuseUnenrollable
             rpIdHash: NodeCrypto.createHash("sha256").update(webauthn.rpId).digest(),
             credentialId,
           });
-    if (refusal === null) return;
-    return yield* fail(refusal === "synced" ? "synced_passkey" : "invalid_passkey");
+    if (refusal === null || (refusal === "synced" && allowSynced)) return;
+    if (refusal === "invalid" || authenticatorData === null) return yield* fail("invalid_passkey");
+    const provider = elevationPasskeyProvider(elevationWebauthnAaguid(authenticatorData));
+    return yield* new ElevationError({
+      reason: "synced_passkey",
+      ...(provider === null ? {} : { provider }),
+    });
   },
 );
 
@@ -266,6 +274,10 @@ export class ElevationService extends Context.Service<
     ) => Effect.Effect<ElevationStatus, ElevationError>;
     readonly uninstall: (
       input: ElevationUninstallInput,
+    ) => Effect.Effect<ElevationStatus, ElevationError>;
+    /** Changes `allow_synced_passkeys` in a config T3 installed; the helper refuses any other. */
+    readonly setPolicy: (
+      input: ElevationSetPolicyInput,
     ) => Effect.Effect<ElevationStatus, ElevationError>;
   }
 >()("t3/elevation/ElevationService") {}
@@ -903,15 +915,20 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       host.config.enabled &&
       host.config.socket === options.socketPath;
     const listening = yield* syncListener(unsupported === null && configured, host.keys.length);
-    const devices = host.keys.map((key): ElevationDevice => ({
-      keyId: key.keyId,
-      label: key.label,
-      securityLevel: key.securityLevel,
-      kind: elevationApproverKind(key.securityLevel),
-      ...(key.webauthn === undefined ? {} : { webauthn: key.webauthn }),
-      enrolledAt: Option.getOrElse(DateTime.make(key.enrolledAt), () => DateTime.makeUnsafe(0)),
-      lastUsedAt: Option.getOrNull(DateTime.make(lastUsed.get(key.keyId) ?? "")),
-    }));
+    const devices = host.keys.map((key): ElevationDevice => {
+      const provider = elevationPasskeyProvider(key.aaguid);
+      return {
+        keyId: key.keyId,
+        label: key.label,
+        securityLevel: key.securityLevel,
+        kind: elevationApproverKind(key.securityLevel),
+        ...(key.webauthn === undefined ? {} : { webauthn: key.webauthn }),
+        ...(key.synced === true ? { synced: true } : {}),
+        ...(provider === null ? {} : { provider }),
+        enrolledAt: Option.getOrElse(DateTime.make(key.enrolledAt), () => DateTime.makeUnsafe(0)),
+        lastUsedAt: Option.getOrNull(DateTime.make(lastUsed.get(key.keyId) ?? "")),
+      };
+    });
     // Agent sudo doesn't need the helper, so it doesn't count against `ready`;
     // adding and removing devices does.
     const helperCheck: ReadonlyArray<HostCheck> =
@@ -949,6 +966,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       setupOutsideT3: helper?.setupOutsideT3 ?? false,
       installedByT3: install?.user === options.user,
       helperInstalled,
+      ...(host.config === null ? {} : { allowSyncedPasskeys: host.config.allowSyncedPasskeys }),
       checks: hostChecks.map((check) => withFixBy(check, fixContext)),
       plannedChanges,
       devices,
@@ -1060,9 +1078,14 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     if (unsupported !== null) return yield* fail("unsupported", unsupported);
   });
 
+  const allowsSynced = Effect.map(
+    readUserConfig(options.hostPaths, options.user),
+    (config) => config?.allowSyncedPasskeys === true,
+  );
+
   const install = Effect.fn("ElevationService.install")(function* (input: ElevationInstallInput) {
     yield* requireSupported;
-    yield* refuseUnenrollablePasskey(input.device);
+    yield* refuseUnenrollablePasskey(input.device, yield* allowsSynced);
     const helper = yield* requireSetupHelper;
     const installArgs = (keyPath: string) => [
       "install",
@@ -1104,7 +1127,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
 
   const enroll = Effect.fn("ElevationService.enroll")(function* (input: ElevationEnrollInput) {
     yield* requireSupported;
-    yield* refuseUnenrollablePasskey(input.device);
+    yield* refuseUnenrollablePasskey(input.device, yield* allowsSynced);
     const { device } = input;
     const proof = !isElevationUnattestedDevice(device)
       ? ["--challenge", device.challenge, ...attestationFlag]
@@ -1148,6 +1171,27 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       args: ["uninstall", "--user", options.user],
       password: input.password,
       explanation: "Turn off device approval",
+    });
+    return yield* status;
+  });
+
+  const setPolicy = Effect.fn("ElevationService.setPolicy")(function* (
+    input: ElevationSetPolicyInput,
+  ) {
+    const { allowSyncedPasskeys } = input;
+    yield* runHelper({
+      helper: yield* requireInstalledHelper,
+      args: [
+        "policy",
+        "--user",
+        options.user,
+        "--allow-synced-passkeys",
+        allowSyncedPasskeys ? "on" : "off",
+      ],
+      password: input.password,
+      explanation: allowSyncedPasskeys
+        ? "Allow passkeys from password managers to approve"
+        : "Stop passkeys from password managers approving",
     });
     return yield* status;
   });
@@ -1230,6 +1274,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       payload: entry.payload,
       response,
       keys,
+      allowSynced: yield* allowsSynced,
     });
     if (check !== "ok") return yield* fail("invalid_signature", check);
     // Reading the keys yielded; another answer may have won meanwhile.
@@ -1277,6 +1322,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     enroll,
     revoke,
     uninstall,
+    setPolicy,
   });
 });
 

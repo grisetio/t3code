@@ -103,6 +103,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.elevationEnroll]: "elevation",
   [WS_METHODS.elevationRevoke]: "elevation",
   [WS_METHODS.elevationUninstall]: "elevation",
+  [WS_METHODS.elevationSetPolicy]: "elevation",
   [WS_METHODS.cloudGetRelayClientStatus]: "cloud",
   [WS_METHODS.cloudInstallRelayClient]: "cloud",
   [WS_METHODS.pullRequestsList]: "pull-requests",

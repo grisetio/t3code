@@ -7,9 +7,14 @@ import vectorsJson from "../test-vectors/device-approval.json" with { type: "jso
 import {
   decodeElevationBase64Url,
   decodeElevationPayload,
+  ElevationDevice,
   ElevationEnrollmentDevice,
+  ElevationError,
+  ElevationStatus,
   elevationComparisonCode,
   elevationKeyIdFromSpkiSha256,
+  elevationPasskeyProvider,
+  elevationWebauthnAaguid,
   elevationWebauthnRegistrationRefusal,
   elevationWebauthnSite,
   escapeElevationDisplayText,
@@ -207,5 +212,88 @@ describe("elevation enrollment", () => {
       command: { ...payload.command, resolvedPath: "/opt/t3/t3-elevation" },
     });
     expect(elsewhere).toBeNull();
+  });
+});
+
+const decodeStatusJson = Schema.decodeUnknownSync(Schema.toCodecJson(ElevationStatus));
+// The phone app 2.3.13 and older decode with their own schema, which lacks these keys; only
+// optional keys were added, and no literal, so they still decode a new server's status.
+const { synced: _synced, provider: _provider, ...oldDeviceFields } = ElevationDevice.fields;
+const {
+  allowSyncedPasskeys: _allow,
+  devices: _devices,
+  ...oldStatusFields
+} = ElevationStatus.fields;
+const decodeOldStatusJson = Schema.decodeUnknownSync(
+  Schema.toCodecJson(
+    Schema.Struct({ ...oldStatusFields, devices: Schema.Array(Schema.Struct(oldDeviceFields)) }),
+  ),
+);
+
+describe("synced passkeys", () => {
+  const registration = (name: string) =>
+    bytesOf(
+      vectors.webauthnRegistrations.find((vector) => vector.name === name)!.authenticatorData,
+    );
+
+  it("reads the AAGUID that names a password manager", () => {
+    const bytes = registration("synced");
+    expect(elevationWebauthnAaguid(bytes)).toBeNull();
+    bytes.set([0xd5, 0x48, 0x82, 0x6e, 0x79, 0xb4, 0xdb, 0x40, 0xa3, 0xd8, 0x11, 0x11], 37);
+    bytes.set([0x6f, 0x7e, 0x83, 0x49], 49);
+    const aaguid = elevationWebauthnAaguid(bytes);
+    expect(aaguid).toBe("d548826e-79b4-db40-a3d8-11116f7e8349");
+    expect(elevationPasskeyProvider(aaguid)).toBe("Bitwarden");
+    expect(elevationPasskeyProvider("00112233-4455-6677-8899-aabbccddeeff")).toBeNull();
+    expect(elevationPasskeyProvider(undefined)).toBeNull();
+  });
+
+  it("names the provider in a refusal only when it is known", () => {
+    expect(new ElevationError({ reason: "synced_passkey", provider: "1Password" }).message).toBe(
+      "1Password saved this passkey and syncs it to your other devices. To use it, turn on Allow passkeys from password managers under Details, or set up again and save it to this device.",
+    );
+    expect(new ElevationError({ reason: "synced_passkey" }).message).toMatch(
+      /^That passkey syncs to your other devices\. To use it, turn on Allow passkeys/,
+    );
+  });
+
+  const device = {
+    keyId: vectorsJson.keys.webauthnDevice.keyId,
+    label: "Chrome on Mac",
+    securityLevel: "webauthn",
+    kind: "browser",
+    webauthn: vectorsJson.keys.webauthnDevice.webauthn,
+    enrolledAt: "2026-11-10T12:00:00.000Z",
+    lastUsedAt: null,
+  };
+  const status = {
+    user: "me",
+    supported: true,
+    ready: true,
+    ownsApprovals: true,
+    setupOutsideT3: false,
+    installedByT3: true,
+    helperInstalled: true,
+    checks: [],
+    plannedChanges: [],
+  };
+
+  it("decodes a status from a server that predates the setting", () => {
+    const decoded = decodeStatusJson({
+      ...status,
+      devices: [device],
+    });
+    expect(decoded.allowSyncedPasskeys).toBeUndefined();
+    expect(decoded.devices[0]?.synced).toBeUndefined();
+  });
+
+  it("keeps a new server's status decodable by clients that predate the setting", () => {
+    const current = {
+      ...status,
+      allowSyncedPasskeys: true,
+      devices: [{ ...device, synced: true, provider: "Bitwarden" }],
+    };
+    expect(decodeStatusJson(current).devices[0]?.provider).toBe("Bitwarden");
+    expect(decodeOldStatusJson(current).devices[0]?.securityLevel).toBe("webauthn");
   });
 });
