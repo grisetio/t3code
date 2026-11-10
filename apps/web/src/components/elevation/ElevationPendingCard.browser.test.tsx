@@ -96,7 +96,7 @@ describe("ElevationPendingCard", () => {
     const { keyId } = await enrollThisBrowser(environmentId);
     await using screen = await render(card({ signable: { bytes, keyIds: [PHONE_KEY, keyId] } }));
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
-    await expect.element(screen.getByRole("button", { name: "Approved" })).toBeVisible();
+    await expect.element(screen.getByRole("status")).toHaveTextContent("Approved");
     expect(respondedWith()).toMatchObject({
       environmentId,
       input: { requestId, decision: "approve", keyId, alg: "webauthn-es256" },
