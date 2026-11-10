@@ -627,6 +627,7 @@ fn exchange(
                 &response,
                 &prepared.keys,
                 sys::now(),
+                prepared.config.allow_synced_passkeys,
             ) {
                 Ok(_) => {
                     if let Some(planned) = planned {
@@ -968,19 +969,42 @@ mod tests {
         assert_eq!(exchange.result.as_deref(), Some("approved"));
     }
 
-    #[test]
-    fn webauthn_keys_approve_only_from_their_site_and_never_synced() {
-        let setup = setup();
+    impl Setup {
+        fn set_allow_synced_passkeys(&self, allow: bool) {
+            let config = format!(
+                "version = 1\nenabled = true\nsocket = \"{}\"\nallow_synced_passkeys = {allow}\n",
+                self.dir.join("s.sock").display()
+            );
+            test_fs::write(
+                &self
+                    .environment
+                    .state_dir
+                    .join("users")
+                    .join(format!("{}.toml", self.user)),
+                config,
+            );
+        }
+    }
+
+    fn enroll_vector_passkey(setup: &Setup, synced: bool) -> String {
         let key = vector_key("webauthnDevice");
         enroll_key_file(
-            &setup,
+            setup,
             serde_json::json!({
                 "version": 1, "keyId": key.key_id, "alg": "webauthn-es256",
                 "publicKey": crate::b64::encode(&key.spki), "label": "Chrome on Mac",
                 "securityLevel": "webauthn", "enrolledAt": "2026-11-09T12:00:00Z",
                 "webauthn": fixture_server::vector_webauthn_binding(),
+                "synced": synced,
             }),
         );
+        key.key_id
+    }
+
+    #[test]
+    fn webauthn_keys_approve_only_from_their_site_and_synced_only_when_allowed() {
+        let setup = setup();
+        let key_id = enroll_vector_passkey(&setup, false);
         for (mode, outcome, result) in [
             (Mode::ApproveWebauthn, Outcome::Approved, "approved"),
             (Mode::WebauthnBackupEligible, Outcome::Fail, "bad_signature"),
@@ -990,8 +1014,69 @@ mod tests {
             assert_eq!(got, outcome, "{mode:?}");
             assert_eq!(exchange.result.as_deref(), Some(result), "{mode:?}");
             let listed = exchange.payload.unwrap()["keyIds"].to_string();
-            assert!(listed.contains(&key.key_id), "{mode:?}");
+            assert!(listed.contains(&key_id), "{mode:?}");
         }
+        setup.set_allow_synced_passkeys(true);
+        for (mode, outcome) in [
+            (Mode::WebauthnBackupEligible, Outcome::Approved),
+            (Mode::ApproveWebauthn, Outcome::Approved),
+            (Mode::WebauthnWrongOrigin, Outcome::Fail),
+        ] {
+            let (got, _) = setup.run(mode, &setup.invocation(&["sudo", "id"]));
+            assert_eq!(got, outcome, "{mode:?} with synced passkeys allowed");
+        }
+    }
+
+    #[test]
+    fn a_synced_passkey_stops_approving_when_the_policy_goes_off() {
+        let setup = setup();
+        setup.set_allow_synced_passkeys(true);
+        enroll_vector_passkey(&setup, true);
+        let sudo = setup.invocation(&["sudo", "id"]);
+        assert_eq!(
+            setup.run(Mode::WebauthnBackupEligible, &sudo).0,
+            Outcome::Approved
+        );
+        setup.set_allow_synced_passkeys(false);
+        let (outcome, exchange) = setup.run(Mode::WebauthnBackupEligible, &sudo);
+        assert_eq!(outcome, Outcome::Fail);
+        assert_eq!(exchange.result.as_deref(), Some("bad_signature"));
+        // The device-bound phone key still approves.
+        assert_eq!(setup.run(Mode::Approve, &sudo).0, Outcome::Approved);
+    }
+
+    /// Changing the policy is a sudo of the helper, admitted like adding a
+    /// device: only a fresh, valid approval. A synced passkey can't approve
+    /// turning on the policy that would let it approve.
+    #[test]
+    fn changing_the_policy_needs_a_valid_approval() {
+        let setup = setup();
+        enroll_vector_passkey(&setup, true);
+        let helper = crate::HELPER_INSTALL_PATH;
+        let change = setup.invocation(&[
+            "sudo",
+            "-n",
+            helper,
+            "policy",
+            "--user",
+            &setup.user,
+            "--allow-synced-passkeys",
+            "on",
+        ]);
+        for mode in [
+            Mode::BadSignature,
+            Mode::WrongPayload,
+            Mode::WebauthnBackupEligible,
+            Mode::Deny,
+        ] {
+            let (outcome, _) = setup.run(mode, &change);
+            assert_eq!(outcome, Outcome::Fail, "{mode:?}");
+        }
+        let (outcome, exchange) = setup.run(Mode::Approve, &change);
+        assert_eq!(outcome, Outcome::Approved);
+        let argv = exchange.payload.unwrap()["command"]["argv"].clone();
+        assert_eq!(argv[1], "policy");
+        assert_eq!(argv[5], "on");
     }
 
     #[test]
@@ -1277,9 +1362,11 @@ mod tests {
         let (decision, _) = setup.run_decision(Mode::Cancel, &setup.invocation(&["sudo", "id"]));
         assert_eq!(decision, fail_with(decline::WITHDRAWN));
         // sudo's own lines follow every one of them.
-        assert!(decision.notice.unwrap().ends_with(
-            "sudo's own error lines below are expected; don't retry with a password."
-        ));
+        assert!(
+            decision.notice.unwrap().ends_with(
+                "sudo's own error lines below are expected; don't retry with a password."
+            )
+        );
     }
 
     #[test]

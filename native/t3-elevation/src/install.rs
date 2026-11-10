@@ -748,6 +748,7 @@ pub fn plan_install(
         socket: socket.into(),
         approval_window_seconds: window,
         session_max_uses: config::DEFAULT_SESSION_MAX_USES,
+        allow_synced_passkeys: false,
     };
     let config_path = layout.state(&format!("users/{user}.toml"));
     match std::fs::read_to_string(layout.path(&config_path)) {
@@ -1419,8 +1420,8 @@ pub enum Admission<'a> {
     Attested(&'a crate::attestation::Verified),
     /// `--unattested` without a site: a Secure Enclave key.
     SecureEnclave,
-    /// `--unattested` with a site.
-    Webauthn(&'a keys::WebauthnBinding),
+    /// `--unattested` with a site, and what its registration said.
+    Webauthn(&'a keys::WebauthnBinding, &'a crate::enroll::Registration),
 }
 
 pub fn key_file_bytes(
@@ -1430,6 +1431,10 @@ pub fn key_file_bytes(
     now: i64,
 ) -> (String, Vec<u8>) {
     let key_id = keys::key_id(spki);
+    let registration = match admission {
+        Admission::Webauthn(_, registration) => Some(*registration),
+        _ => None,
+    };
     let (alg, security_level, attestation_summary, webauthn) = match admission {
         Admission::Attested(verified) => (
             "es256",
@@ -1443,7 +1448,7 @@ pub fn key_file_bytes(
             None,
         ),
         Admission::SecureEnclave => ("es256", "secure_enclave", None, None),
-        Admission::Webauthn(binding) => {
+        Admission::Webauthn(binding, _) => {
             ("webauthn-es256", "webauthn", None, Some((*binding).clone()))
         }
     };
@@ -1457,6 +1462,8 @@ pub fn key_file_bytes(
         enrolled_at: rfc3339(now),
         attestation_summary,
         webauthn,
+        synced: registration.is_some_and(|registration| registration.synced),
+        aaguid: registration.and_then(|registration| registration.aaguid.clone()),
     };
     let mut bytes = serde_json::to_vec(&file).unwrap_or_default();
     bytes.push(b'\n');
@@ -1510,6 +1517,62 @@ pub fn revoke(layout: &Layout, user: &str, key_id: Option<&str>) -> Result<Vec<S
         return Err(KeyError::UnknownKey);
     }
     Ok(removed)
+}
+
+/// The user's config as the module reads it, or None when it is missing,
+/// unsafe or invalid.
+pub fn read_config(layout: &Layout, user: &str) -> Option<UserConfig> {
+    let path = layout.path(&layout.state(&format!("users/{user}.toml")));
+    rootsafe::check_path(&path, &layout.policy, rootsafe::Kind::File).ok()?;
+    let text = rootsafe::read_limited(&path, 64 * 1024).ok()?;
+    config::parse(std::str::from_utf8(&text).ok()?)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PolicyError {
+    /// The config is missing, unsafe or invalid.
+    NotInstalled,
+    /// T3 didn't write the config, so whatever did (Nix, a person) owns it.
+    ManagedElsewhere,
+    Io(String),
+}
+
+/// Sets `allow_synced_passkeys` in a config T3 installed, keeping its other
+/// settings, and records the new bytes so uninstall still removes the file.
+/// Returns whether anything changed.
+pub fn set_allow_synced_passkeys(
+    layout: &Layout,
+    user: &str,
+    allow: bool,
+) -> Result<bool, PolicyError> {
+    let relative = layout.state(&format!("users/{user}.toml"));
+    let mut manifest = read_manifest(layout)
+        .filter(|manifest| manifest.user == user)
+        .ok_or(PolicyError::ManagedElsewhere)?;
+    let Some(change) = manifest
+        .changes
+        .iter_mut()
+        .find(|change| change.path == relative)
+    else {
+        return Err(PolicyError::ManagedElsewhere);
+    };
+    let mut config = read_config(layout, user).ok_or(PolicyError::NotInstalled)?;
+    if config.allow_synced_passkeys == allow {
+        return Ok(false);
+    }
+    config.allow_synced_passkeys = allow;
+    let text = config::render(&config);
+    write_atomic(
+        layout,
+        &layout.path(&relative),
+        text.as_bytes(),
+        0o644,
+        None,
+    )
+    .map_err(|error| PolicyError::Io(error.to_string()))?;
+    change.sha256_after = Some(sha256_hex(text.as_bytes()));
+    write_manifest(layout, &manifest).map_err(PolicyError::Io)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1967,6 +2030,85 @@ mod tests {
         assert_eq!(
             seuser_for("alice:user_u:s0\n", "alice", &[]).as_deref(),
             Some("user_u")
+        );
+    }
+
+    #[test]
+    fn the_synced_passkey_policy_rewrites_only_a_config_t3_installed() {
+        let root = Root::new(
+            Platform::Linux,
+            &[("/etc/pam.d/sudo", UBUNTU_SUDO), ("/etc/sudoers", SUDOERS)],
+        );
+        assert_eq!(
+            set_allow_synced_passkeys(&root.layout, "alice", true),
+            Err(PolicyError::ManagedElsewhere)
+        );
+        root.install();
+        assert_eq!(
+            set_allow_synced_passkeys(&root.layout, "alice", true),
+            Ok(true)
+        );
+        assert_eq!(
+            set_allow_synced_passkeys(&root.layout, "alice", true),
+            Ok(false)
+        );
+        let config = read_config(&root.layout, "alice").unwrap();
+        assert!(config.allow_synced_passkeys);
+        assert_eq!(config.socket, "/home/alice/.t3/elevation.sock");
+        // The manifest follows the rewrite, so uninstall still removes the file.
+        let reverted = uninstall(&root.layout, "alice").unwrap();
+        assert_eq!(reverted.kept, vec![]);
+        assert!(read_config(&root.layout, "alice").is_none());
+    }
+
+    #[test]
+    fn a_config_set_up_outside_t3_keeps_its_policy() {
+        let text = "version = 1\nenabled = true\nsocket = \"/s\"\n# from nix\n";
+        let root = Root::new(Platform::Linux, &[]);
+        test_fs::create_dirs(&root.layout.path("/etc/t3-elevation/users"));
+        test_fs::write(
+            &root.layout.path("/etc/t3-elevation/users/alice.toml"),
+            text,
+        );
+        assert_eq!(
+            set_allow_synced_passkeys(&root.layout, "alice", true),
+            Err(PolicyError::ManagedElsewhere)
+        );
+        assert_eq!(root.read("/etc/t3-elevation/users/alice.toml"), text);
+    }
+
+    #[test]
+    fn passkey_key_files_record_whether_they_sync_and_their_aaguid() {
+        let spki = crate::fixture_server::vector_key("webauthnDevice").spki;
+        let binding = crate::fixture_server::vector_webauthn_binding();
+        let registration = crate::enroll::Registration {
+            synced: true,
+            aaguid: Some("d548826e-79b4-db40-a3d8-11116f7e8349".into()),
+        };
+        let (key_id, bytes) = key_file_bytes(
+            &spki,
+            "Chrome on Mac",
+            &Admission::Webauthn(&binding, &registration),
+            1_793_318_400,
+        );
+        let key = keys::parse_key_file(&format!("{key_id}.json"), &bytes).unwrap();
+        assert!(key.file.synced);
+        assert_eq!(key.file.aaguid, registration.aaguid);
+        // A device-bound passkey's file reads as before: no synced or aaguid keys.
+        let bound = crate::enroll::Registration {
+            synced: false,
+            aaguid: None,
+        };
+        let (_, bytes) = key_file_bytes(
+            &spki,
+            "Chrome on Mac",
+            &Admission::Webauthn(&binding, &bound),
+            1_793_318_400,
+        );
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(
+            !text.contains("synced") && !text.contains("aaguid"),
+            "{text}"
         );
     }
 

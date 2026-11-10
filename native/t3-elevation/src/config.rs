@@ -16,6 +16,9 @@ pub struct UserConfig {
     pub socket: String,
     pub approval_window_seconds: i64,
     pub session_max_uses: u32,
+    /// Passkeys a password manager syncs (backup eligible) may enroll and
+    /// approve. Off by default: anyone with that account could approve.
+    pub allow_synced_passkeys: bool,
 }
 
 /// None for anything the module must not act on: a version other than 1, a
@@ -42,21 +45,35 @@ pub fn parse(text: &str) -> Option<UserConfig> {
             .as_integer()?
             .clamp(0, i64::from(MAX_SESSION_MAX_USES)) as u32,
     };
+    let allow_synced_passkeys = match table.get("allow_synced_passkeys") {
+        None => false,
+        Some(value) => value.as_bool()?,
+    };
     Some(UserConfig {
         enabled,
         socket,
         approval_window_seconds,
         session_max_uses,
+        allow_synced_passkeys,
     })
 }
 
+/// Optional keys appear only when they differ from their defaults, so a
+/// rewrite keeps every setting `parse` read.
 pub fn render(config: &UserConfig) -> String {
-    format!(
+    let mut text = format!(
         "version = 1\nenabled = {}\nsocket = {}\napproval_window_seconds = {}\n",
         config.enabled,
         toml::Value::String(config.socket.clone()),
         config.approval_window_seconds
-    )
+    );
+    if config.session_max_uses != DEFAULT_SESSION_MAX_USES {
+        text.push_str(&format!("session_max_uses = {}\n", config.session_max_uses));
+    }
+    if config.allow_synced_passkeys {
+        text.push_str("allow_synced_passkeys = true\n");
+    }
+    text
 }
 
 /// User names that are safe in a file name and a sudoers `Defaults:` binding.
@@ -108,6 +125,25 @@ mod tests {
     }
 
     #[test]
+    fn synced_passkeys_are_off_unless_the_config_allows_them() {
+        let synced = |line: &str| {
+            parse(&format!(
+                "version = 1\nenabled = true\nsocket = \"/s\"\n{line}\n"
+            ))
+            .map(|config| config.allow_synced_passkeys)
+        };
+        assert_eq!(
+            [
+                synced(""),
+                synced("allow_synced_passkeys = true"),
+                synced("allow_synced_passkeys = false"),
+                synced("allow_synced_passkeys = \"yes\""),
+            ],
+            [Some(false), Some(true), Some(false), None]
+        );
+    }
+
+    #[test]
     fn rejects_other_versions_and_bad_sockets() {
         assert!(parse("version = 2\nenabled = true\nsocket = \"/s\"\n").is_none());
         assert!(parse("version = 1\nenabled = true\nsocket = \"relative\"\n").is_none());
@@ -125,7 +161,14 @@ mod tests {
             socket: "/home/a \"q\"/elevation.sock".into(),
             approval_window_seconds: 100,
             session_max_uses: DEFAULT_SESSION_MAX_USES,
+            allow_synced_passkeys: false,
         };
-        assert_eq!(parse(&render(&config)), Some(config));
+        assert_eq!(parse(&render(&config)), Some(config.clone()));
+        let changed = UserConfig {
+            session_max_uses: 0,
+            allow_synced_passkeys: true,
+            ..config
+        };
+        assert_eq!(parse(&render(&changed)), Some(changed));
     }
 }

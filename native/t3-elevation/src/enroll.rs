@@ -223,24 +223,34 @@ const FLAG_AT: u8 = 0x40;
 
 /// Why a registration can't be enrolled (`elevationWebauthnRegistrationRefusal`
 /// in packages/contracts). With `attestation: "none"` nothing signs this data,
-/// so it only stops an honest mistake early; refusing BE in every assertion
+/// so it only stops an honest mistake early; the BE check in every assertion
 /// (`check_webauthn`) is the guarantee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegistrationRefusal {
-    /// Backup eligible: the passkey can sync to devices nobody enrolled.
+    /// Backup eligible, and the user's config doesn't allow synced passkeys.
     Synced,
     /// Not this site's rpIdHash, no attested credential, or another credential.
     Invalid,
+}
+
+/// What an accepted registration says about the passkey, for its key file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Registration {
+    pub synced: bool,
+    /// Lowercase UUID; None when the browser zeroed it.
+    pub aaguid: Option<String>,
 }
 
 pub fn check_registration(
     authenticator_data: &[u8],
     rp_id: &str,
     credential_id: &[u8],
-) -> Result<(), RegistrationRefusal> {
+    allow_synced: bool,
+) -> Result<Registration, RegistrationRefusal> {
     use sha2::{Digest as _, Sha256};
     // rpIdHash, flags, signCount, then the attested credential: AAGUID and the ID's length.
-    const ID_START: usize = 37 + 16 + 2;
+    const AAGUID_START: usize = 37;
+    const ID_START: usize = AAGUID_START + 16 + 2;
     let data = authenticator_data;
     if data.len() < ID_START || data[..32] != Sha256::digest(rp_id.as_bytes())[..] {
         return Err(RegistrationRefusal::Invalid);
@@ -253,20 +263,39 @@ pub fn check_registration(
     if data.get(ID_START..ID_START + id_len) != Some(credential_id) {
         return Err(RegistrationRefusal::Invalid);
     }
-    if flags & FLAG_BE != 0 {
+    let synced = flags & FLAG_BE != 0;
+    if synced && !allow_synced {
         return Err(RegistrationRefusal::Synced);
     }
-    Ok(())
+    let aaguid = &data[AAGUID_START..AAGUID_START + 16];
+    Ok(Registration {
+        synced,
+        aaguid: aaguid.iter().any(|&b| b != 0).then(|| uuid_text(aaguid)),
+    })
+}
+
+fn uuid_text(bytes: &[u8]) -> String {
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
 }
 
 /// WebAuthn allows credential IDs up to 1023 bytes.
 const MAX_CREDENTIAL_ID_BYTES: usize = 1023;
 
 /// The checks attestation would otherwise make on the label and key, plus a
-/// valid site for a WebAuthn key. Returns the SPKI DER.
+/// valid site for a WebAuthn key. Returns the SPKI DER, and for a passkey what
+/// its registration says. A synced passkey passes only with `allow_synced`.
 pub fn check_unattested(
     enrollment: &UnattestedEnrollment,
-) -> Result<Vec<u8>, crate::attestation::Rejected> {
+    allow_synced: bool,
+) -> Result<(Vec<u8>, Option<Registration>), crate::attestation::Rejected> {
     use crate::attestation::{Rejected, label_ok};
     let reject = |code: &'static str, message: &str| Rejected {
         code,
@@ -281,39 +310,40 @@ pub fn check_unattested(
     let spki = b64::decode(&enrollment.public_key)
         .filter(|spki| crate::keys::parse_p256_spki(spki).is_some())
         .ok_or_else(|| reject("invalid_public_key", "publicKey is not a P-256 SPKI"))?;
-    if let Some(binding) = &enrollment.webauthn {
-        webauthn_site(&binding.rp_id, &binding.origin).ok_or_else(|| {
+    let Some(binding) = &enrollment.webauthn else {
+        return Ok((spki, None));
+    };
+    webauthn_site(&binding.rp_id, &binding.origin).ok_or_else(|| {
+        reject(
+            "invalid_site",
+            "origin must be https://host[:port] or http://localhost[:port], and rpId that host or a parent of it",
+        )
+    })?;
+    let credential_id = b64::decode(&binding.credential_id)
+        .filter(|id| !id.is_empty() && id.len() <= MAX_CREDENTIAL_ID_BYTES)
+        .ok_or_else(|| {
             reject(
-                "invalid_site",
-                "origin must be https://host[:port] or http://localhost[:port], and rpId that host or a parent of it",
+                "invalid_credential_id",
+                "credentialId must be 1-1023 bytes of base64url",
             )
         })?;
-        let credential_id = b64::decode(&binding.credential_id)
-            .filter(|id| !id.is_empty() && id.len() <= MAX_CREDENTIAL_ID_BYTES)
-            .ok_or_else(|| {
-                reject(
-                    "invalid_credential_id",
-                    "credentialId must be 1-1023 bytes of base64url",
-                )
-            })?;
-        let authenticator_data = b64::decode(&binding.authenticator_data).unwrap_or_default();
-        match check_registration(&authenticator_data, &binding.rp_id, &credential_id) {
-            Ok(()) => {}
-            Err(RegistrationRefusal::Synced) => {
-                return Err(reject(
-                    "synced_passkey",
-                    "this passkey syncs to other devices; only a passkey kept on one device can approve",
-                ));
-            }
-            Err(RegistrationRefusal::Invalid) => {
-                return Err(reject(
-                    "invalid_passkey",
-                    "authenticatorData isn't this credential's registration for this rpId",
-                ));
-            }
-        }
+    let authenticator_data = b64::decode(&binding.authenticator_data).unwrap_or_default();
+    match check_registration(
+        &authenticator_data,
+        &binding.rp_id,
+        &credential_id,
+        allow_synced,
+    ) {
+        Ok(registration) => Ok((spki, Some(registration))),
+        Err(RegistrationRefusal::Synced) => Err(reject(
+            "synced_passkey",
+            "this passkey syncs to other devices; turn on allow_synced_passkeys, or save one on this device only",
+        )),
+        Err(RegistrationRefusal::Invalid) => Err(reject(
+            "invalid_passkey",
+            "authenticatorData isn't this credential's registration for this rpId",
+        )),
     }
-    Ok(spki)
 }
 
 /// The first line of `enroll`'s stdin. With `sudo -S`, sudo reads the
@@ -375,6 +405,49 @@ mod tests {
         assert!(!ok("", "https://app.t3.codes"));
         assert!(!ok("app.t3.codes", "https://user@app.t3.codes"));
         assert!(!ok("app.t3.codes", "t3code://app.t3.codes"));
+    }
+
+    fn registration(flags: u8, aaguid: [u8; 16]) -> Vec<u8> {
+        use sha2::{Digest as _, Sha256};
+        let mut data = Sha256::digest(b"app.t3.codes").to_vec();
+        data.push(flags);
+        data.extend_from_slice(&[0; 4]);
+        data.extend_from_slice(&aaguid);
+        data.extend_from_slice(&[0, 2, 7, 9]);
+        data
+    }
+
+    #[test]
+    fn synced_registrations_pass_only_when_allowed_and_name_their_aaguid() {
+        let bitwarden = [
+            0xd5, 0x48, 0x82, 0x6e, 0x79, 0xb4, 0xdb, 0x40, 0xa3, 0xd8, 0x11, 0x11, 0x6f, 0x7e,
+            0x83, 0x49,
+        ];
+        let check = |flags, aaguid, allow| {
+            check_registration(&registration(flags, aaguid), "app.t3.codes", &[7, 9], allow)
+        };
+        assert_eq!(
+            check(0x5d, bitwarden, false),
+            Err(RegistrationRefusal::Synced)
+        );
+        assert_eq!(
+            check(0x5d, bitwarden, true),
+            Ok(Registration {
+                synced: true,
+                aaguid: Some("d548826e-79b4-db40-a3d8-11116f7e8349".into()),
+            })
+        );
+        assert_eq!(
+            check(0x45, [0; 16], false),
+            Ok(Registration {
+                synced: false,
+                aaguid: None,
+            })
+        );
+        assert_eq!(
+            check(0x1d, bitwarden, true),
+            Err(RegistrationRefusal::Invalid)
+        );
     }
 
     #[test]

@@ -85,6 +85,14 @@ pub struct KeyFile {
     /// Present exactly when `alg` is `webauthn-es256`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webauthn: Option<WebauthnBinding>,
+    /// A passkey whose registration was backup eligible: a password manager
+    /// syncs it. It approves only while the user's config allows synced passkeys.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub synced: bool,
+    /// The passkey's authenticator model, as a lowercase UUID; it names the
+    /// password manager. Absent when the browser reported none (all zeros).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaguid: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -104,7 +112,7 @@ pub fn parse_key_file(file_name: &str, bytes: &[u8]) -> Option<EnrolledKey> {
         return None;
     }
     let kind_ok = match (file.alg.as_str(), &file.webauthn) {
-        ("es256", None) => true,
+        ("es256", None) => !file.synced && file.aaguid.is_none(),
         ("webauthn-es256", Some(binding)) => {
             file.attestation_summary.is_none()
                 && crate::enroll::webauthn_site(&binding.rp_id, &binding.origin).is_some()
