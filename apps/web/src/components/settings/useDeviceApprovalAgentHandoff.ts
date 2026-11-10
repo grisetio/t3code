@@ -4,6 +4,7 @@ import {
   deviceApprovalCheckPaths,
   deviceApprovalHandoff,
   pickDeviceApprovalFixProject,
+  type DeviceApprovalHandoffPurpose,
 } from "@t3tools/client-runtime/elevation-fix";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
 import type { ElevationCheck, ElevationStatus, EnvironmentId } from "@t3tools/contracts";
@@ -26,7 +27,7 @@ export function useDeviceApprovalAgentHandoff() {
   const { openScratchProject } = useScratchProject();
 
   return async (input: {
-    readonly purpose: "fix" | "turn_off";
+    readonly purpose: DeviceApprovalHandoffPurpose;
     readonly environmentId: EnvironmentId;
     readonly machine: string;
     readonly status: ElevationStatus;

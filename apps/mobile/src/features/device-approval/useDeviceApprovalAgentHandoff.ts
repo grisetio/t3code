@@ -4,6 +4,7 @@ import {
   deviceApprovalCheckPaths,
   deviceApprovalHandoff,
   pickDeviceApprovalFixProject,
+  type DeviceApprovalHandoffPurpose,
   type DeviceApprovalRepairAttempt,
 } from "@t3tools/client-runtime/elevation-fix";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
@@ -38,7 +39,7 @@ export function useDeviceApprovalAgentHandoff() {
   const openScratch = useAtomCommand(projectEnvironment.openScratch, { reportFailure: false });
 
   return async (input: {
-    readonly purpose: "fix" | "turn_off";
+    readonly purpose: DeviceApprovalHandoffPurpose;
     readonly environmentId: EnvironmentId;
     readonly machine: string;
     readonly status: ElevationStatus;

@@ -15,6 +15,7 @@ import {
   elevationSeriesLine,
   elevationRequestFacts,
   elevationApproverDescription,
+  elevationDeviceBlockedReason,
   elevationEndedLine,
   elevationResolvedSummary,
   elevationRequestFallbackView,
@@ -390,6 +391,33 @@ describe("elevationApproverDescription", () => {
         webauthn: { rpId: "t3.codes", origin: "https://app.t3.codes", credentialId: "AAEC" },
       }),
     ).toBe("Passkey · app.t3.codes");
+  });
+
+  it("says a passkey syncs, naming its password manager when known", () => {
+    const webauthn = { rpId: "t3.codes", origin: "https://app.t3.codes", credentialId: "AAEC" };
+    expect(
+      elevationApproverDescription({
+        kind: "browser",
+        webauthn,
+        synced: true,
+        provider: "Bitwarden",
+      }),
+    ).toBe("Passkey · Bitwarden (synced)");
+    expect(elevationApproverDescription({ kind: "browser", webauthn, synced: true })).toBe(
+      "Passkey (synced) · app.t3.codes",
+    );
+  });
+});
+
+describe("elevationDeviceBlockedReason", () => {
+  it("flags a synced passkey only while the machine refuses them", () => {
+    const synced = { synced: true };
+    expect(elevationDeviceBlockedReason(synced, { allowSyncedPasskeys: false })).toBe(
+      "Can't approve while Allow passkeys from password managers is off",
+    );
+    expect(elevationDeviceBlockedReason(synced, {})).not.toBeNull();
+    expect(elevationDeviceBlockedReason(synced, { allowSyncedPasskeys: true })).toBeNull();
+    expect(elevationDeviceBlockedReason({}, { allowSyncedPasskeys: false })).toBeNull();
   });
 });
 

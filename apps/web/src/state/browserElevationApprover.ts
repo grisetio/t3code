@@ -1,6 +1,9 @@
 import {
   ELEVATION_SIGNATURE_CONTEXT,
   decodeElevationBase64Url,
+  elevationPasskeyProvider,
+  elevationSyncedPasskeyRefusal,
+  elevationWebauthnAaguid,
   elevationWebauthnRegistrationRefusal,
   elevationWebauthnSite,
   type ElevationKeyId,
@@ -92,13 +95,12 @@ export function browserApproverLabel(userAgent: string): string {
  * Where the passkey lives decides the words: Chrome on a Mac calls its device-only store "Your
  * Chrome profile", Windows calls its "Windows Hello".
  */
-function syncedPasskeyMessage(userAgent: string): string {
-  const store = /Windows/.test(userAgent)
-    ? "Windows Hello"
-    : /(Chrome|Chromium)\//.test(userAgent) && /Mac OS X|Macintosh/.test(userAgent)
-      ? "“Your Chrome profile”"
-      : "this device only";
-  return `That passkey syncs to your other devices. Set up again and save it to ${store}.`;
+function deviceOnlyStore(userAgent: string): string {
+  if (/Windows/.test(userAgent)) return "Windows Hello";
+  if (/(Chrome|Chromium)\//.test(userAgent) && /Mac OS X|Macintosh/.test(userAgent)) {
+    return "“Your Chrome profile”";
+  }
+  return "this device";
 }
 
 function readStored(): Partial<Record<EnvironmentId, StoredPasskey>> {
@@ -232,13 +234,18 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
           rpIdHash: await sha256(new TextEncoder().encode(rpId)),
           credentialId,
         });
-        if (refusal === "synced") {
+        if (refusal === "synced" && !account.allowSynced) {
           // Chrome hides a refused Google Password Manager passkey; others may ignore this.
           void PublicKeyCredential.signalUnknownCredential?.({
             rpId,
             credentialId: encode(credentialId),
           }).catch(() => undefined);
-          throw new Error(syncedPasskeyMessage(userAgent));
+          throw new Error(
+            elevationSyncedPasskeyRefusal({
+              provider: elevationPasskeyProvider(elevationWebauthnAaguid(authenticatorData)),
+              saveTo: deviceOnlyStore(userAgent),
+            }),
+          );
         }
         if (refusal === "invalid") throw new Error("This browser made a passkey T3 can't use.");
         const spki = new Uint8Array(publicKey);

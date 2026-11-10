@@ -1,6 +1,7 @@
 import {
   decodeElevationBase64Url,
   decodeElevationPayload,
+  ELEVATION_SYNCED_PASSKEYS_SETTING,
   escapeElevationDisplayText,
   parseElevationEnrollCommand,
   type ElevationApproverKind,
@@ -71,9 +72,12 @@ function answeredOn(
 export const elevationDeviceKind = (device: Pick<ElevationDevice, "kind">): ElevationApproverKind =>
   device.kind ?? "phone";
 
-/** What an approver row says it is, before its dates: "Phone", "Touch ID", "Passkey · app.t3.codes". */
+/**
+ * What an approver row says it is, before its dates: "Phone", "Touch ID", "Passkey ·
+ * app.t3.codes", or for a synced passkey "Passkey · Bitwarden (synced)".
+ */
 export function elevationApproverDescription(
-  device: Pick<ElevationDevice, "kind" | "webauthn">,
+  device: Pick<ElevationDevice, "kind" | "webauthn" | "synced" | "provider">,
 ): string {
   switch (elevationDeviceKind(device)) {
     case "phone":
@@ -81,11 +85,29 @@ export function elevationApproverDescription(
     case "mac":
       return "Touch ID";
     case "browser": {
+      if (device.synced === true && device.provider !== undefined) {
+        return `Passkey · ${escapeElevationDisplayText(device.provider)} (synced)`;
+      }
+      const passkey = device.synced === true ? "Passkey (synced)" : "Passkey";
       const host = device.webauthn?.origin.replace(/^https?:\/\//, "");
-      return host === undefined ? "Passkey" : `Passkey · ${escapeElevationDisplayText(host)}`;
+      return host === undefined ? passkey : `${passkey} · ${escapeElevationDisplayText(host)}`;
     }
   }
 }
+
+/** Why a listed device can't approve now: a synced passkey while the machine refuses them. */
+export function elevationDeviceBlockedReason(
+  device: Pick<ElevationDevice, "synced">,
+  status: Pick<ElevationStatus, "allowSyncedPasskeys">,
+): string | null {
+  return device.synced === true && status.allowSyncedPasskeys !== true
+    ? `Can't approve while ${ELEVATION_SYNCED_PASSKEYS_SETTING} is off`
+    : null;
+}
+
+/** What turning the setting on risks, said before it is turned on. */
+export const ELEVATION_SYNCED_PASSKEYS_WARNING =
+  "Anyone with access to your password manager account could approve agents' sudo here. Some password managers count an unlocked vault as verification, so an approval may be one click without a fingerprint; turn on your manager's re-prompt for this passkey to be asked every time.";
 
 /**
  * A new approver's label: the model name ("MacBook Pro", "Chrome on Mac"), with the computer's

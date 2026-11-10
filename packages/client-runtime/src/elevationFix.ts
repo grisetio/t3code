@@ -208,6 +208,34 @@ export function deviceApprovalTurnOff(
     : "agent";
 }
 
+/**
+ * Who changes "Allow passkeys from password managers": T3's helper in a config T3 installed, an
+ * agent where the config comes from elsewhere, such as Nix, which would put it back. Null when
+ * the server can't say (older servers) or nothing is installed.
+ */
+export function deviceApprovalSyncedPasskeysChange(
+  status: Pick<
+    ElevationStatus,
+    | "ownsApprovals"
+    | "devices"
+    | "setupOutsideT3"
+    | "helperInstalled"
+    | "installedByT3"
+    | "allowSyncedPasskeys"
+  >,
+): "helper" | "agent" | null {
+  if (status.allowSyncedPasskeys === undefined) return null;
+  const turnOff = deviceApprovalTurnOff(status);
+  return turnOff === null ? null : turnOff === "uninstall" ? "helper" : "agent";
+}
+
+/** What an agent is asked to do: repair, turn off, or change the synced passkey setting. */
+export type DeviceApprovalHandoffPurpose =
+  | "fix"
+  | "turn_off"
+  | "allow_synced_passkeys"
+  | "refuse_synced_passkeys";
+
 /** The helper's prefix for a planned change it refuses to make. */
 const BLOCKED_PREFIX = "can't change: ";
 
@@ -247,12 +275,40 @@ export interface DeviceApprovalHandoff {
   readonly diagnosis: string;
 }
 
+function handoffDraft(input: {
+  readonly purpose: DeviceApprovalHandoffPurpose;
+  readonly machine: string;
+  readonly status: { readonly user?: string };
+  readonly repair: DeviceApprovalRepairAttempt | null;
+  readonly projectOwnsConfig: boolean;
+}): string {
+  const configFile = `/etc/t3-elevation/users/${input.status.user ?? "<user>"}.toml`;
+  const elsewhere =
+    "The file comes from config outside T3; change it there rather than editing the machine directly.";
+  switch (input.purpose) {
+    case "turn_off":
+      return `Turn off device approval on ${input.machine}, so agents' sudo asks for the password again. Its setup comes from config outside T3; remove it there rather than editing the machine directly.`;
+    case "allow_synced_passkeys":
+      return `Set allow_synced_passkeys = true in ${configFile} on ${input.machine}, so passkeys saved in a password manager can approve agents' sudo. ${elsewhere}`;
+    case "refuse_synced_passkeys":
+      return `Remove allow_synced_passkeys from ${configFile} on ${input.machine}, or set it to false, so passkeys a password manager syncs stop approving agents' sudo. ${elsewhere}`;
+    case "fix":
+      return `Device approval on ${input.machine} needs fixing: agents' sudo asks for the password again. ${
+        input.repair
+          ? "T3 tried to repair it, but the checks still fail."
+          : input.projectOwnsConfig
+            ? "Part of the setup comes from this project, so fix it in the config rather than editing the machine directly."
+            : "T3 can't repair this part safely on its own."
+      } Find the cause and fix it.`;
+  }
+}
+
 /**
  * The unsent message for the agent that fixes or turns off device approval, and the diagnosis it
  * attaches. Check messages and paths come from the server and stay plain data in the text.
  */
 export function deviceApprovalHandoff(input: {
-  readonly purpose: "fix" | "turn_off";
+  readonly purpose: DeviceApprovalHandoffPurpose;
   readonly machine: string;
   readonly status: Pick<StatusFields, "checks" | "devices" | "setupOutsideT3"> & {
     readonly user?: string;
@@ -263,16 +319,7 @@ export function deviceApprovalHandoff(input: {
   readonly projectOwnsConfig: boolean;
 }): DeviceApprovalHandoff {
   const { status } = input;
-  const draft =
-    input.purpose === "turn_off"
-      ? `Turn off device approval on ${input.machine}, so agents' sudo asks for the password again. Its setup comes from config outside T3; remove it there rather than editing the machine directly.`
-      : `Device approval on ${input.machine} needs fixing: agents' sudo asks for the password again. ${
-          input.repair
-            ? "T3 tried to repair it, but the checks still fail."
-            : input.projectOwnsConfig
-              ? "Part of the setup comes from this project, so fix it in the config rather than editing the machine directly."
-              : "T3 can't repair this part safely on its own."
-        } Find the cause and fix it.`;
+  const draft = handoffDraft(input);
   const lines = [
     "Device approval diagnosis",
     "",

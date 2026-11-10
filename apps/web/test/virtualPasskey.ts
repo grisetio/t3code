@@ -33,11 +33,12 @@ export async function virtualAuthenticator(
 }
 
 /** Sets this browser up on `environmentId` as the machine would accept it; returns the key. */
-export async function enrollThisBrowser(environmentId: EnvironmentId) {
+export async function enrollThisBrowser(environmentId: EnvironmentId, allowSynced = false) {
   const approver = browserElevationApproverSource.get(environmentId);
   if (approver === null) throw new Error("No browser approver here.");
   const created = await approver.createKey(new AbortController().signal, {
     name: "kgriset on oracle",
+    allowSynced,
   });
   if (created === null) throw new Error("Passkey creation was cancelled.");
   const keyId = browserElevationApproverSource.get(environmentId)?.keyId;

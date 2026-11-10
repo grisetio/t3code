@@ -1,9 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_CANT_APPROVE_HERE,
+  ELEVATION_SYNCED_PASSKEYS_WARNING,
   elevationApproverDescription,
+  elevationDeviceBlockedReason,
   elevationDeviceKind,
   elevationFailureMessage,
+  elevationSudoApproval,
   type ElevationPasswordWords,
 } from "@t3tools/client-runtime/elevation";
 import {
@@ -11,6 +14,7 @@ import {
   deviceApprovalFailingChecks,
   deviceApprovalFixSheetText,
   deviceApprovalState,
+  deviceApprovalSyncedPasskeysChange,
   deviceApprovalTurnOff,
   planDeviceApprovalFix,
   type DeviceApprovalFixPlan,
@@ -27,6 +31,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  ELEVATION_SYNCED_PASSKEYS_SETTING,
   resolveEnvironmentMachineKind,
   type ElevationApproverKind,
   type ElevationCheck,
@@ -50,6 +55,7 @@ import { ListRowLayout } from "../../components/ui/ListRowLayout";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { Sheet } from "../../components/ui/Sheet";
+import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { elevation } from "../../state/elevation";
@@ -253,6 +259,7 @@ function DeviceApprovalGroup(props: {
   const [phase, setPhase] = useState<Phase>("idle");
   const [keySheet, setKeySheet] = useState<KeySheet | null>(null);
   const [turningOff, setTurningOff] = useState(false);
+  const [policyPassword, setPolicyPassword] = useState<boolean | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -264,6 +271,8 @@ function DeviceApprovalGroup(props: {
   const canEnroll = useAtomValue(elevation.enroll.permissionAtom(environmentId));
   const canRevoke = useAtomValue(elevation.revoke.permissionAtom(environmentId));
   const canUninstall = useAtomValue(elevation.uninstall.permissionAtom(environmentId));
+  const setPolicy = useAtomCommand(elevation.setPolicy, "change the synced passkey setting");
+  const canSetPolicy = useAtomValue(elevation.setPolicy.permissionAtom(environmentId));
   const rekeyRequested = useAtomValue(deviceApprovalRekeyAtom) === environmentId;
   const signerPresent = deviceApprovalSigner.isPresent();
   const words = useElevationPasswordWords(environmentId, machine);
@@ -279,6 +288,7 @@ function DeviceApprovalGroup(props: {
     canInstall &&
     canEnroll;
   const turnOff = deviceApprovalTurnOff(status);
+  const syncedChange = deviceApprovalSyncedPasskeysChange(status);
 
   const forgetThisPhone = async () => {
     if (phoneRecord !== null) await discardPhoneKey(phoneRecord.alias);
@@ -375,6 +385,46 @@ function DeviceApprovalGroup(props: {
               repair: null,
             }),
         });
+
+  /** An enrolled device approves the change; with none, the machine's password does. */
+  const changeSyncedPasskeys = (allow: boolean) => {
+    if (syncedChange === "agent") {
+      return Dialog.confirm({
+        title: allow ? `${ELEVATION_SYNCED_PASSKEYS_SETTING}?` : "Stop allowing them?",
+        message: `This setting on ${machine} comes from config outside T3, so an agent changes it there.`,
+        confirmText: "Ask an agent",
+        onConfirm: () =>
+          void handoff({
+            purpose: allow ? "allow_synced_passkeys" : "refuse_synced_passkeys",
+            environmentId,
+            machine,
+            status,
+            failing: [],
+            repair: null,
+          }),
+      });
+    }
+    const run = () => {
+      if (elevationSudoApproval(status).passwordRequired) return setPolicyPassword(allow);
+      void (async () => {
+        setBusy("policy");
+        setError(null);
+        const result = await setPolicy({
+          environmentId,
+          input: { allowSyncedPasskeys: allow },
+        }).finally(() => setBusy(null));
+        if (result._tag !== "Success") setError(failureText(result));
+      })();
+    };
+    if (!allow) return run();
+    Dialog.confirm({
+      title: `${ELEVATION_SYNCED_PASSKEYS_SETTING}?`,
+      message: ELEVATION_SYNCED_PASSKEYS_WARNING,
+      confirmText: "Allow",
+      destructive: true,
+      onConfirm: run,
+    });
+  };
 
   const revokeOther = (keyId: string, label: string) =>
     Dialog.confirm({
@@ -491,6 +541,20 @@ function DeviceApprovalGroup(props: {
                 ))}
               </View>
             ) : null}
+            {detailsOpen && syncedChange !== null ? (
+              <ListRowLayout
+                icon="cloud"
+                label={ELEVATION_SYNCED_PASSKEYS_SETTING}
+                accessory={
+                  <ThemedSwitch
+                    accessibilityLabel={ELEVATION_SYNCED_PASSKEYS_SETTING}
+                    value={status.allowSyncedPasskeys === true}
+                    disabled={busy !== null || (syncedChange === "helper" && !canSetPolicy)}
+                    onValueChange={changeSyncedPasskeys}
+                  />
+                }
+              />
+            ) : null}
             {turnOff !== null ? (
               <ListActionRow
                 icon="slash.circle"
@@ -545,7 +609,7 @@ function DeviceApprovalGroup(props: {
                 key={device.keyId}
                 icon={APPROVER_SYMBOLS[elevationDeviceKind(device)]}
                 label={device.label}
-                description={approverRowDescription(device, now)}
+                description={approverRowDescription(device, status, now)}
                 disabled={!canRevoke || busy !== null}
                 loading={busy === device.keyId}
                 onPress={() => revokeOther(device.keyId, device.label)}
@@ -555,7 +619,7 @@ function DeviceApprovalGroup(props: {
                 key={device.keyId}
                 icon={APPROVER_SYMBOLS[elevationDeviceKind(device)]}
                 label={device.label}
-                description={approverRowDescription(device, now)}
+                description={approverRowDescription(device, status, now)}
               />
             ),
           )}
@@ -595,6 +659,15 @@ function DeviceApprovalGroup(props: {
           error={removal.error}
           onClose={removal.dismissPassword}
           onSubmit={removal.removeWithPassword}
+        />
+      ) : null}
+      {policyPassword !== null ? (
+        <SyncedPasskeysSheet
+          environmentId={environmentId}
+          machine={machine}
+          words={words}
+          allow={policyPassword}
+          onClose={() => setPolicyPassword(null)}
         />
       ) : null}
       {turningOff ? (
@@ -784,7 +857,9 @@ const APPROVER_SYMBOLS = {
 } as const satisfies Record<ElevationApproverKind, AppSymbolName>;
 
 /** A phone row reads as before; a Mac or browser says what it is first. */
-function approverRowDescription(device: ElevationDevice, now: number) {
+function approverRowDescription(device: ElevationDevice, status: ElevationStatus, now: number) {
+  const blocked = elevationDeviceBlockedReason(device, status);
+  if (blocked !== null) return blocked;
   const use = formatDeviceUse(device, now);
   return elevationDeviceKind(device) === "phone"
     ? use
@@ -955,6 +1030,57 @@ function RemovePasswordSheet(props: {
           props.onSubmit(password);
           setPassword("");
         }}
+      />
+    </PasswordSheet>
+  );
+}
+
+/** Changes the synced passkey setting with the machine's password, when no device can approve. */
+function SyncedPasskeysSheet(props: {
+  readonly environmentId: EnvironmentId;
+  readonly machine: string;
+  readonly words: ElevationPasswordWords;
+  readonly allow: boolean;
+  readonly onClose: () => void;
+}) {
+  const setPolicy = useAtomCommand(elevation.setPolicy, "change the synced passkey setting");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    const result = await setPolicy({
+      environmentId: props.environmentId,
+      input: { allowSyncedPasskeys: props.allow, password },
+    }).finally(() => {
+      setBusy(false);
+      setPassword("");
+    });
+    if (result._tag === "Success") props.onClose();
+    else setError(failureText(result));
+  };
+
+  return (
+    <PasswordSheet title={ELEVATION_SYNCED_PASSKEYS_SETTING} onClose={props.onClose}>
+      <Text className="text-sm text-foreground-muted">
+        No device is set up to approve this, so {props.machine} needs your{" "}
+        {props.words.shortPassword}.
+      </Text>
+      <PasswordField words={props.words} value={password} onChange={setPassword} editable={!busy} />
+      {error !== null ? (
+        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+          {error}
+        </Text>
+      ) : null}
+      <Button
+        label={props.allow ? "Allow" : "Turn off"}
+        tone="destructive"
+        fullWidth
+        loading={busy}
+        disabled={busy || password === ""}
+        onPress={() => void submit()}
       />
     </PasswordSheet>
   );
