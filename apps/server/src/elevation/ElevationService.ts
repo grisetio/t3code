@@ -226,22 +226,24 @@ const enrollmentObject = Schema.encodeSync(Schema.fromJsonString(ElevationEnroll
  * A synced passkey is refused before anything asks for an approval it would only waste; the
  * helper refuses it too (`check_registration`).
  */
-const refuseUnenrollablePasskey = (device: ElevationEnrollmentDevice) => {
-  if (!isElevationUnattestedDevice(device) || device.webauthn === undefined) return Effect.void;
-  const { webauthn } = device;
-  const authenticatorData = decodeElevationBase64Url(webauthn.authenticatorData);
-  const credentialId = decodeElevationBase64Url(webauthn.credentialId);
-  const refusal =
-    authenticatorData === null || credentialId === null
-      ? "invalid"
-      : elevationWebauthnRegistrationRefusal({
-          authenticatorData,
-          rpIdHash: NodeCrypto.createHash("sha256").update(webauthn.rpId).digest(),
-          credentialId,
-        });
-  if (refusal === null) return Effect.void;
-  return fail(refusal === "synced" ? "synced_passkey" : "invalid_passkey");
-};
+const refuseUnenrollablePasskey = Effect.fn("ElevationService.refuseUnenrollablePasskey")(
+  function* (device: ElevationEnrollmentDevice) {
+    if (!isElevationUnattestedDevice(device) || device.webauthn === undefined) return;
+    const { webauthn } = device;
+    const authenticatorData = decodeElevationBase64Url(webauthn.authenticatorData);
+    const credentialId = decodeElevationBase64Url(webauthn.credentialId);
+    const refusal =
+      authenticatorData === null || credentialId === null
+        ? "invalid"
+        : elevationWebauthnRegistrationRefusal({
+            authenticatorData,
+            rpIdHash: NodeCrypto.createHash("sha256").update(webauthn.rpId).digest(),
+            credentialId,
+          });
+    if (refusal === null) return;
+    return yield* fail(refusal === "synced" ? "synced_passkey" : "invalid_passkey");
+  },
+);
 
 export class ElevationService extends Context.Service<
   ElevationService,
