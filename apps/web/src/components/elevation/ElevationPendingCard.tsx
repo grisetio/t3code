@@ -263,11 +263,13 @@ function ElevationCardActions(props: {
       if (!controller.signal.aborted) {
         respond.setError(error instanceof Error ? error.message : "Could not approve. Try again.");
       }
-      return;
-    } finally {
       prompt.current = null;
       setSigning(false);
+      return;
     }
+    // Not in a `finally`: React Compiler skips a component that has one.
+    prompt.current = null;
+    setSigning(false);
     if (controller.signal.aborted) return;
     const outcome = await respond.run(
       environmentId,

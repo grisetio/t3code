@@ -194,10 +194,11 @@ export function ThisDeviceApproval(props: {
     } catch (cause) {
       setError(message(cause, "This device couldn't make a key."));
       setStep(IDLE);
-      return;
-    } finally {
       prompt.current = null;
+      return;
     }
+    // Not in a `finally`: React Compiler skips a component that has one.
+    prompt.current = null;
     const publicKey = created === null ? null : decodeElevationBase64Url(created.publicKey);
     if (created === null || publicKey === null) {
       setStep(IDLE);
@@ -223,28 +224,29 @@ export function ThisDeviceApproval(props: {
     }
   });
 
+  const addKey = async (key: NewKey, password: string | null) => {
+    if (!installed) {
+      const result = await install({ environmentId, input: { password, device: key.device } });
+      if (result._tag !== "Success") return failed(result);
+      // The key is this device's once the command runs.
+      if (result.value.type === "terminal_command") {
+        setStep({ kind: "terminal", command: result.value.command });
+      } else {
+        setStep({ kind: "added", first: true });
+      }
+      return;
+    }
+    if (password === null) return;
+    const result = await enroll({ environmentId, input: { device: key.device, password } });
+    if (result._tag === "Success") setStep({ kind: "added", first: others.length === 0 });
+    else failed(result);
+  };
+
   const submitPassword = async (key: NewKey, password: string | null) => {
     setBusy(true);
     setError(null);
-    try {
-      if (!installed) {
-        const result = await install({ environmentId, input: { password, device: key.device } });
-        if (result._tag !== "Success") return failed(result);
-        // The key is this device's once the command runs.
-        if (result.value.type === "terminal_command") {
-          setStep({ kind: "terminal", command: result.value.command });
-        } else {
-          setStep({ kind: "added", first: true });
-        }
-        return;
-      }
-      if (password === null) return;
-      const result = await enroll({ environmentId, input: { device: key.device, password } });
-      if (result._tag === "Success") setStep({ kind: "added", first: others.length === 0 });
-      else failed(result);
-    } finally {
-      setBusy(false);
-    }
+    // Promise `finally`, not the statement: React Compiler skips a component that has one.
+    await addKey(key, password).finally(() => setBusy(false));
   };
 
   const remove = async () => {
@@ -291,9 +293,8 @@ export function ThisDeviceApproval(props: {
       } catch (cause) {
         setError(message(cause, "This device couldn't sign."));
         declined.current = true;
-      } finally {
-        prompt.current = null;
       }
+      prompt.current = null;
       if (controller.signal.aborted) return;
       // A deny ends the helper's sudo at once, so the revoke call returns.
       await respond({
