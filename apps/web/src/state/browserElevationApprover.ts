@@ -30,6 +30,8 @@ interface StoredPasskey {
 
 const INSECURE_REASON =
   "Passkeys need a secure address. Open T3 over https, such as through Tailscale or T3 Connect, to approve here.";
+const IP_REASON =
+  "Passkeys don't work at an IP address. Open T3 at a name over https, such as through Tailscale or T3 Connect, to approve here.";
 const SAFARI_REASON =
   "Safari only saves passkeys that sync to your other devices, so it can't approve.";
 const NO_PASSKEYS_REASON = "This browser can't make passkeys, so it can't approve.";
@@ -45,6 +47,11 @@ const isSafari = (userAgent: string) =>
   /Safari\//.test(userAgent) &&
   !/(Chrome|Chromium|CriOS|Edg|EdgiOS|OPR|FxiOS|Firefox)\//.test(userAgent);
 
+const isIpAddress = (hostname: string) =>
+  /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith("[");
+
+const isLoopback = (hostname: string) => hostname.startsWith("127.") || hostname === "[::1]";
+
 /** Why this page can't hold a passkey that approves, in Settings' words; null when it can. */
 export function browserApproverUnavailableReason(input: {
   readonly hostname: string;
@@ -53,7 +60,14 @@ export function browserApproverUnavailableReason(input: {
   readonly webauthn: boolean;
   readonly userAgent: string;
 }): string | null {
-  // A LAN IP is no valid rpId, and the desktop's t3code:// origin can't call WebAuthn at all.
+  // An IP is never an rpId, even over https or at 127.0.0.1, which is a secure context.
+  if (isIpAddress(input.hostname)) {
+    if (!isLoopback(input.hostname)) return IP_REASON;
+    const localhost = new URL(input.origin);
+    localhost.hostname = "localhost";
+    return `Passkeys don't work at an IP address. Open T3 at ${localhost.origin} to approve here.`;
+  }
+  // The desktop's t3code:// origin can't call WebAuthn at all.
   if (!input.secureContext || elevationWebauthnSite(input.hostname, input.origin) === null) {
     return INSECURE_REASON;
   }
