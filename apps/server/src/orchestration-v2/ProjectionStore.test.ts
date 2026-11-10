@@ -1791,8 +1791,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       // A row from a newer server with an item type this one lacks must not fail the window.
       yield* sql`
         UPDATE orchestration_v2_projection_turn_items
-        SET type = 'elevation_request', status = 'waiting',
-          payload_json = json_set(payload_json, '$.type', 'elevation_request', '$.status', 'waiting')
+        SET type = 'future_item', status = 'waiting',
+          payload_json = json_set(payload_json, '$.type', 'future_item', '$.status', 'waiting')
         WHERE thread_id = ${threadId} AND ordinal = 999
       `;
       const unknownItem = (yield* humanWindow()).projection.turnItems.find(

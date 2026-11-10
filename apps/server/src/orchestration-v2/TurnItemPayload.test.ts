@@ -4,7 +4,7 @@ import * as Exit from "effect/Exit";
 
 import { decodeTurnItemPayload } from "./TurnItemPayload.ts";
 
-// Shape of a row written by a server with device-approval elevation requests.
+// A row as written by a server with device approval; this branch knows the type.
 const elevationRequest = {
   id: "elevation:c992f488-d1ed-4c24-9684-689affe32708",
   threadId: "thread:unknown-turn-items",
@@ -26,18 +26,25 @@ const elevationRequest = {
   argv: ["sudo", "/bin/ls", "/var/root"],
   runAs: "root",
   elevationStatus: "approved",
-  resolvedBy: { deviceLabel: "phone", keyId: "key" },
+  cwd: "/repo",
+  host: "mac",
+  warnings: [],
+  explanation: null,
+  payload: null,
+  resolvedBy: { deviceLabel: "phone" },
 };
+// The same row from a server with an item type this one lacks.
+const futureItem = { ...elevationRequest, type: "future_item" };
 
 it.effect("reads an unknown turn item type as a notice in its place", () =>
   Effect.gen(function* () {
-    const item = yield* decodeTurnItemPayload(JSON.stringify(elevationRequest));
+    const item = yield* decodeTurnItemPayload(JSON.stringify(futureItem));
     assert.strictEqual(item.type, "system_notice");
-    assert.strictEqual(String(item.id), elevationRequest.id);
-    assert.strictEqual(item.ordinal, elevationRequest.ordinal);
-    assert.strictEqual(String(item.runId), elevationRequest.runId);
+    assert.strictEqual(String(item.id), futureItem.id);
+    assert.strictEqual(item.ordinal, futureItem.ordinal);
+    assert.strictEqual(String(item.runId), futureItem.runId);
     assert.strictEqual(item.status, "completed");
-    assert.include(item.type === "system_notice" ? item.message : "", "elevation_request");
+    assert.include(item.type === "system_notice" ? item.message : "", "future_item");
     assert.notProperty(item, "argv");
   }),
 );
@@ -45,11 +52,11 @@ it.effect("reads an unknown turn item type as a notice in its place", () =>
 it.effect("settles an unknown turn item that was still in progress", () =>
   Effect.gen(function* () {
     for (const status of ["idle", "pending", "running", "waiting"]) {
-      const item = yield* decodeTurnItemPayload(JSON.stringify({ ...elevationRequest, status }));
+      const item = yield* decodeTurnItemPayload(JSON.stringify({ ...futureItem, status }));
       assert.strictEqual(item.status, "cancelled");
     }
     const failed = yield* decodeTurnItemPayload(
-      JSON.stringify({ ...elevationRequest, status: "failed" }),
+      JSON.stringify({ ...futureItem, status: "failed" }),
     );
     assert.strictEqual(failed.status, "failed");
   }),
@@ -63,5 +70,15 @@ it.effect("still rejects a malformed row of a known type", () =>
     assert.isTrue(Exit.isFailure(exit));
     const invalid = yield* Effect.exit(decodeTurnItemPayload("{not json"));
     assert.isTrue(Exit.isFailure(invalid));
+  }),
+);
+
+it.effect("decodes elevation requests strictly, never as notices", () =>
+  Effect.gen(function* () {
+    const item = yield* decodeTurnItemPayload(JSON.stringify(elevationRequest));
+    assert.strictEqual(item.type, "elevation_request");
+    const { cwd: _cwd, ...withoutCwd } = elevationRequest;
+    const exit = yield* Effect.exit(decodeTurnItemPayload(JSON.stringify(withoutCwd)));
+    assert.isTrue(Exit.isFailure(exit));
   }),
 );
