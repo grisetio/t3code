@@ -1534,11 +1534,14 @@ pub enum PolicyError {
     NotInstalled,
     /// T3 didn't write the config, so whatever did (Nix, a person) owns it.
     ManagedElsewhere,
+    /// T3 wrote the config, but its bytes changed since: someone edited it.
+    Edited,
     Io(String),
 }
 
-/// Sets `allow_synced_passkeys` in a config T3 installed, keeping its other
-/// settings, and records the new bytes so uninstall still removes the file.
+/// Sets `allow_synced_passkeys` in a config T3 installed, changing only that
+/// line, and records the new bytes so uninstall still removes the file. A
+/// config whose bytes differ from what T3 last wrote is someone else's now.
 /// Returns whether anything changed.
 pub fn set_allow_synced_passkeys(
     layout: &Layout,
@@ -1556,20 +1559,21 @@ pub fn set_allow_synced_passkeys(
     else {
         return Err(PolicyError::ManagedElsewhere);
     };
-    let mut config = read_config(layout, user).ok_or(PolicyError::NotInstalled)?;
+    let path = layout.path(&relative);
+    rootsafe::check_path(&path, &layout.policy, rootsafe::Kind::File)
+        .map_err(|_| PolicyError::NotInstalled)?;
+    let bytes = rootsafe::read_limited(&path, 64 * 1024).map_err(|_| PolicyError::NotInstalled)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| PolicyError::NotInstalled)?;
+    let config = config::parse(text).ok_or(PolicyError::NotInstalled)?;
     if config.allow_synced_passkeys == allow {
         return Ok(false);
     }
-    config.allow_synced_passkeys = allow;
-    let text = config::render(&config);
-    write_atomic(
-        layout,
-        &layout.path(&relative),
-        text.as_bytes(),
-        0o644,
-        None,
-    )
-    .map_err(|error| PolicyError::Io(error.to_string()))?;
+    if change.sha256_after.as_deref() != Some(sha256_hex(&bytes).as_str()) {
+        return Err(PolicyError::Edited);
+    }
+    let text = config::with_allow_synced_passkeys(text, allow).ok_or(PolicyError::Edited)?;
+    write_atomic(layout, &path, text.as_bytes(), 0o644, None)
+        .map_err(|error| PolicyError::Io(error.to_string()))?;
     change.sha256_after = Some(sha256_hex(text.as_bytes()));
     write_manifest(layout, &manifest).map_err(PolicyError::Io)?;
     Ok(true)
@@ -2059,6 +2063,59 @@ mod tests {
         let reverted = uninstall(&root.layout, "alice").unwrap();
         assert_eq!(reverted.kept, vec![]);
         assert!(read_config(&root.layout, "alice").is_none());
+    }
+
+    #[test]
+    fn the_synced_passkey_policy_leaves_a_config_edited_since_t3_wrote_it() {
+        let root = Root::new(
+            Platform::Linux,
+            &[("/etc/pam.d/sudo", UBUNTU_SUDO), ("/etc/sudoers", SUDOERS)],
+        );
+        root.install();
+        let edited = "version = 1\nenabled = true\nsocket = \"/home/alice/.t3/elevation.sock\"\nsession_max_uses = 0\n";
+        test_fs::write(
+            &root.layout.path("/etc/t3-elevation/users/alice.toml"),
+            edited,
+        );
+        assert_eq!(
+            set_allow_synced_passkeys(&root.layout, "alice", true),
+            Err(PolicyError::Edited)
+        );
+        assert_eq!(root.read("/etc/t3-elevation/users/alice.toml"), edited);
+    }
+
+    #[test]
+    fn the_synced_passkey_policy_keeps_every_other_line() {
+        let root = Root::new(
+            Platform::Linux,
+            &[("/etc/pam.d/sudo", UBUNTU_SUDO), ("/etc/sudoers", SUDOERS)],
+        );
+        root.install();
+        let path = root.layout.path("/etc/t3-elevation/users/alice.toml");
+        let mut manifest = read_manifest(&root.layout).unwrap();
+        let written = "# kept\nversion = 1\nenabled = true\nsocket = \"/home/alice/.t3/elevation.sock\"\nfuture_setting = \"x\"\n";
+        test_fs::write(&path, written);
+        for change in &mut manifest.changes {
+            if change.path == "/etc/t3-elevation/users/alice.toml" {
+                change.sha256_after = Some(sha256_hex(written.as_bytes()));
+            }
+        }
+        write_manifest(&root.layout, &manifest).unwrap();
+
+        assert_eq!(
+            set_allow_synced_passkeys(&root.layout, "alice", true),
+            Ok(true)
+        );
+        let on = format!("{written}allow_synced_passkeys = true\n");
+        assert_eq!(root.read("/etc/t3-elevation/users/alice.toml"), on);
+        assert_eq!(
+            set_allow_synced_passkeys(&root.layout, "alice", false),
+            Ok(true)
+        );
+        assert_eq!(
+            root.read("/etc/t3-elevation/users/alice.toml"),
+            format!("{written}allow_synced_passkeys = false\n")
+        );
     }
 
     #[test]

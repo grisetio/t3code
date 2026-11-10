@@ -475,6 +475,12 @@ fn policy(args: &[String]) -> Outcome {
                     "users/{user}.toml wasn't written by T3; set allow_synced_passkeys where it is managed"
                 ),
             ),
+            PolicyError::Edited => fail(
+                "edited",
+                format!(
+                    "users/{user}.toml changed since T3 wrote it; set allow_synced_passkeys in it by hand"
+                ),
+            ),
             PolicyError::Io(message) => fail("io", message),
         })?;
     Ok(json!({ "ok": true, "allowSyncedPasskeys": allow, "changed": changed }))
