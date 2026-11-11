@@ -41,6 +41,7 @@ import {
   withMetrics,
 } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as SensitiveAccountPolicy from "../provider/SensitiveAccountPolicy.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
@@ -301,11 +302,13 @@ export const layerWithOptions = (
   | ProjectionStore.ProjectionStoreV2
   | ProviderEventIngestor.ProviderEventIngestorV2
   | ProviderAdapterRegistry.ProviderAdapterRegistryV2
+  | SensitiveAccountPolicy.SensitiveAccountPolicy
 > =>
   Layer.effect(
     ProviderSessionManagerV2,
     Effect.gen(function* () {
       const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
+      const sensitiveAccounts = yield* SensitiveAccountPolicy.SensitiveAccountPolicy;
       const fileSystem = yield* FileSystem.FileSystem;
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
@@ -2046,6 +2049,25 @@ export const layerWithOptions = (
               }
               const key = sessionKey(input.providerSessionId);
               const existing = (yield* Ref.get(sessions)).get(key);
+              const instanceId = existing?.runtime.instanceId ?? input.modelSelection.instanceId;
+              const refusal = yield* sensitiveAccounts.lockForThread(input.threadId).pipe(
+                Effect.map((lock) => SensitiveAccountPolicy.lockRefusal(lock, instanceId)),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderSessionOpenError({
+                      instanceId,
+                      providerSessionId: input.providerSessionId,
+                      cause,
+                    }),
+                ),
+              );
+              if (refusal !== null) {
+                return yield* new ProviderSessionOpenError({
+                  instanceId,
+                  providerSessionId: input.providerSessionId,
+                  cause: refusal,
+                });
+              }
               if (existing !== undefined) {
                 const attached = existing.attachedThreadIds.has(input.threadId);
                 if (!attached && !existing.supportsMultipleProviderThreads) {

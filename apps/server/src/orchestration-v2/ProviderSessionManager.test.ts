@@ -33,6 +33,7 @@ import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
 
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as SensitiveAccountPolicy from "../provider/SensitiveAccountPolicy.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
@@ -490,6 +491,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly sensitiveLock?: ReadonlyArray<ProviderInstanceId>;
 }) {
   const layerConfiguredEventSink =
     input.flakyReleaseWrites !== undefined
@@ -569,6 +571,9 @@ function layerTest(input: {
           layerProviderEventIngestorTest,
           layerConfiguredMcpRegistry,
           layerTestStores,
+          Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
+            lockForThread: () => Effect.succeed(new Set(input.sensitiveLock ?? [])),
+          }),
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
         ),
@@ -912,6 +917,36 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
         }),
       ),
     );
+  }),
+);
+
+it.effect.each([
+  { lock: [], opens: true },
+  { lock: [modelSelection.instanceId], opens: true },
+  { lock: [ProviderInstanceId.make("claude_work")], opens: false },
+])("ProviderSessionManagerV2 opens only on a project's sensitive account: %o", ({ lock, opens }) =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const threadId = ThreadId.make("thread-provider-session-manager-sensitive");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({ idAllocator, threadId, now: yield* DateTime.now }),
+        ],
+      });
+      const exit = yield* manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.exit);
+      assert.equal(Exit.isSuccess(exit), opens);
+      assert.equal((yield* Ref.get(state)).openCount, opens ? 1 : 0);
+    }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000, sensitiveLock: lock })));
   }),
 );
 

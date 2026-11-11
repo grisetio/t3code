@@ -18,6 +18,7 @@ import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textG
 import { TextGenerationError } from "@t3tools/contracts";
 
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as SensitiveAccountPolicy from "../provider/SensitiveAccountPolicy.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
@@ -72,8 +73,10 @@ export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const sensitiveAccounts = yield* SensitiveAccountPolicy.SensitiveAccountPolicy;
   const generate = Effect.fn("TextGeneration.generate")(function* <A>(
     operation: TextGenerationOp,
+    cwd: string,
     selection: ModelSelection,
     invoke: (
       service: ProviderTextGeneration,
@@ -85,6 +88,26 @@ export const make = Effect.gen(function* () {
         Effect.forEach(instances, (instance) => instance.snapshot.getSnapshot),
       ),
     );
+    const lock = yield* sensitiveAccounts.lockForPath(cwd).pipe(
+      Effect.mapError(
+        (cause) =>
+          new TextGenerationError({
+            operation,
+            detail: "Could not check which accounts this project may use.",
+            cause,
+          }),
+      ),
+    );
+    const allowed = SensitiveAccountPolicy.lockedSelection(lock, selection, snapshots, (provider) =>
+      defaultTextGenerationModel(provider.driver),
+    );
+    if (allowed === null) {
+      return yield* new TextGenerationError({
+        operation,
+        detail: `This project can only run on ${[...lock].join(", ")}, which is not available.`,
+      });
+    }
+    selection = allowed;
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const limited = exhaustedUsageWindow(
       snapshots.find((provider) => provider.instanceId === selection.instanceId),
@@ -109,6 +132,7 @@ export const make = Effect.gen(function* () {
             const provider = snapshots.find((candidate) => candidate.instanceId === instanceId);
             return (
               instanceId !== selection.instanceId &&
+              (lock.size === 0 || lock.has(instanceId)) &&
               provider?.enabled === true &&
               resolveProjectProviderInstanceEnabled(settings, null, instanceId) &&
               provider.installed &&
@@ -128,28 +152,41 @@ export const make = Effect.gen(function* () {
   });
   return TextGeneration.of({
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
-      return generate("generateCommitMessage", input.modelSelection, (service, modelSelection) =>
-        service.generateCommitMessage({ ...input, modelSelection }),
+      return generate(
+        "generateCommitMessage",
+        input.cwd,
+        input.modelSelection,
+        (service, modelSelection) => service.generateCommitMessage({ ...input, modelSelection }),
       );
     }),
     generatePrContent: Effect.fn("TextGeneration.generatePrContent")(function (input) {
-      return generate("generatePrContent", input.modelSelection, (service, modelSelection) =>
-        service.generatePrContent({ ...input, modelSelection }),
+      return generate(
+        "generatePrContent",
+        input.cwd,
+        input.modelSelection,
+        (service, modelSelection) => service.generatePrContent({ ...input, modelSelection }),
       );
     }),
     generateBranchName: Effect.fn("TextGeneration.generateBranchName")(function (input) {
-      return generate("generateBranchName", input.modelSelection, (service, modelSelection) =>
-        service.generateBranchName({ ...input, modelSelection }),
+      return generate(
+        "generateBranchName",
+        input.cwd,
+        input.modelSelection,
+        (service, modelSelection) => service.generateBranchName({ ...input, modelSelection }),
       );
     }),
     generateReviewGuide: Effect.fn("TextGeneration.generateReviewGuide")(function (input) {
-      return generate("generateReviewGuide", input.modelSelection, (service, modelSelection) =>
-        service.generateReviewGuide({ ...input, modelSelection }),
+      return generate(
+        "generateReviewGuide",
+        input.cwd,
+        input.modelSelection,
+        (service, modelSelection) => service.generateReviewGuide({ ...input, modelSelection }),
       );
     }),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {
       return generate(
         "generateThreadTitle",
+        input.cwd,
         input.modelSelection,
         (textGeneration, modelSelection) =>
           Effect.gen(function* () {

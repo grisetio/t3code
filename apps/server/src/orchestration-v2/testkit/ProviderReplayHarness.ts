@@ -1,3 +1,4 @@
+import * as SensitiveAccountPolicy from "../../provider/SensitiveAccountPolicy.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -374,6 +375,9 @@ export function layerWithRegistry<Error>(
         McpSessionRegistryTestkit.layer,
         layerProviderEventIngestorProvided,
         layerStores,
+        Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
+          lockForThread: () => Effect.succeed(new Set()),
+        }),
       ),
     ),
   );
