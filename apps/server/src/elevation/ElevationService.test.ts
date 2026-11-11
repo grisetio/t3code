@@ -32,6 +32,7 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { ProviderProcesses, type ProviderProcess } from "@t3tools/shared/ProviderProcesses";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -222,6 +223,8 @@ const makeFixture = Effect.fn("test.makeFixture")(function* (options?: {
   readonly plausiblePeer?: (hello: { readonly chain: ReadonlyArray<{ pid: number }> }) => boolean;
   /** A fresh machine: no override, nothing installed, and this helper (or none) shipped. */
   readonly bundledOnly?: "helper" | null;
+  /** Holds the store's live-run read until this completes, as a busy database would. */
+  readonly liveRunsRead?: Deferred.Deferred<void>;
 }) {
   const dir = yield* Effect.acquireRelease(
     Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elev-"))),
@@ -304,6 +307,8 @@ esac
         ),
   });
   const listed = options?.providerProcesses ?? [];
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const liveRunsRead = options?.liveRunsRead;
   const service = yield* ElevationService.make({
     user: "me",
     socketPath,
@@ -327,6 +332,16 @@ esac
     plausiblePeer: options?.plausiblePeer ?? (() => true),
   }).pipe(
     Effect.provideService(Orchestrator.OrchestratorV2, spy),
+    Effect.provideService(
+      ProjectionStore.ProjectionStoreV2,
+      liveRunsRead === undefined
+        ? projections
+        : ProjectionStore.ProjectionStoreV2.of({
+            ...projections,
+            listLiveRunThreadIds: () =>
+              Deferred.await(liveRunsRead).pipe(Effect.andThen(projections.listLiveRunThreadIds())),
+          }),
+    ),
     Effect.provideService(HostProcess.Platform, "darwin"),
     Effect.provideService(ProviderProcesses, { register: () => () => {}, list: () => listed }),
   );
@@ -673,6 +688,29 @@ describe("ElevationService", () => {
       assert.strictEqual(request?.driver, "codex");
       yield* fixture.service.respond({ requestId: request!.requestId, decision: "deny" });
       assert.deepStrictEqual(yield* module.receive, { type: "response", decision: "deny" });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("answers a provider process's sudo before the store reads its thread", () =>
+    Effect.gen(function* () {
+      yield* setupRunningThread;
+      const liveRunsRead = yield* Deferred.make<void>();
+      const fixture = yield* makeFixture({
+        providerProcesses: [{ pid: 300, startTime: 7, threadId: null, driver: "codex" }],
+        liveRunsRead,
+      });
+      const module = yield* connectModule(fixture.socketPath);
+      yield* module.send(hello(agentChain));
+      assert.deepStrictEqual(yield* module.receive, {
+        type: "hello_reply",
+        v: 1,
+        decision: "mine",
+      });
+      yield* Deferred.succeed(liveRunsRead, undefined);
+      yield* module.send({ type: "request", payload: basic.payload });
+      const [request] = yield* firstPending(fixture.service);
+      assert.strictEqual(request?.threadId, threadId);
+      assert.strictEqual(request?.explanation, "Free disk space");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

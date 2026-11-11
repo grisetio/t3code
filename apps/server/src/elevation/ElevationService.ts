@@ -111,7 +111,8 @@ import {
 // Stay below macOS's 104-byte and Linux's 108-byte sockaddr_un limits, including NUL.
 const UNIX_SOCKET_PATH_BYTES = 100;
 const MAX_CONNECTIONS = 32;
-const HELLO_TIMEOUT = "5 seconds";
+// The module's own wait for `hello_reply` (`HELLO_TIMEOUT` in native/t3-elevation/src/flow.rs).
+const HELLO_TIMEOUT = "3 seconds";
 const REQUEST_TIMEOUT = "5 seconds";
 const EXPIRY_GRACE_SECONDS = 5;
 // The checkout is read from the hello on; a slow read leaves the pointer out
@@ -557,20 +558,25 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       return;
     }
     if (!options.peerCredentialsSupported() && !options.plausiblePeer(decoded.value)) return;
-    const runs = yield* liveRuns;
-    const attribution = attribute({
+    const input = {
       hello: decoded.value,
       now: DateTime.toEpochMillis(yield* DateTime.now),
       server: serverProcess(),
-      liveRuns: runs,
       providerProcesses: providerProcesses.list(),
       serverSudos: [...serverSudos],
-    });
-    if (attribution.type === "not_mine") {
+    };
+    // The module gives up 3 s after connecting, sooner than a busy database can list live runs.
+    // The process chain alone claims a sudo under a provider process or this server, and live
+    // runs only add claims, so those get their reply first and their thread after.
+    const byChain = attribute({ ...input, liveRuns: [] });
+    const runsBeforeReply = byChain.type === "mine" ? null : yield* liveRuns;
+    const decided =
+      runsBeforeReply === null ? byChain : attribute({ ...input, liveRuns: runsBeforeReply });
+    if (decided.type === "not_mine") {
       send({ type: "hello_reply", v: 1, decision: "not_mine" });
       return;
     }
-    const ownSudo = attribution.serverSudo as OwnSudo | undefined;
+    const ownSudo = decided.serverSudo as OwnSudo | undefined;
     send({
       type: "hello_reply",
       v: 1,
@@ -578,6 +584,9 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       ...(ownSudo === undefined ? {} : { ownSudo: true }),
     });
     if (ownSudo !== undefined) ownSudo.reached = true;
+    const runs = runsBeforeReply ?? (yield* liveRuns);
+    const withThread = runsBeforeReply === null ? attribute({ ...input, liveRuns: runs }) : decided;
+    const attribution = withThread.type === "mine" ? withThread : decided;
     // Only checkouts the server already runs git in for this thread's checkpoints.
     const changesRoots =
       attribution.run === null
