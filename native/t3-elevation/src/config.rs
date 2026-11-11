@@ -76,6 +76,46 @@ pub fn render(config: &UserConfig) -> String {
     text
 }
 
+/// `text` with `allow_synced_passkeys` set and every other line as written, so
+/// comments and keys this helper doesn't know survive. None when the result
+/// wouldn't read back as the same table with only that key changed, such as
+/// for a quoted key, which this doesn't recognise.
+pub fn with_allow_synced_passkeys(text: &str, allow: bool) -> Option<String> {
+    const KEY: &str = "allow_synced_passkeys";
+    let line = format!("{KEY} = {allow}\n");
+    let is_key = |candidate: &str| {
+        candidate
+            .trim_start()
+            .strip_prefix(KEY)
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    };
+    let mut out = String::with_capacity(text.len() + line.len());
+    let mut placed = false;
+    for current in text.split_inclusive('\n') {
+        if !placed && current.trim_start().starts_with('[') {
+            out.push_str(&line);
+            placed = true;
+        }
+        if !placed && is_key(current) {
+            out.push_str(&line);
+            placed = true;
+        } else {
+            out.push_str(current);
+        }
+    }
+    if !placed {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&line);
+    }
+    let mut before: toml::Table = text.parse().ok()?;
+    let mut after: toml::Table = out.parse().ok()?;
+    let set = after.remove(KEY)? == toml::Value::Boolean(allow);
+    before.remove(KEY);
+    (set && before == after).then_some(out)
+}
+
 /// User names that are safe in a file name and a sudoers `Defaults:` binding.
 pub fn is_safe_user_name(user: &str) -> bool {
     !user.is_empty()
@@ -140,6 +180,25 @@ mod tests {
                 synced("allow_synced_passkeys = \"yes\""),
             ],
             [Some(false), Some(true), Some(false), None]
+        );
+    }
+
+    #[test]
+    fn setting_synced_passkeys_changes_only_that_key() {
+        let base = "version = 1 # pinned\nenabled = true\nsocket = \"/s\"\n";
+        assert_eq!(
+            with_allow_synced_passkeys(&format!("{base}allow_synced_passkeys = true\n"), false)
+                .as_deref(),
+            Some(format!("{base}allow_synced_passkeys = false\n").as_str())
+        );
+        // A key after a table header would land in that table.
+        assert_eq!(
+            with_allow_synced_passkeys(&format!("{base}[later]\nx = 1\n"), true).as_deref(),
+            Some(format!("{base}allow_synced_passkeys = true\n[later]\nx = 1\n").as_str())
+        );
+        assert_eq!(
+            with_allow_synced_passkeys(&format!("{base}\"allow_synced_passkeys\" = false\n"), true),
+            None
         );
     }
 

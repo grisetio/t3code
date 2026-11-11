@@ -137,7 +137,10 @@ machine. A device that is already set up approves the new passkey after checking
 that both show the same code, or you enter the machine's password; on a machine
 with nothing set up yet, that password also turns device approval on. After
 that, requests in the browser show **Approve**, which asks for your fingerprint
-or your computer's password. Cancel there denies.
+or your computer's password. Cancel there denies. To stop a browser approving,
+choose **Remove** under it in **Settings → Device approval**. Where the browser
+can't be told to delete the passkey, such as Firefox, the password manager keeps
+listing it; delete it there.
 
 A passkey saved to a password manager, such as Bitwarden, 1Password, Google
 Password Manager, or iCloud Keychain, syncs to your other devices, so T3 Code
@@ -151,9 +154,11 @@ those passkeys approving straight away. If the machine's device approval comes
 from config outside T3, such as Nix, the switch asks an agent to change it there.
 Safari saves every passkey to iCloud Keychain and can't approve.
 
-Passkeys need a secure address: `https`, such as through Tailscale or T3
-Connect, or `localhost`. Over plain `http` on a network address, **Set up** is
-unavailable. A passkey works only at the address it was set up at.
+Passkeys need a secure address with a name: `https`, such as through Tailscale
+or T3 Connect, or `localhost`. **Set up** is unavailable over plain `http` on a
+network address, and at any IP address, including `http://127.0.0.1`; on the
+same computer, open T3 at `localhost` instead. A passkey works only at the
+address it was set up at.
 
 ## Requirements
 

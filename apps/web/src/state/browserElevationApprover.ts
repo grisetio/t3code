@@ -30,6 +30,8 @@ interface StoredPasskey {
 
 const INSECURE_REASON =
   "Passkeys need a secure address. Open T3 over https, such as through Tailscale or T3 Connect, to approve here.";
+const IP_REASON =
+  "Passkeys don't work at an IP address. Open T3 at a name over https, such as through Tailscale or T3 Connect, to approve here.";
 const SAFARI_REASON =
   "Safari only saves passkeys that sync to your other devices, so it can't approve.";
 const NO_PASSKEYS_REASON = "This browser can't make passkeys, so it can't approve.";
@@ -45,6 +47,11 @@ const isSafari = (userAgent: string) =>
   /Safari\//.test(userAgent) &&
   !/(Chrome|Chromium|CriOS|Edg|EdgiOS|OPR|FxiOS|Firefox)\//.test(userAgent);
 
+const isIpAddress = (hostname: string) =>
+  /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith("[");
+
+const isLoopback = (hostname: string) => hostname.startsWith("127.") || hostname === "[::1]";
+
 /** Why this page can't hold a passkey that approves, in Settings' words; null when it can. */
 export function browserApproverUnavailableReason(input: {
   readonly hostname: string;
@@ -53,7 +60,14 @@ export function browserApproverUnavailableReason(input: {
   readonly webauthn: boolean;
   readonly userAgent: string;
 }): string | null {
-  // A LAN IP is no valid rpId, and the desktop's t3code:// origin can't call WebAuthn at all.
+  // An IP is never an rpId, even over https or at 127.0.0.1, which is a secure context.
+  if (isIpAddress(input.hostname)) {
+    if (!isLoopback(input.hostname)) return IP_REASON;
+    const localhost = new URL(input.origin);
+    localhost.hostname = "localhost";
+    return `Passkeys don't work at an IP address. Open T3 at ${localhost.origin} to approve here.`;
+  }
+  // The desktop's t3code:// origin can't call WebAuthn at all.
   if (!input.secureContext || elevationWebauthnSite(input.hostname, input.origin) === null) {
     return INSECURE_REASON;
   }
@@ -119,6 +133,18 @@ const domErrorName = (error: unknown) => (error instanceof DOMException ? error.
 const cancelled = (error: unknown) => {
   const name = domErrorName(error);
   return name === "NotAllowedError" || name === "AbortError";
+};
+
+/**
+ * Asks the passkey's store to delete one T3 no longer uses. Chrome and Safari do; Firefox has no
+ * such call, so its entry stays in the password manager. Never fails: the binding is already gone.
+ */
+const dropPasskey = async (passkey: { readonly rpId: string; readonly credentialId: string }) => {
+  if (typeof PublicKeyCredential === "undefined") return;
+  await PublicKeyCredential.signalUnknownCredential?.({
+    rpId: passkey.rpId,
+    credentialId: passkey.credentialId,
+  }).catch(() => undefined);
 };
 
 function createBrowserElevationApproverSource(): ElevationApproverSource {
@@ -224,22 +250,20 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
         if (!(credential instanceof PublicKeyCredential)) return null;
         const response = credential.response as AuthenticatorAttestationResponse;
         const publicKey = response.getPublicKey();
+        const credentialId = new Uint8Array(credential.rawId);
+        const unused = () => void dropPasskey({ rpId, credentialId: encode(credentialId) });
         if (publicKey === null || response.getPublicKeyAlgorithm() !== -7) {
+          unused();
           throw new Error("This browser made a passkey T3 can't use.");
         }
         const authenticatorData = new Uint8Array(response.getAuthenticatorData());
-        const credentialId = new Uint8Array(credential.rawId);
         const refusal = elevationWebauthnRegistrationRefusal({
           authenticatorData,
           rpIdHash: await sha256(new TextEncoder().encode(rpId)),
           credentialId,
         });
         if (refusal === "synced" && !account.allowSynced) {
-          // Chrome hides a refused Google Password Manager passkey; others may ignore this.
-          void PublicKeyCredential.signalUnknownCredential?.({
-            rpId,
-            credentialId: encode(credentialId),
-          }).catch(() => undefined);
+          unused();
           throw new Error(
             elevationSyncedPasskeyRefusal({
               provider: elevationPasskeyProvider(elevationWebauthnAaguid(authenticatorData)),
@@ -247,7 +271,10 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
             }),
           );
         }
-        if (refusal === "invalid") throw new Error("This browser made a passkey T3 can't use.");
+        if (refusal === "invalid") {
+          unused();
+          throw new Error("This browser made a passkey T3 can't use.");
+        }
         const spki = new Uint8Array(publicKey);
         const keyId = encode((await sha256(spki)).subarray(0, 16));
         write(environmentId, { keyId, credentialId: encode(credentialId), rpId });
@@ -261,7 +288,11 @@ function createBrowserElevationApproverSource(): ElevationApproverSource {
           },
         };
       },
-      forget: async () => write(environmentId, null),
+      forget: async () => {
+        const passkey = readStored()[environmentId];
+        write(environmentId, null);
+        if (passkey !== undefined) await dropPasskey(passkey);
+      },
     };
   };
 

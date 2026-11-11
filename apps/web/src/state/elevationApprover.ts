@@ -49,7 +49,10 @@ export interface ElevationApprover {
     readonly publicKey: string;
     readonly webauthn?: ElevationWebauthnEnrollment;
   } | null>;
-  /** Forgets this device's key on the machine, after the helper has revoked it. */
+  /**
+   * Forgets this device's key on the machine, after the helper has revoked it or when the machine
+   * never accepted it. A browser also asks its password manager to delete the passkey.
+   */
   readonly forget: () => Promise<void>;
 }
 

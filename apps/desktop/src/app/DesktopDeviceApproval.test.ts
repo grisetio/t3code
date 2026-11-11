@@ -259,6 +259,30 @@ it.layer(NodeServices.layer)("DesktopDeviceApproval", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("says Touch ID or the key failed in words, leaving the helper's error out", () =>
+    Effect.gen(function* () {
+      const failure = (message: string) =>
+        Effect.succeed(JSON.stringify({ ok: false, error: { code: "failed", message } }));
+      const signFails = fakeHelper((call) =>
+        call.args[0] === "create"
+          ? writeKey(call).pipe(Effect.andThen(signature(call)))
+          : failure("com.apple.LocalAuthentication -1: Error Domain=LAErrorDomain Code=-1"),
+      );
+      const createFails = fakeHelper(() => failure("create: Error Domain=NSOSStatusErrorDomain"));
+
+      for (const [helper, message] of [
+        [signFails, "Touch ID failed."],
+        [createFails, "Couldn't make a key on this Mac."],
+      ] as const) {
+        const { service } = yield* approvalIn(helper);
+        const error = yield* service
+          .createKey({ environmentId: ENVIRONMENT, operationId: "op" })
+          .pipe(Effect.flip);
+        expect(error.message).toBe(message);
+      }
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("signs exactly the payload bytes, with the sheet's reason taken from them", () =>
     Effect.gen(function* () {
       const helper = fakeHelper((call) =>

@@ -685,7 +685,7 @@ export type ElevationFailureReason = typeof ElevationFailureReason.Type;
 
 export class ElevationError extends Schema.TaggedError<ElevationError>()("ElevationError", {
   reason: ElevationFailureReason,
-  /** The helper's own error text, shown under the generic message. */
+  /** Text written for the user (the helper's or sudo's own error), shown under the message. */
   detail: Schema.optionalKey(Schema.String),
   /** For `synced_passkey`: the password manager that saved it, when known. */
   provider: Schema.optionalKey(Schema.String),

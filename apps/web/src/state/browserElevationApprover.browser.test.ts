@@ -89,6 +89,15 @@ describe("browserElevationApproverSource", () => {
     expect((authenticatorData?.[32] ?? 0) & 0x08).toBe(0x08);
   });
 
+  it("forgetting the passkey deletes it from the browser too", async () => {
+    await using _authenticator = await virtualAuthenticator(environmentId);
+    await enrollThisBrowser(environmentId);
+    expect(await commands.virtualPasskeyCount()).toBe(1);
+    await browserElevationApproverSource.get(environmentId)?.forget();
+    expect(browserElevationApproverSource.get(environmentId)?.keyId).toBeNull();
+    expect(await commands.virtualPasskeyCount()).toBe(0);
+  });
+
   it("reads a failed verification as a cancel, which the card sends as Deny", async () => {
     await using _authenticator = await virtualAuthenticator(environmentId);
     await enrollThisBrowser(environmentId);
@@ -132,8 +141,40 @@ describe("browserApproverUnavailableReason", () => {
     ).toBeNull();
   });
 
-  it("names the secure address it needs on a LAN IP or the desktop's own origin", () => {
+  it("names the secure address it needs on plain http or the desktop's own origin", () => {
     const insecure = /Passkeys need a secure address/;
+    expect(
+      browserApproverUnavailableReason({
+        ...page,
+        hostname: "oracle.local",
+        origin: "http://oracle.local:3773",
+        secureContext: false,
+      }),
+    ).toMatch(insecure);
+    expect(
+      browserApproverUnavailableReason({ ...page, hostname: "app", origin: "t3code://app" }),
+    ).toMatch(insecure);
+  });
+
+  it("sends a loopback IP to localhost, which is just as secure and can hold a passkey", () => {
+    expect(
+      browserApproverUnavailableReason({
+        ...page,
+        hostname: "127.0.0.1",
+        origin: "http://127.0.0.1:3773",
+      }),
+    ).toBe(
+      "Passkeys don't work at an IP address. Open T3 at http://localhost:3773 to approve here.",
+    );
+    expect(
+      browserApproverUnavailableReason({ ...page, hostname: "[::1]", origin: "http://[::1]:3773" }),
+    ).toBe(
+      "Passkeys don't work at an IP address. Open T3 at http://localhost:3773 to approve here.",
+    );
+  });
+
+  it("says no IP address can hold a passkey, over http or https", () => {
+    const ip = /^Passkeys don't work at an IP address\. Open T3 at a name over https/;
     expect(
       browserApproverUnavailableReason({
         ...page,
@@ -141,18 +182,21 @@ describe("browserApproverUnavailableReason", () => {
         origin: "http://192.168.1.20:3773",
         secureContext: false,
       }),
-    ).toMatch(insecure);
-    // An IP is no valid rpId even over https.
+    ).toMatch(ip);
     expect(
       browserApproverUnavailableReason({
         ...page,
         hostname: "192.168.1.20",
         origin: "https://192.168.1.20",
       }),
-    ).toMatch(insecure);
+    ).toMatch(ip);
     expect(
-      browserApproverUnavailableReason({ ...page, hostname: "app", origin: "t3code://app" }),
-    ).toMatch(insecure);
+      browserApproverUnavailableReason({
+        ...page,
+        hostname: "[fd7a::1]",
+        origin: "https://[fd7a::1]",
+      }),
+    ).toMatch(ip);
   });
 
   it("says Safari can't approve, since it only saves passkeys that sync", () => {

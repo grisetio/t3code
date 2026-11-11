@@ -533,6 +533,8 @@ describe("ElevationService", () => {
         .respond(approval(request.requestId, otherKey))
         .pipe(Effect.flip);
       assert.strictEqual(error.reason, "invalid_signature");
+      // The check's code goes to the server log; the user reads only the sentence.
+      assert.isUndefined(error.detail);
 
       // Still answerable, and the deny is the first thing the module hears.
       yield* fixture.service.respond({ requestId: request.requestId, decision: "deny" });
@@ -918,6 +920,11 @@ describe("ElevationService helper", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failed.reason, "helper_failed");
       assert.strictEqual(failed.detail, "No such key");
+
+      // Without a reply from the helper there is nothing written for a person to show.
+      const silent = yield* fixture.service.uninstall({ password: "hunter2" }).pipe(Effect.flip);
+      assert.strictEqual(silent.reason, "helper_failed");
+      assert.isUndefined(silent.detail);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
