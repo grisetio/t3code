@@ -315,6 +315,9 @@ Timeouts:
 
 - Module: connect plus `hello_reply` within 3 s, otherwise "T3 down". A
   `response` until `expiresAt` on its own clock.
+- Server: `hello` within 3 s of connecting. A sudo under a provider process
+  gets its reply from the chain alone, before any store read, since a busy
+  database can outlast the module's 3 s; its thread is picked after the reply.
 - Server: `request` within 5 s of `mine`, otherwise close. With no `result` by
   `expiresAt + 5 s` on its clock, mark the request `expired` and close.
 

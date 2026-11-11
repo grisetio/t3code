@@ -180,7 +180,6 @@ function attributeThread(input: AttributionInput): Attribution {
       ? NOT_MINE
       : { type: "mine", run: null, explanation: own.explanation, serverSudo: own };
   }
-  if (input.liveRuns.length === 0) return NOT_MINE;
 
   // A shell execs its last command, so a lone `sudo …` has no shell above it:
   // sudo's own argv is matched inside the command text, and an ancestor's argv
@@ -273,6 +272,7 @@ function attributeThread(input: AttributionInput): Attribution {
     if (process === undefined) continue;
     if (process.threadId === null) break;
     const run = input.liveRuns.find((candidate) => candidate.threadId === process.threadId);
+    // A background command outlives the run that started it, so no live run is still the agent's.
     if (run === undefined) return { type: "mine", run: null, explanation: null };
     // A script between the call and sudo can hide the call's text from every
     // level. The thread's only running call is still the one that ran it,

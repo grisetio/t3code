@@ -69,7 +69,10 @@ describe("attribute", () => {
     ).toEqual({ type: "not_mine" });
   });
 
-  it("says not_mine when no run is live", () => {
+  it("claims a background command's sudo after its run ended, and nothing foreign", () => {
+    const providerProcesses = [
+      { pid: 150, startTime: 6000, threadId: "thread:a", driver: null },
+    ] as const;
     expect(
       attribute({
         hello: {
@@ -79,7 +82,17 @@ describe("attribute", () => {
         server,
         now,
         liveRuns: [],
-        providerProcesses: [{ pid: 150, startTime: 6000, threadId: "thread:a", driver: null }],
+        providerProcesses,
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "mine", run: null, explanation: null });
+    expect(
+      attribute({
+        hello: { argv: ["sudo", "ls"], chain: [entry(400, ["-zsh"]), serverEntry] },
+        server,
+        now,
+        liveRuns: [],
+        providerProcesses,
         serverSudos: [],
       }),
     ).toEqual({ type: "not_mine" });
