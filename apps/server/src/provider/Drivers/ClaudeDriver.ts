@@ -1,11 +1,11 @@
 import { ClaudeSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -263,28 +263,34 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const resolveCapabilities = Cache.get(capabilitiesProbeCache, capabilitiesCacheKey).pipe(
       Effect.map((result) => result.capabilities),
     );
+    // Cache invalidation must not lift a 429 pause, so the pause lives outside the cache.
+    const oauthUsagePausedUntil = yield* Ref.make(0);
     const oauthUsageCache = yield* Cache.makeWith(
-      (version: string) =>
-        ClaudeResetCredits.readClaudeOAuthUsage(login, version).pipe(
+      Effect.fn("ClaudeDriver.readOAuthUsage")(function* (version: string) {
+        if ((yield* Clock.currentTimeMillis) < (yield* Ref.get(oauthUsagePausedUntil))) {
+          return undefined;
+        }
+        return yield* ClaudeResetCredits.readClaudeOAuthUsage(login, version).pipe(
+          Effect.catchTags({
+            ClaudeOAuthUsageRateLimited: (error) =>
+              Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) =>
+                  Ref.set(oauthUsagePausedUntil, now + error.retryAfterSeconds * 1000),
+                ),
+                Effect.as(undefined),
+              ),
+          }),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
-        ),
+        );
+      }),
       {
         capacity: 1,
         timeToLive: (exit) =>
-          Exit.isSuccess(exit)
-            ? exit.value === undefined
-              ? Duration.zero
-              : OAUTH_USAGE_TTL
-            : Exit.findErrorOption(exit).pipe(
-                Option.match({
-                  onNone: () => Duration.zero,
-                  onSome: (error) => Duration.seconds(error.retryAfterSeconds),
-                }),
-              ),
+          Exit.isSuccess(exit) && exit.value !== undefined ? OAUTH_USAGE_TTL : Duration.zero,
       },
     );
     const invalidateUsageCaches = Cache.invalidateAll(capabilitiesProbeCache).pipe(
@@ -302,8 +308,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
               stateDir,
               catalog,
               scopedLimitNames,
-              (version) =>
-                Cache.get(oauthUsageCache, version).pipe(Effect.orElseSucceed(() => undefined)),
+              (version) => Cache.get(oauthUsageCache, version),
             ),
           ),
           Effect.tap((provider) =>

@@ -596,6 +596,8 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
 
         yield* Ref.set(status, 429);
         yield* instance.snapshot.refreshUsage!;
+        // Clearing the usage caches must not lift the 429's pause.
+        yield* instance.snapshot.refreshUsage!;
         const limited = yield* instance.snapshot.refresh;
         expect(yield* Ref.get(reads)).toBe(2);
         expect(limited.usageLimits).toEqual(first.usageLimits);
