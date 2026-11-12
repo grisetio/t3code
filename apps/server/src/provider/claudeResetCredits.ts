@@ -2,14 +2,20 @@ import type {
   ProviderConsumeResetCreditOutcome,
   ServerProviderResetCredits,
 } from "@t3tools/contracts";
+import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Hex from "effect/encoding/Hex";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as ChildProcess from "effect/process/ChildProcess";
+
+import { ClaudeOAuthUsage, claudeOAuthUsageToResponse } from "./claudeUsageLimits.ts";
 
 const API_BASE = "https://api.anthropic.com";
 const PROGRAM = "cedar_ember";
@@ -18,8 +24,14 @@ const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const COMPLETE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const Credentials = Schema.Struct({
-  claudeAiOauth: Schema.optional(Schema.Struct({ accessToken: Schema.optional(Schema.String) })),
+  claudeAiOauth: Schema.optional(
+    Schema.Struct({
+      accessToken: Schema.optional(Schema.String),
+      expiresAt: Schema.optional(Schema.Number),
+    }),
+  ),
 });
+const decodeCredentialsJson = Schema.decodeEffect(Schema.fromJsonString(Credentials));
 const Config = Schema.Struct({
   oauthAccount: Schema.optional(
     Schema.Struct({ organizationUuid: Schema.optional(Schema.String) }),
@@ -39,6 +51,7 @@ const CedarEmber = Schema.Struct({
   next_grant_id: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const UsageResponse = Schema.Struct({
+  ...ClaudeOAuthUsage.fields,
   cedar_ember: Schema.optional(Schema.NullOr(Schema.Unknown)),
 });
 const decodeCedarEmber = Schema.decodeUnknownOption(CedarEmber);
@@ -134,13 +147,63 @@ const readJson = Effect.fn("claudeResetCredits.readJson")(function* <S extends S
   );
 });
 
-const readAccessToken = Effect.fn("claudeResetCredits.readAccessToken")(function* (
-  configDir: string,
+/** Where the CLI keeps one instance's login. */
+export interface ClaudeLogin {
+  readonly configDir: string;
+  /** The CLI suffixes its Keychain item only when CLAUDE_CONFIG_DIR is set. */
+  readonly customConfigDir: boolean;
+  readonly environment: NodeJS.ProcessEnv;
+}
+
+class ClaudeKeychainReadError extends Schema.TaggedError<ClaudeKeychainReadError>()(
+  "ClaudeKeychainReadError",
+  { exitCode: Schema.Number },
+) {}
+
+// Exit 44 is errSecItemNotFound. Without -a, a stale item for another account can win.
+const readKeychainCredentials = Effect.fn("claudeResetCredits.readKeychainCredentials")(function* (
+  login: ClaudeLogin,
 ) {
-  if ((yield* HostProcess.Platform) === "darwin") return undefined;
-  const path = yield* Path.Path;
-  const credentials = yield* readJson(Credentials, path.join(configDir, ".credentials.json"));
-  return credentials.claudeAiOauth?.accessToken?.trim() || undefined;
+  const suffix = login.customConfigDir
+    ? `-${Hex.encode(
+        yield* (yield* Crypto.Crypto).digest("SHA-256", new TextEncoder().encode(login.configDir)),
+      ).slice(0, 8)}`
+    : "";
+  const account = login.environment.USER?.trim() || (yield* HostProcess.Username) || "";
+  const result = yield* spawnAndCollect(
+    "security",
+    ChildProcess.make("security", [
+      "find-generic-password",
+      "-s",
+      `Claude Code-credentials${suffix}`,
+      "-a",
+      account,
+      "-w",
+    ]),
+  );
+  if (result.code === 44) return "{}";
+  if (result.code !== 0) return yield* new ClaudeKeychainReadError({ exitCode: result.code });
+  return result.stdout;
+});
+
+const readAccessToken = Effect.fn("claudeResetCredits.readAccessToken")(function* (
+  login: ClaudeLogin,
+) {
+  const fromEnvironment = login.environment.CLAUDE_CODE_OAUTH_TOKEN?.trim();
+  if (fromEnvironment) return fromEnvironment;
+  const credentials =
+    (yield* HostProcess.Platform) === "darwin"
+      ? yield* decodeCredentialsJson(yield* readKeychainCredentials(login))
+      : yield* readJson(Credentials, (yield* Path.Path).join(login.configDir, ".credentials.json"));
+  const oauth = credentials.claudeAiOauth;
+  // The CLI owns refresh-token rotation; refreshing here could sign it out.
+  if (
+    oauth?.expiresAt !== undefined &&
+    oauth.expiresAt <= DateTime.toEpochMillis(yield* DateTime.now)
+  ) {
+    return undefined;
+  }
+  return oauth?.accessToken?.trim() || undefined;
 });
 
 const withClaudeHeaders = (token: string, version: string) =>
@@ -150,27 +213,55 @@ const withClaudeHeaders = (token: string, version: string) =>
     "user-agent": `claude-cli/${version} (external, cli)`,
   });
 
-export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
-  function* (configDir: string, version: string) {
-    const token = yield* readAccessToken(configDir);
+export class ClaudeOAuthUsageRateLimited extends Schema.TaggedError<ClaudeOAuthUsageRateLimited>()(
+  "ClaudeOAuthUsageRateLimited",
+  { retryAfterSeconds: Schema.Number },
+) {}
+
+const isClaudeOAuthUsageRateLimited = Schema.is(ClaudeOAuthUsageRateLimited);
+
+const DEFAULT_RETRY_AFTER_SECONDS = 5 * 60;
+
+/** Undefined when there is no usable login or the read failed for any reason but a 429. */
+export const readClaudeOAuthUsage = Effect.fn("readClaudeOAuthUsage")(
+  function* (login: ClaudeLogin, version: string) {
+    const token = yield* readAccessToken(login);
     if (!token) return undefined;
     const client = yield* HttpClient.HttpClient;
     const response = yield* client.execute(
       HttpClientRequest.get(`${API_BASE}/api/oauth/usage`, {
-        urlParams: { cedar_ember: "1", skip_spend: "1" },
+        urlParams: { cedar_ember: "1" },
       }).pipe(withClaudeHeaders(token, version)),
     );
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers["retry-after"]);
+      return yield* new ClaudeOAuthUsageRateLimited({
+        retryAfterSeconds:
+          Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(retryAfter, 60 * 60)
+            : DEFAULT_RETRY_AFTER_SECONDS,
+      });
+    }
     const body = yield* HttpClientResponse.schemaBodyJson(UsageResponse)(
       yield* HttpClientResponse.filterStatusOk(response),
     );
-    return claudeResetCreditsToContract(
-      body.cedar_ember,
-      DateTime.toEpochMillis(yield* DateTime.now),
-    );
+    const now = yield* DateTime.now;
+    return {
+      checkedAt: DateTime.formatIso(now),
+      usage: claudeOAuthUsageToResponse(body),
+      resetCredits: claudeResetCreditsToContract(body.cedar_ember, DateTime.toEpochMillis(now)),
+    };
   },
   Effect.timeout("10 seconds"),
-  Effect.orElseSucceed(() => undefined),
+  Effect.catchIf(
+    (error) => !isClaudeOAuthUsageRateLimited(error),
+    () => Effect.undefined,
+  ),
 );
+
+export type ClaudeOAuthUsageRead = NonNullable<
+  Effect.Success<ReturnType<typeof readClaudeOAuthUsage>>
+>;
 
 export const readClaudeOrganizationId = (accountConfigPath: string) =>
   readJson(Config, accountConfigPath).pipe(
@@ -196,7 +287,7 @@ const CLAIM_OUTCOMES = {
 
 /** requestId is the claim's idempotency key. */
 export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(function* (input: {
-  readonly configDir: string;
+  readonly login: ClaudeLogin;
   readonly accountConfigPath: string;
   readonly version: string;
   readonly grantId: string;
@@ -205,7 +296,7 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   if (!GRANT_ID.test(input.grantId) || !REQUEST_ID.test(input.requestId)) {
     return yield* new ClaudeResetCreditError({ reason: "malformedCredit" });
   }
-  const token = yield* readAccessToken(input.configDir).pipe(
+  const token = yield* readAccessToken(input.login).pipe(
     Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "loginUnreadable", cause })),
   );
   const config = yield* readJson(Config, input.accountConfigPath).pipe(

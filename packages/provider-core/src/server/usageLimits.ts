@@ -99,12 +99,30 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
   );
 }
 
+// Failed probes keep the last reading for at most one session window, and never past a reset.
+const MAX_RETAINED_USAGE_AGE_MS = 5 * 60 * 60_000;
+
+function isRetainable(published: ServerProviderUsageLimits, at: string): boolean {
+  const now = Date.parse(at);
+  return (
+    now - Date.parse(published.checkedAt) < MAX_RETAINED_USAGE_AGE_MS &&
+    published.windows.every(
+      (window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now,
+    )
+  );
+}
+
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;
   readonly probed: ServerProviderUsageLimits | undefined;
 }): ServerProviderUsageLimits | undefined {
   const { published, probed } = input;
-  if (probed?.unavailable?.reason === "probeFailed" && published && !published.unavailable) {
+  if (
+    probed?.unavailable?.reason === "probeFailed" &&
+    published &&
+    !published.unavailable &&
+    isRetainable(published, probed.checkedAt)
+  ) {
     return published;
   }
   if (

@@ -5,6 +5,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -65,6 +66,8 @@ const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
+// Anthropic answers bursts of usage reads with 429s; manual refreshes reuse a recent read.
+const OAUTH_USAGE_TTL = Duration.minutes(1);
 
 const withoutUsage = (capabilities: ClaudeCapabilitiesProbe): ClaudeCapabilitiesProbe => {
   const result = { ...capabilities };
@@ -128,6 +131,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     // wrappers that scope themselves to their cwd refuse to run there.
     const { stateDir } = yield* ServerConfig.ServerConfig;
     const httpClient = yield* HttpClient.HttpClient;
+    const crypto = yield* Crypto.Crypto;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
     const catalogService = yield* ModelCatalog.ModelCatalog;
@@ -156,10 +160,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     );
     const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig, processEnv);
     const configDir = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
+    const login: ClaudeResetCredits.ClaudeLogin = {
+      configDir,
+      customConfigDir: Boolean(
+        effectiveConfig.homePath.trim() || processEnv.CLAUDE_CONFIG_DIR?.trim(),
+      ),
+      environment: processEnv,
+    };
     const accountConfigPath = yield* ClaudeResetCredits.claudeAccountConfigPath(
-      effectiveConfig.homePath.trim() || processEnv.CLAUDE_CONFIG_DIR?.trim()
-        ? configDir
-        : undefined,
+      login.customConfigDir ? configDir : undefined,
     );
     const stampIdentity = withInstanceIdentity({
       instanceId,
@@ -254,6 +263,33 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const resolveCapabilities = Cache.get(capabilitiesProbeCache, capabilitiesCacheKey).pipe(
       Effect.map((result) => result.capabilities),
     );
+    const oauthUsageCache = yield* Cache.makeWith(
+      (version: string) =>
+        ClaudeResetCredits.readClaudeOAuthUsage(login, version).pipe(
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        ),
+      {
+        capacity: 1,
+        timeToLive: (exit) =>
+          Exit.isSuccess(exit)
+            ? exit.value === undefined
+              ? Duration.zero
+              : OAUTH_USAGE_TTL
+            : Exit.findErrorOption(exit).pipe(
+                Option.match({
+                  onNone: () => Duration.zero,
+                  onSome: (error) => Duration.seconds(error.retryAfterSeconds),
+                }),
+              ),
+      },
+    );
+    const invalidateUsageCaches = Cache.invalidateAll(capabilitiesProbeCache).pipe(
+      Effect.andThen(Cache.invalidateAll(oauthUsageCache)),
+    );
 
     const checkProvider = catalogService.refreshInBackground.pipe(
       Effect.andThen(
@@ -267,11 +303,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
               catalog,
               scopedLimitNames,
               (version) =>
-                ClaudeResetCredits.readClaudeResetCredits(configDir, version).pipe(
-                  Effect.provideService(HttpClient.HttpClient, httpClient),
-                  Effect.provideService(FileSystem.FileSystem, fileSystem),
-                  Effect.provideService(Path.Path, path),
-                ),
+                Cache.get(oauthUsageCache, version).pipe(Effect.orElseSucceed(() => undefined)),
             ),
           ),
           Effect.tap((provider) =>
@@ -299,7 +331,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           Effect.map(stampIdentity),
         ),
       checkProvider,
-      invalidateUsageCache: Cache.invalidateAll(capabilitiesProbeCache),
+      invalidateUsageCache: invalidateUsageCaches,
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
         resolveMaintenance().pipe(
           Effect.flatMap((maintenanceCapabilities) =>
@@ -338,7 +370,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           configDir,
           (requestId) =>
             ClaudeResetCredits.consumeClaudeResetCredit({
-              configDir,
+              login,
               accountConfigPath,
               version,
               grantId,
@@ -348,6 +380,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
         );
       },
       Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(Crypto.Crypto, crypto),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.mapError(
@@ -365,7 +399,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       Effect.tap((outcome) =>
         Effect.gen(function* () {
           const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
-          yield* Cache.invalidateAll(capabilitiesProbeCache);
+          yield* invalidateUsageCaches;
           const refreshed = yield* snapshot.refresh;
           const after = refreshed.usageLimits?.checkedAt;
           if (

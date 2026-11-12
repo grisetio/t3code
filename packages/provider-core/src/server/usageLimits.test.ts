@@ -119,4 +119,26 @@ describe("resolveUsageLimitsAfterProbe", () => {
     expect(resolveUsageLimitsAfterProbe({ published, probed: unsupported })).toBe(unsupported);
     expect(resolveUsageLimitsAfterProbe({ published: undefined, probed: failed })).toBe(failed);
   });
+
+  it("stops keeping a reading once one of its windows resets or it is a session window old", () => {
+    const failedAt = (at: string) => ({
+      checkedAt: at,
+      windows: [],
+      unavailable: { reason: "probeFailed" as const },
+    });
+    const beforeReset = failedAt("2026-09-03T13:59:00.000Z");
+    const afterReset = failedAt("2026-09-03T14:00:00.000Z");
+    expect(resolveUsageLimitsAfterProbe({ published, probed: beforeReset })).toBe(published);
+    expect(resolveUsageLimitsAfterProbe({ published, probed: afterReset })).toBe(afterReset);
+
+    const weeklyOnly = { checkedAt, windows: [weekly] };
+    const fourHoursLater = failedAt("2026-09-03T16:59:00.000Z");
+    const fiveHoursLater = failedAt("2026-09-03T17:00:00.000Z");
+    expect(resolveUsageLimitsAfterProbe({ published: weeklyOnly, probed: fourHoursLater })).toBe(
+      weeklyOnly,
+    );
+    expect(resolveUsageLimitsAfterProbe({ published: weeklyOnly, probed: fiveHoursLater })).toBe(
+      fiveHoursLater,
+    );
+  });
 });

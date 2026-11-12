@@ -5,10 +5,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse, UrlParams } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 import { describe, expect, it } from "vite-plus/test";
 
 import * as ClaudeResetCredits from "./claudeResetCredits.ts";
+import { claudeUsageResponseToLimits } from "./claudeUsageLimits.ts";
 
 const NOW = Date.parse("2026-09-22T12:00:00.000Z");
 const grant = (overrides: Record<string, unknown>) => ({
@@ -87,46 +91,177 @@ describe("claudeResetCreditsToContract", () => {
   });
 });
 
-effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
-  it.effect("reads the grants with the CLI's request", () =>
+const usageBody = {
+  five_hour: { utilization: 28, resets_at: "2026-09-22T15:00:00Z" },
+  seven_day: { utilization: 49, resets_at: "2026-09-25T00:00:00Z" },
+  limits: [
+    { kind: "session", percent: 28 },
+    {
+      kind: "weekly_scoped",
+      percent: 12,
+      resets_at: "2026-09-25T00:00:00Z",
+      scope: { model: { display_name: "Fable" } },
+    },
+  ],
+  cedar_ember: { eligible: true, next_grant_id: "grant_a", grants: [grant({})] },
+};
+
+const linuxLogin = (configDir: string, environment: NodeJS.ProcessEnv = {}) => ({
+  configDir,
+  customConfigDir: true,
+  environment,
+});
+
+/** Answers usage reads and records the bearer token each one carried. */
+const recordTokens = (tokens: Array<string | undefined>) =>
+  HttpClient.make((request) => {
+    tokens.push(request.headers.authorization);
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(usageBody)));
+  });
+
+const keychain = (handler: (args: ReadonlyArray<string>) => { stdout: string; code: number }) =>
+  ChildProcessSpawner.make((command) => {
+    const result = handler((command as unknown as { args: ReadonlyArray<string> }).args);
+    return Effect.succeed(
+      ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(1),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
+        isRunning: Effect.succeed(false),
+        kill: () => Effect.void,
+        unref: Effect.succeed(Effect.void),
+        stdin: Sink.drain,
+        stdout: Stream.make(new TextEncoder().encode(result.stdout)),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+      }),
+    );
+  });
+const refuseSpawns = ChildProcessSpawner.make(() => Effect.die("must not read the Keychain"));
+
+effectIt.layer(NodeServices.layer)("readClaudeOAuthUsage", (it) => {
+  it.effect("reads the windows and grants with the CLI's request", () =>
     Effect.gen(function* () {
       const { configDir } = yield* writeLogin;
       const client = HttpClient.make((request) => {
         expect(request.method).toBe("GET");
         expect(request.url).toBe("https://api.anthropic.com/api/oauth/usage");
-        expect(UrlParams.toString(request.urlParams)).toBe("cedar_ember=1&skip_spend=1");
+        expect(UrlParams.toString(request.urlParams)).toBe("cedar_ember=1");
         expect(request.headers.authorization).toBe("Bearer oauth-token");
         expect(request.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
         expect(request.headers["user-agent"]).toBe("claude-cli/2.1.0 (external, cli)");
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            Response.json({
-              cedar_ember: { eligible: true, next_grant_id: "grant_a", grants: [grant({})] },
-            }),
-          ),
-        );
+        return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(usageBody)));
       });
-      const credits = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
+      const read = yield* ClaudeResetCredits.readClaudeOAuthUsage(
+        linuxLogin(configDir),
+        "2.1.0",
+      ).pipe(
         Effect.provideService(HostProcess.Platform, "linux"),
         Effect.provideService(HttpClient.HttpClient, client),
       );
-      expect(credits).toEqual({ availableCount: 1, nextCreditId: "grant_a" });
+      expect(read?.resetCredits).toEqual({ availableCount: 1, nextCreditId: "grant_a" });
+      const limits = claudeUsageResponseToLimits({
+        response: read!.usage,
+        checkedAt: read!.checkedAt,
+      }).limits;
+      expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([
+        ["five_hour", 28],
+        ["seven_day", 49],
+        ["seven_day_fable", 12],
+      ]);
     }),
   );
 
-  it.effect("reads nothing from keychain logins or failed requests", () =>
+  it.effect("finds the login where the CLI keeps it, and skips expired ones", () =>
+    Effect.gen(function* () {
+      const tokens: Array<string | undefined> = [];
+      const services: Array<string | undefined> = [];
+      const keychainLogin = (expiresAt: number) =>
+        keychain((args) => {
+          expect(args.slice(0, 1)).toEqual(["find-generic-password"]);
+          expect(args.slice(3)).toEqual(["-a", "kgriset", "-w"]);
+          services.push(args[2]);
+          return {
+            stdout: JSON.stringify({ claudeAiOauth: { accessToken: "keychain-token", expiresAt } }),
+            code: 0,
+          };
+        });
+      const read = (
+        login: ClaudeResetCredits.ClaudeLogin,
+        spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+      ) =>
+        ClaudeResetCredits.readClaudeOAuthUsage(login, "2.1.0").pipe(
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(HttpClient.HttpClient, recordTokens(tokens)),
+        );
+      const environment = { USER: "kgriset" };
+      // it.effect's TestClock starts at the epoch.
+      const future = 60 * 60_000;
+      yield* read(
+        { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
+        keychainLogin(future),
+      );
+      yield* read(
+        { configDir: "/Users/kgriset/.claude-work", customConfigDir: true, environment },
+        keychainLogin(future),
+      );
+      const expired = yield* read(
+        { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
+        keychainLogin(0),
+      );
+      yield* read(
+        {
+          configDir: "/Users/kgriset/.claude",
+          customConfigDir: false,
+          environment: { ...environment, CLAUDE_CODE_OAUTH_TOKEN: " env-token " },
+        },
+        refuseSpawns,
+      );
+      // A Keychain without the item reads as signed out.
+      const missing = yield* read(
+        { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
+        keychain(() => ({ stdout: "", code: 44 })),
+      );
+      expect(services).toEqual([
+        "Claude Code-credentials",
+        "Claude Code-credentials-4d256fd0",
+        "Claude Code-credentials",
+      ]);
+      expect(tokens).toEqual([
+        "Bearer keychain-token",
+        "Bearer keychain-token",
+        "Bearer env-token",
+      ]);
+      expect([expired, missing]).toEqual([undefined, undefined]);
+    }),
+  );
+
+  it.effect("reads nothing from failed requests and reports a 429's retry delay", () =>
     Effect.gen(function* () {
       const { configDir } = yield* writeLogin;
-      const darwin = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
-        Effect.provideService(HostProcess.Platform, "darwin"),
-        Effect.provideService(HttpClient.HttpClient, refuseRequests),
-      );
-      const limited = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
-        Effect.provideService(HostProcess.Platform, "linux"),
-        Effect.provideService(HttpClient.HttpClient, respond(429, {})),
-      );
-      expect([darwin, limited]).toEqual([undefined, undefined]);
+      const read = (client: HttpClient.HttpClient) =>
+        ClaudeResetCredits.readClaudeOAuthUsage(linuxLogin(configDir), "2.1.0").pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.result,
+        );
+      const limited = (headers: Record<string, string>) =>
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response(null, { status: 429, headers })),
+          ),
+        );
+      expect(yield* read(respond(401, {}))).toMatchObject({ _tag: "Success", success: undefined });
+      expect(yield* read(respond(500, {}))).toMatchObject({ _tag: "Success", success: undefined });
+      expect(yield* read(limited({ "retry-after": "120" }))).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ClaudeOAuthUsageRateLimited", retryAfterSeconds: 120 },
+      });
+      expect(yield* read(limited({}))).toMatchObject({
+        failure: { retryAfterSeconds: 300 },
+      });
     }),
   );
 });
@@ -138,9 +273,10 @@ const decodeClaimBody = Schema.decodeEffect(ClaimBody);
 
 const consume = (client: HttpClient.HttpClient, ids = { grantId: "grant_a", requestId: "r-1" }) =>
   Effect.gen(function* () {
-    const login = yield* writeLogin;
+    const { configDir, accountConfigPath } = yield* writeLogin;
     return yield* ClaudeResetCredits.consumeClaudeResetCredit({
-      ...login,
+      login: linuxLogin(configDir),
+      accountConfigPath,
       version: "2.1.0",
       ...ids,
     }).pipe(

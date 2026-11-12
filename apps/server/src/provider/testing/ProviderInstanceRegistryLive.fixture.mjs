@@ -31,6 +31,23 @@ lines.on("line", (line) => {
     );
     return;
   }
+  // The CLI skips its own usage read when nonessential traffic is disabled.
+  if (
+    message.request?.subtype === "get_usage" &&
+    process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC === "1"
+  ) {
+    process.stdout.write(
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: message.request_id,
+          response: { session: {}, rate_limits_available: true, rate_limits: null },
+        },
+      }) + "\n",
+    );
+    return;
+  }
   if (message.request?.subtype === "get_usage") {
     const marker = process.env.T3_CLAUDE_RESET_MARKER;
     const usageFailsUntil = process.env.T3_CLAUDE_USAGE_FAILS_UNTIL;
