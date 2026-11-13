@@ -277,7 +277,6 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
       layerThreadManagementProvided,
       layerCommandReceiptStoreProvided,
       IdAllocator.layer,
-      SensitiveAccountPolicy.layer,
     ),
   ),
 );

@@ -19,7 +19,6 @@ import {
   GitCommandError,
   MessageId,
   ProjectId,
-  DEFAULT_MODEL_BY_PROVIDER,
   ProviderDriverKind,
   ProviderInstanceId,
   OrchestrationV2ThreadProjectionJson,
@@ -49,7 +48,6 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
-import * as SensitiveAccountPolicy from "../provider/SensitiveAccountPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -131,7 +129,6 @@ interface HarnessOptions {
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
-  readonly sensitiveLock?: ReadonlyArray<ProviderInstanceId>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -219,9 +216,6 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     layerServerSettings,
     ProviderRegistryMock.layer(options.providers),
-    Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
-      lockForPath: () => Effect.succeed(new Set(options.sensitiveLock ?? [])),
-    }),
     options.managedFolders ??
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -1412,42 +1406,6 @@ it.effect("replays a server-allocated launch", () =>
     }).pipe(Effect.provide(harness.layer));
   }),
 );
-
-it.effect("starts a new thread in a sensitive project on that project's account", () => {
-  const provider = (instanceId: ProviderInstanceId, driver: string): ServerProvider => ({
-    instanceId,
-    driver: ProviderDriverKind.make(driver),
-    enabled: true,
-    installed: true,
-    status: "ready",
-    auth: { status: "authenticated" },
-    version: null,
-    checkedAt: "1970-01-01T00:00:00Z",
-    models: [],
-    slashCommands: [],
-    skills: [],
-  });
-  const harness = makeHarness({
-    adapters: [adapter, claudeAdapter],
-    providers: [
-      provider(modelSelection.instanceId, "codex"),
-      provider(claudeModelSelection.instanceId, "claudeAgent"),
-    ],
-    sensitiveLock: [claudeModelSelection.instanceId],
-  });
-  return Effect.gen(function* () {
-    const launches = yield* ThreadLaunch.ThreadLaunchService;
-    const launched = yield* launches.launch(
-      launchInput({ command: "command:launch:sensitive", thread: "thread:launch:sensitive" }),
-    );
-    const selection = launched.projection.thread.modelSelection;
-    assert.equal(selection?.instanceId, claudeModelSelection.instanceId);
-    assert.equal(
-      selection?.model,
-      DEFAULT_MODEL_BY_PROVIDER[ProviderDriverKind.make("claudeAgent")],
-    );
-  }).pipe(Effect.provide(harness.layer));
-});
 
 it.effect("replays an accepted launch after the project disables the instance", () => {
   const harness = makeHarness();

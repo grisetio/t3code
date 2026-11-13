@@ -114,6 +114,7 @@ export type GitBranchPullRequest = NonNullable<VcsStatusResult["pr"]> & {
 interface SourceControlTextGenerationSettings {
   readonly modelSelection: ModelSelection;
   readonly style: SourceControlWritingStyleSettings;
+  readonly threadId?: ThreadId | undefined;
 }
 
 export class GitManager extends Context.Service<
@@ -2091,6 +2092,7 @@ export const make = Effect.gen(function* () {
           stagedPatch: limitContext(context.stagedPatch, 50_000),
           ...(input.includeBranch ? { includeBranch: true } : {}),
           ...(policy ? { policy } : {}),
+          threadId: input.settings.threadId,
           modelSelection: input.settings.modelSelection,
         })
         .pipe(Effect.map((result) => sanitizeCommitMessage(result)));
@@ -2293,6 +2295,7 @@ export const make = Effect.gen(function* () {
       ...(changeRequestTemplate ? { changeRequestTemplate } : {}),
       ...(threadContext ? { threadContext } : {}),
       ...(policy ? { policy } : {}),
+      threadId,
       modelSelection: settings.modelSelection,
     });
 
@@ -3078,6 +3081,7 @@ export const make = Effect.gen(function* () {
               ? Effect.succeed({
                   modelSelection: settings.textGenerationModelSelection,
                   style: settings.sourceControlWritingStyle,
+                  threadId: input.threadId,
                 })
               : providerRegistry.getProviders.pipe(
                   Effect.map((providers) => ({
@@ -3087,6 +3091,7 @@ export const make = Effect.gen(function* () {
                       projectId,
                     ),
                     style: settings.sourceControlWritingStyle,
+                    threadId: input.threadId,
                   })),
                 ),
           ),

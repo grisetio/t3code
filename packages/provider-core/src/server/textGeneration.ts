@@ -4,6 +4,7 @@ import type {
   ModelSelection,
   PullRequestReviewGuide,
   TextGenerationError,
+  ThreadId,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 
@@ -12,6 +13,8 @@ import type { ThreadTitleForkSource } from "./textGenerationPrompts.ts";
 
 export interface CommitMessageGenerationInput {
   cwd: string;
+  /** The thread this text is for; a sensitive thread keeps the call on its account. */
+  threadId?: ThreadId | undefined;
   branch: string | null;
   stagedSummary: string;
   stagedPatch: string;
@@ -28,6 +31,8 @@ export interface CommitMessageGenerationResult {
 
 export interface PrContentGenerationInput {
   cwd: string;
+  /** The thread this text is for; a sensitive thread keeps the call on its account. */
+  threadId?: ThreadId | undefined;
   baseBranch: string;
   headBranch: string;
   commitSummary: string;
@@ -47,6 +52,8 @@ export interface PrContentGenerationResult {
 export interface BranchNameGenerationInput {
   naming?: BranchNamingOptions | undefined;
   cwd: string;
+  /** The thread this text is for; a sensitive thread keeps the call on its account. */
+  threadId?: ThreadId | undefined;
   message: string;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   modelSelection: ModelSelection;
@@ -59,6 +66,8 @@ export interface BranchNameGenerationResult {
 export interface ThreadTitleGenerationInput {
   linkedContext?: string | undefined;
   cwd: string;
+  /** The thread this text is for; a sensitive thread keeps the call on its account. */
+  threadId?: ThreadId | undefined;
   message: string;
   previousTitle?: string | undefined;
   forkSource?: ThreadTitleForkSource | undefined;

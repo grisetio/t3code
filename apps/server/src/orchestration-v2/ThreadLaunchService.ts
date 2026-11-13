@@ -4,7 +4,6 @@ import * as TerminalManager from "../terminal/Manager.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
-  DEFAULT_MODEL_BY_PROVIDER,
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
@@ -45,7 +44,6 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import * as SensitiveAccountPolicy from "../provider/SensitiveAccountPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -211,7 +209,6 @@ const make = Effect.gen(function* () {
   const git = yield* GitWorkflow.GitWorkflowService;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
-  const sensitiveAccounts = yield* SensitiveAccountPolicy.SensitiveAccountPolicy;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
@@ -359,6 +356,7 @@ const make = Effect.gen(function* () {
                 instructions: settings.branchNameInstructions,
               },
               cwd,
+              threadId,
               message: message.text,
               attachments: message.attachments,
               ...(message.context ? { context: message.context } : {}),
@@ -814,41 +812,24 @@ const make = Effect.gen(function* () {
     function* (request) {
       // Scratch has no Git repository. Normalize before folder allocation so
       // durable preparation and retries use the thread's own Scratch folder.
-      const normalized: ThreadLaunchInput =
+      const input: ThreadLaunchInput =
         request.workspaceStrategy.type === "worktree" &&
         (yield* managedFolders.isScratchProject(request.projectId))
           ? { ...request, workspaceStrategy: { type: "root" } }
           : request;
       yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
         type: "thread.create",
-        projectId: normalized.projectId,
-      }).pipe(Effect.mapError(mapError(normalized, "resolve-project")));
-      const project = yield* projects.getById(normalized.projectId).pipe(
-        Effect.mapError(mapError(normalized, "resolve-project")),
+        projectId: input.projectId,
+      }).pipe(Effect.mapError(mapError(input, "resolve-project")));
+      const project = yield* projects.getById(input.projectId).pipe(
+        Effect.mapError(mapError(input, "resolve-project")),
         Effect.flatMap(
           Option.match({
-            onNone: () =>
-              Effect.fail(mapError(normalized, "resolve-project")("Project not found.")),
+            onNone: () => Effect.fail(mapError(input, "resolve-project")("Project not found.")),
             onSome: Effect.succeed,
           }),
         ),
       );
-      // A project that has run on a sensitive account starts every new thread there.
-      const modelSelection = SensitiveAccountPolicy.lockedSelection(
-        yield* sensitiveAccounts
-          .lockForPath(project.workspaceRoot)
-          .pipe(Effect.mapError(mapError(normalized, "resolve-project"))),
-        normalized.modelSelection,
-        yield* providerRegistry.getProviders,
-        (provider) => DEFAULT_MODEL_BY_PROVIDER[provider.driver] ?? provider.models[0]?.slug,
-      );
-      if (modelSelection === null) {
-        return yield* mapError(
-          normalized,
-          "resolve-project",
-        )("This project can only run on its sensitive account, which is not available.");
-      }
-      const input: ThreadLaunchInput = { ...normalized, modelSelection };
       if (input.reuseExistingThread === true && input.threadId === undefined) {
         return yield* mapError(
           input,

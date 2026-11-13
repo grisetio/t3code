@@ -924,7 +924,7 @@ it.effect.each([
   { lock: [], opens: true },
   { lock: [modelSelection.instanceId], opens: true },
   { lock: [ProviderInstanceId.make("claude_work")], opens: false },
-])("ProviderSessionManagerV2 opens only on a project's sensitive account: %o", ({ lock, opens }) =>
+])("ProviderSessionManagerV2 opens a sensitive thread only on its account: %o", ({ lock, opens }) =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
     yield* Effect.gen(function* () {

@@ -23,7 +23,7 @@ import * as Scope from "effect/Scope";
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect } from "vite-plus/test";
 
-import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
+import { CodexSettings, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
@@ -523,7 +523,8 @@ it.effect.each([
               resolveLink: () => Effect.die("unused"),
             }),
             Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
-              lockForPath: () =>
+              lockForPath: () => Effect.succeed(new Set()),
+              lockForThread: () =>
                 Effect.succeed(new Set(locked === null ? [] : [ProviderInstanceId.make(locked)])),
             }),
           ),
@@ -532,6 +533,7 @@ it.effect.each([
       expect(
         yield* service.generateThreadTitle({
           cwd: "/tmp",
+          threadId: ThreadId.make("thread-text-generation"),
           message: "hello",
           linkedContext: "",
           modelSelection: selection,

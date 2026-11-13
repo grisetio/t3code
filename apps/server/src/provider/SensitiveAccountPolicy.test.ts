@@ -24,13 +24,17 @@ const insertThread = (input: {
   readonly projectId: string;
   readonly instanceId: string;
   readonly worktreePath?: string;
+  readonly parentThreadId?: string;
   readonly runInstanceIds?: ReadonlyArray<string>;
 }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const payload = JSON.stringify(
-      input.worktreePath === undefined ? {} : { worktreePath: input.worktreePath },
-    );
+    const payload = JSON.stringify({
+      ...(input.worktreePath === undefined ? {} : { worktreePath: input.worktreePath }),
+      ...(input.parentThreadId === undefined
+        ? {}
+        : { lineage: { parentThreadId: input.parentThreadId } }),
+    });
     yield* sql`
       INSERT INTO orchestration_v2_projection_threads (
         thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
@@ -55,61 +59,65 @@ const insertThread = (input: {
 const layerTest = Layer.mergeAll(SqlitePersistence.layerMemory, NodeServices.layer);
 
 it.layer(layerTest)("SensitiveAccountPolicy", (it) => {
-  it.effect("locks a project's repository, worktrees and threads to its sensitive account", () =>
+  it.effect("locks a thread, its children and its worktree, not its project", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped();
-      const work = path.join(root, "work");
-      const personal = path.join(root, "personal");
-      const worktree = path.join(root, "worktrees", "feature");
-      yield* fs.makeDirectory(path.join(work, ".git", "worktrees", "feature"), { recursive: true });
-      yield* fs.makeDirectory(path.join(work, "src"), { recursive: true });
-      yield* fs.makeDirectory(path.join(personal, ".git"), { recursive: true });
-      yield* fs.makeDirectory(worktree, { recursive: true });
-      yield* fs.writeFileString(
-        path.join(worktree, ".git"),
-        `gitdir: ${path.join(work, ".git", "worktrees", "feature")}\n`,
-      );
-      yield* fs.writeFileString(
-        path.join(work, ".git", "worktrees", "feature", "commondir"),
-        "../..\n",
-      );
+      const project = path.join(root, "project");
+      const worktree = path.join(root, "worktrees", "work");
+      yield* fs.makeDirectory(path.join(worktree, "src"), { recursive: true });
 
-      yield* insertProject("work", work);
-      yield* insertProject("personal", personal);
+      yield* insertProject("project", project);
       // Switched to the personal account after running on the work account.
       yield* insertThread({
         threadId: "work-thread",
-        projectId: "work",
+        projectId: "project",
         instanceId: "claudeAgent",
+        worktreePath: worktree,
         runInstanceIds: ["claudeWork"],
       });
       yield* insertThread({
+        threadId: "work-child",
+        projectId: "project",
+        instanceId: "claudeAgent",
+        parentThreadId: "work-thread",
+      });
+      yield* insertThread({
         threadId: "personal-thread",
-        projectId: "personal",
+        projectId: "project",
         instanceId: "claudeAgent",
       });
 
       const unlocked = yield* SensitiveAccountPolicy.make(new Set());
-      assert.deepStrictEqual([...(yield* unlocked.lockForPath(work))], []);
+      assert.deepStrictEqual(
+        [...(yield* unlocked.lockForThread(ThreadId.make("work-thread")))],
+        [],
+      );
+      assert.deepStrictEqual([...(yield* unlocked.lockForPath(worktree))], []);
 
       const policy = yield* SensitiveAccountPolicy.make(new Set(["claudeWork"]));
-      for (const cwd of [work, path.join(work, "src"), worktree]) {
-        assert.deepStrictEqual([...(yield* policy.lockForPath(cwd))], ["claudeWork"], cwd);
+      for (const threadId of ["work-thread", "work-child"]) {
+        assert.deepStrictEqual(
+          [...(yield* policy.lockForThread(ThreadId.make(threadId)))],
+          ["claudeWork"],
+          threadId,
+        );
       }
-      assert.deepStrictEqual([...(yield* policy.lockForPath(personal))], []);
-      assert.deepStrictEqual(
-        [...(yield* policy.lockForThread(ThreadId.make("work-thread")))],
-        ["claudeWork"],
-      );
       assert.deepStrictEqual(
         [...(yield* policy.lockForThread(ThreadId.make("personal-thread")))],
         [],
       );
+      for (const cwd of [worktree, path.join(worktree, "src")]) {
+        assert.deepStrictEqual([...(yield* policy.lockForPath(cwd))], ["claudeWork"], cwd);
+      }
+      assert.deepStrictEqual([...(yield* policy.lockForPath(project))], []);
       assert.strictEqual(SensitiveAccountPolicy.lockRefusal(new Set(), "claudeAgent"), null);
       assert.notStrictEqual(
-        SensitiveAccountPolicy.lockRefusal(yield* policy.lockForPath(work), "claudeAgent"),
+        SensitiveAccountPolicy.lockRefusal(
+          yield* policy.lockForThread(ThreadId.make("work-child")),
+          "claudeAgent",
+        ),
         null,
       );
     }),

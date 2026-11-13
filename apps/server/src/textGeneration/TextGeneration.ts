@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type { ModelSelection, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import {
   isProviderAvailable,
   isProviderTextGenerationCapable,
@@ -77,6 +77,7 @@ export const make = Effect.gen(function* () {
   const generate = Effect.fn("TextGeneration.generate")(function* <A>(
     operation: TextGenerationOp,
     cwd: string,
+    threadId: ThreadId | undefined,
     selection: ModelSelection,
     invoke: (
       service: ProviderTextGeneration,
@@ -88,12 +89,21 @@ export const make = Effect.gen(function* () {
         Effect.forEach(instances, (instance) => instance.snapshot.getSnapshot),
       ),
     );
-    const lock = yield* sensitiveAccounts.lockForPath(cwd).pipe(
+    const lock = yield* Effect.all([
+      sensitiveAccounts.lockForPath(cwd),
+      threadId === undefined
+        ? Effect.succeed<SensitiveAccountPolicy.SensitiveAccountLock>(new Set())
+        : sensitiveAccounts.lockForThread(threadId),
+    ]).pipe(
+      Effect.map(
+        ([inPath, inThread]): SensitiveAccountPolicy.SensitiveAccountLock =>
+          new Set([...inPath, ...inThread]),
+      ),
       Effect.mapError(
         (cause) =>
           new TextGenerationError({
             operation,
-            detail: "Could not check which accounts this project may use.",
+            detail: "Could not check which accounts this thread may use.",
             cause,
           }),
       ),
@@ -104,7 +114,7 @@ export const make = Effect.gen(function* () {
     if (allowed === null) {
       return yield* new TextGenerationError({
         operation,
-        detail: `This project can only run on ${[...lock].join(", ")}, which is not available.`,
+        detail: `This thread can only run on ${[...lock].join(", ")}, which is not available.`,
       });
     }
     selection = allowed;
@@ -155,6 +165,7 @@ export const make = Effect.gen(function* () {
       return generate(
         "generateCommitMessage",
         input.cwd,
+        input.threadId,
         input.modelSelection,
         (service, modelSelection) => service.generateCommitMessage({ ...input, modelSelection }),
       );
@@ -163,6 +174,7 @@ export const make = Effect.gen(function* () {
       return generate(
         "generatePrContent",
         input.cwd,
+        input.threadId,
         input.modelSelection,
         (service, modelSelection) => service.generatePrContent({ ...input, modelSelection }),
       );
@@ -171,6 +183,7 @@ export const make = Effect.gen(function* () {
       return generate(
         "generateBranchName",
         input.cwd,
+        input.threadId,
         input.modelSelection,
         (service, modelSelection) => service.generateBranchName({ ...input, modelSelection }),
       );
@@ -179,6 +192,7 @@ export const make = Effect.gen(function* () {
       return generate(
         "generateReviewGuide",
         input.cwd,
+        undefined,
         input.modelSelection,
         (service, modelSelection) => service.generateReviewGuide({ ...input, modelSelection }),
       );
@@ -187,6 +201,7 @@ export const make = Effect.gen(function* () {
       return generate(
         "generateThreadTitle",
         input.cwd,
+        input.threadId,
         input.modelSelection,
         (textGeneration, modelSelection) =>
           Effect.gen(function* () {
