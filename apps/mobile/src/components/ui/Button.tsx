@@ -17,6 +17,7 @@ export interface ButtonProps {
   /** `destructive` is the final step of an irreversible action, filled like a dialog's. */
   readonly tone?: "primary" | "secondary" | "danger" | "destructive" | "text" | "contrast";
   readonly fullWidth?: boolean;
+  readonly size?: "default" | "compact";
 }
 
 const TONE_CLASS_NAMES = {
@@ -59,7 +60,8 @@ function ButtonBody(props: ButtonProps & { readonly fill?: string }) {
       disabled={disabled}
       onPress={props.onPress}
       className={cn(
-        "min-h-12 flex-row items-center justify-center gap-2 rounded-full px-6 active:opacity-70",
+        "flex-row items-center justify-center gap-2 rounded-full active:opacity-70",
+        props.size === "compact" ? "min-h-10 px-5" : "min-h-12 px-6",
         props.fullWidth ? "w-full" : "self-start",
         disabled ? "bg-subtle-strong" : containerClassName,
       )}

@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ModelSelection, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type { ModelSelection, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import {
   isProviderAvailable,
   isProviderTextGenerationCapable,
@@ -22,6 +22,8 @@ import * as SensitiveAccountPolicy from "../provider/SensitiveAccountPolicy.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
+import * as TextGenerators from "./TextGenerators.ts";
+import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 
 export type {
   BranchNameGenerationInput,
@@ -34,6 +36,8 @@ export type {
   ReviewGuideGenerationResult,
   ThreadTitleGenerationInput,
   ThreadTitleGenerationResult,
+  TranscriptionPostProcessingInput,
+  TranscriptionPostProcessingResult,
 } from "@t3tools/provider-core/server/textGeneration";
 
 export class TextGeneration extends Context.Service<TextGeneration, ProviderTextGeneration>()(
@@ -45,7 +49,8 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateReviewGuide";
+  | "generateReviewGuide"
+  | "generateTranscriptionPostProcessing";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -74,21 +79,18 @@ export const make = Effect.gen(function* () {
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const sensitiveAccounts = yield* SensitiveAccountPolicy.SensitiveAccountPolicy;
+  const textGenerators = yield* TextGenerators.TextGenerators;
   const generate = Effect.fn("TextGeneration.generate")(function* <A>(
     operation: TextGenerationOp,
     cwd: string,
     threadId: ThreadId | undefined,
     selection: ModelSelection,
+    projectId: ProjectId | null | undefined,
     invoke: (
       service: ProviderTextGeneration,
       modelSelection: ModelSelection,
     ) => Effect.Effect<A, TextGenerationError>,
   ) {
-    const snapshots = yield* registry.listInstances.pipe(
-      Effect.flatMap((instances) =>
-        Effect.forEach(instances, (instance) => instance.snapshot.getSnapshot),
-      ),
-    );
     const lock = yield* Effect.all([
       sensitiveAccounts.lockForPath(cwd),
       threadId === undefined
@@ -108,6 +110,24 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
+    // A text generator is a model API outside every account, so a locked thread never uses one.
+    const textGenerator =
+      lock.size > 0 ? undefined : yield* textGenerators.runner(selection.instanceId);
+    // A review guide reaches a text generator only through a fallback; it needs an agent instead.
+    const textGeneratorId = selection.instanceId;
+    const textGeneratorCannotRun =
+      textGenerator !== undefined && operation === "generateReviewGuide";
+    if (textGenerator !== undefined && !textGeneratorCannotRun) {
+      return yield* invoke(
+        TextGenerationOperations.fromRunner("TextGenerator", textGenerator),
+        selection,
+      );
+    }
+    const snapshots = yield* registry.listInstances.pipe(
+      Effect.flatMap((instances) =>
+        Effect.forEach(instances, (instance) => instance.snapshot.getSnapshot),
+      ),
+    );
     const allowed = SensitiveAccountPolicy.lockedSelection(lock, selection, snapshots, (provider) =>
       defaultTextGenerationModel(provider.driver),
     );
@@ -119,12 +139,14 @@ export const make = Effect.gen(function* () {
     }
     selection = allowed;
     const now = DateTime.toEpochMillis(yield* DateTime.now);
-    const limited = exhaustedUsageWindow(
-      snapshots.find((provider) => provider.instanceId === selection.instanceId),
-      now,
-      selection.model,
-    );
-    if (limited) {
+    const selected = snapshots.find((provider) => provider.instanceId === selection.instanceId);
+    // Only a failed probe counts: a pending one is also not installed yet.
+    const unusable =
+      textGeneratorCannotRun ||
+      (selected?.enabled === true &&
+        selected.status === "error" &&
+        (!selected.installed || selected.auth.status === "unauthenticated"));
+    if (unusable || exhaustedUsageWindow(selected, now, selection.model)) {
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(
           (cause) =>
@@ -144,9 +166,10 @@ export const make = Effect.gen(function* () {
               instanceId !== selection.instanceId &&
               (lock.size === 0 || lock.has(instanceId)) &&
               provider?.enabled === true &&
-              resolveProjectProviderInstanceEnabled(settings, null, instanceId) &&
+              resolveProjectProviderInstanceEnabled(settings, projectId ?? null, instanceId) &&
               provider.installed &&
               provider.auth.status !== "unauthenticated" &&
+              provider.status !== "error" &&
               isProviderAvailable(provider) &&
               isProviderTextGenerationCapable(provider) &&
               (operation !== "generateReviewGuide" || INVESTIGATING_DRIVERS.has(driver)) &&
@@ -155,6 +178,13 @@ export const make = Effect.gen(function* () {
           },
           { includeConfiguredInstances: true },
         ) ?? selection;
+    }
+    if (textGeneratorCannotRun && selection.instanceId === textGeneratorId) {
+      return yield* new TextGenerationError({
+        operation,
+        detail:
+          "Review guides need a coding agent that can read the checkout. None is ready. Pick Codex or Claude as the review guide model in Settings → Source control.",
+      });
     }
     return yield* resolveInstance(registry, operation, selection.instanceId).pipe(
       Effect.flatMap((service) => invoke(service, selection)),
@@ -167,6 +197,7 @@ export const make = Effect.gen(function* () {
         input.cwd,
         input.threadId,
         input.modelSelection,
+        input.projectId,
         (service, modelSelection) => service.generateCommitMessage({ ...input, modelSelection }),
       );
     }),
@@ -176,6 +207,7 @@ export const make = Effect.gen(function* () {
         input.cwd,
         input.threadId,
         input.modelSelection,
+        input.projectId,
         (service, modelSelection) => service.generatePrContent({ ...input, modelSelection }),
       );
     }),
@@ -185,6 +217,7 @@ export const make = Effect.gen(function* () {
         input.cwd,
         input.threadId,
         input.modelSelection,
+        input.projectId,
         (service, modelSelection) => service.generateBranchName({ ...input, modelSelection }),
       );
     }),
@@ -194,7 +227,21 @@ export const make = Effect.gen(function* () {
         input.cwd,
         undefined,
         input.modelSelection,
+        input.projectId,
         (service, modelSelection) => service.generateReviewGuide({ ...input, modelSelection }),
+      );
+    }),
+    generateTranscriptionPostProcessing: Effect.fn(
+      "TextGeneration.generateTranscriptionPostProcessing",
+    )(function (input) {
+      return generate(
+        "generateTranscriptionPostProcessing",
+        input.cwd,
+        undefined,
+        input.modelSelection,
+        null,
+        (service, modelSelection) =>
+          service.generateTranscriptionPostProcessing({ ...input, modelSelection }),
       );
     }),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {
@@ -203,6 +250,7 @@ export const make = Effect.gen(function* () {
         input.cwd,
         input.threadId,
         input.modelSelection,
+        input.projectId,
         (textGeneration, modelSelection) =>
           Effect.gen(function* () {
             const linkedContext =
@@ -224,4 +272,6 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(TextGeneration, make);
+export const layer = Layer.effect(TextGeneration, make).pipe(
+  Layer.provideMerge(TextGenerators.layer),
+);

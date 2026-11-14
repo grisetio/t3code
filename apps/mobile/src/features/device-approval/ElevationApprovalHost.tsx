@@ -22,7 +22,7 @@ import {
   threadDeepLinkOnScreen,
 } from "../agent-awareness/notificationPayload";
 import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
-import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
+import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
 import { approvalHaptic } from "./approvalHaptics";
 import {
   claimedElevationRequestAtom,
