@@ -223,6 +223,9 @@ const encodeDevicesState = Schema.encodeSync(Schema.fromJsonString(DevicesState)
 class ListenerError extends Schema.TaggedError<ListenerError>()("ElevationListenerError", {
   cause: Schema.Defect(),
 }) {}
+class KeyFileError extends Schema.TaggedError<KeyFileError>()("ElevationKeyFileError", {
+  cause: Schema.Defect(),
+}) {}
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 const lastLine = (text: string) => text.trim().split("\n").at(-1) ?? "";
@@ -1070,12 +1073,15 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
     use: (path: string) => Effect.Effect<A, E, R>,
   ) =>
     Effect.acquireUseRelease(
-      Effect.tryPromise(async () => {
-        const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elevation-"));
-        const path = NodePath.join(directory, "key.json");
-        await NodeFSP.writeFile(path, enrollmentObject(device), { mode: 0o600 });
-        return { directory, path };
-      }).pipe(Effect.catch((cause) => failLogged("helper_failed", cause))),
+      Effect.tryPromise({
+        try: async () => {
+          const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-elevation-"));
+          const path = NodePath.join(directory, "key.json");
+          await NodeFSP.writeFile(path, enrollmentObject(device), { mode: 0o600 });
+          return { directory, path };
+        },
+        catch: (cause) => new KeyFileError({ cause }),
+      }).pipe(Effect.catch((error) => failLogged("helper_failed", error.cause))),
       ({ path }) => use(path),
       ({ directory }) =>
         Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
@@ -1111,9 +1117,10 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
         NodePath.dirname(options.socketPath),
         `elevation-install-${NodeCrypto.randomUUID()}.json`,
       );
-      yield* Effect.tryPromise(() =>
-        NodeFSP.writeFile(keyPath, enrollmentObject(input.device), { mode: 0o600 }),
-      ).pipe(Effect.catch((cause) => failLogged("helper_failed", cause)));
+      yield* Effect.tryPromise({
+        try: () => NodeFSP.writeFile(keyPath, enrollmentObject(input.device), { mode: 0o600 }),
+        catch: (cause) => new KeyFileError({ cause }),
+      }).pipe(Effect.catch((error) => failLogged("helper_failed", error.cause)));
       const command = ["sudo", helper, ...installArgs(keyPath)].map(shellQuote).join(" ");
       return {
         type: "terminal_command",
@@ -1419,6 +1426,7 @@ export const layer = Layer.effect(
     const platform = yield* HostProcess.Platform;
     const host = { platform, arch: yield* HostProcess.Architecture };
     const packaged = typeof __T3CODE_BUILD_CHANNEL__ !== "undefined";
+    const env = yield* HostProcess.Environment;
     return yield* make({
       user: NodeOS.userInfo().username,
       socketPath: NodePath.join(config.stateDir, "elevation.sock"),
@@ -1430,14 +1438,14 @@ export const layer = Layer.effect(
         rootUid: 0,
         platform,
       },
-      helperOverride: process.env.T3_ELEVATION_HELPER ?? null,
+      helperOverride: env.T3_ELEVATION_HELPER ?? null,
       bundledHelperPath: bundledElevationHelperPath({
         serverDir: import.meta.dirname,
         packaged,
         exists: NodeFS.existsSync,
       }),
       sudoPath: elevationSudoPath(platform, NodeFS.existsSync),
-      attestation: elevationAttestation({ env: process.env, packaged }),
+      attestation: elevationAttestation({ env, packaged }),
       devicesStatePath: NodePath.join(config.stateDir, "elevation-devices.json"),
       server: () => ({ pid: process.pid, startTime: processStartTime(host, process.pid) }),
       trustedPeerUid: 0,
