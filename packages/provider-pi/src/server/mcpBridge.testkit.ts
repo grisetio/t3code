@@ -35,6 +35,7 @@ type AgentStartHook = (
   },
   ctx: {
     cwd?: string;
+    isProjectTrusted?: () => boolean;
     model?: { api: string };
     ui: { notify: (message: string, severity: string) => void };
   },
@@ -159,13 +160,16 @@ export async function loadMcpBridge(
       // Pi runs every handler for an event; keep the last result like its prompt chain.
       on: (name: string, handler: AgentStartHook) => {
         const previous = handlers.get(name);
+        // The trust notice shares events with the hooks under test; folders here are trusted.
+        const run: AgentStartHook = (event, ctx) =>
+          handler(event, { isProjectTrusted: () => true, ...ctx });
         handlers.set(
           name,
           previous === undefined
-            ? handler
+            ? run
             : async (event, ctx) => {
                 const first = await previous(event, ctx);
-                return (await handler(event, ctx)) ?? first;
+                return (await run(event, ctx)) ?? first;
               },
         );
       },
