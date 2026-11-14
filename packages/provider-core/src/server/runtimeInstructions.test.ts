@@ -14,6 +14,24 @@ describe("buildRuntimeInstructions", () => {
     assert.notInclude(instructions, "<pull_request_linking>");
   });
 
+  it.each([true, false])(
+    "adds the sudo guidance only when device approval is on, PR linking=%s",
+    (pullRequestLinking) => {
+      for (const deviceApproval of [true, false, undefined]) {
+        const instructions = buildRuntimeInstructions({
+          harness: "Codex",
+          pullRequestLinking,
+          deviceApproval,
+        });
+        assert.equal(
+          instructions.endsWith("Never pipe a password into sudo."),
+          deviceApproval === true,
+        );
+        assert.equal(instructions.includes("<pull_request_linking>"), pullRequestLinking);
+      }
+    },
+  );
+
   it("links PRs the agent creates, takes over, or pushes to, and no others", () => {
     const instructions = buildRuntimeInstructions({ harness: "Codex" });
 
