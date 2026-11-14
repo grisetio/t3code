@@ -155,6 +155,7 @@ it.effect("reads a management key from its secret provider", () => {
         ),
       ),
       NodeCrypto.layer,
+      NodeServices.layer,
     ]),
     Effect.scoped,
   );

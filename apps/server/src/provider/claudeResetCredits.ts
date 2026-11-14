@@ -5,7 +5,7 @@ import type {
 } from "@t3tools/contracts";
 import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -220,7 +220,10 @@ const readKeychainCredentials = Effect.fn("claudeResetCredits.readKeychainCreden
 ) {
   const suffix = login.customConfigDir
     ? `-${Hex.encode(
-        yield* (yield* Crypto.Crypto).digest("SHA-256", new TextEncoder().encode(login.configDir)),
+        yield* (yield* Digest.Digest).digest(
+          Digest.sha256,
+          new TextEncoder().encode(login.configDir),
+        ),
       ).slice(0, 8)}`
     : "";
   const account = login.environment.USER?.trim() || (yield* HostProcess.Username) || "";

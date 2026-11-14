@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -182,131 +184,142 @@ const keychain = (handler: (args: ReadonlyArray<string>) => { stdout: string; co
   });
 const refuseSpawns = ChildProcessSpawner.make(() => Effect.die("must not read the Keychain"));
 
-effectIt.layer(NodeServices.layer)("readClaudeOAuthUsage", (it) => {
-  it.effect("reads the windows and grants with the CLI's request", () =>
-    Effect.gen(function* () {
-      const { configDir } = yield* writeLogin;
-      const client = HttpClient.make((request) => {
-        expect(request.method).toBe("GET");
-        expect(request.url).toBe("https://api.anthropic.com/api/oauth/usage");
-        expect(UrlParams.toString(request.urlParams)).toBe("cedar_ember=1");
-        expect(request.headers.authorization).toBe("Bearer oauth-token");
-        expect(request.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
-        expect(request.headers["user-agent"]).toBe("claude-cli/2.1.0 (external, cli)");
-        return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(usageBody)));
-      });
-      const read = yield* ClaudeResetCredits.readClaudeOAuthUsage(
-        linuxLogin(configDir),
-        "2.1.0",
-      ).pipe(
-        Effect.provideService(HostProcess.Platform, "linux"),
-        Effect.provideService(HttpClient.HttpClient, client),
-      );
-      expect(read?.resetCredits).toMatchObject({ availableCount: 1, nextCreditId: "grant_a" });
-      const limits = claudeUsageResponseToLimits({
-        response: read!.usage,
-        checkedAt: read!.checkedAt,
-      }).limits;
-      expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([
-        ["five_hour", 28],
-        ["seven_day", 49],
-        ["seven_day_fable", 12],
-      ]);
-    }),
-  );
-
-  it.effect("finds the login where the CLI keeps it, and skips expired ones", () =>
-    Effect.gen(function* () {
-      const tokens: Array<string | undefined> = [];
-      const services: Array<string | undefined> = [];
-      const keychainLogin = (expiresAt: number) =>
-        keychain((args) => {
-          expect(args.slice(0, 1)).toEqual(["find-generic-password"]);
-          expect(args.slice(3)).toEqual(["-a", "kgriset", "-w"]);
-          services.push(args[2]);
-          return {
-            stdout: JSON.stringify({ claudeAiOauth: { accessToken: "keychain-token", expiresAt } }),
-            code: 0,
-          };
+effectIt.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "readClaudeOAuthUsage",
+  (it) => {
+    it.effect("reads the windows and grants with the CLI's request", () =>
+      Effect.gen(function* () {
+        const { configDir } = yield* writeLogin;
+        const client = HttpClient.make((request) => {
+          expect(request.method).toBe("GET");
+          expect(request.url).toBe("https://api.anthropic.com/api/oauth/usage");
+          expect(UrlParams.toString(request.urlParams)).toBe("cedar_ember=1");
+          expect(request.headers.authorization).toBe("Bearer oauth-token");
+          expect(request.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
+          expect(request.headers["user-agent"]).toBe("claude-cli/2.1.0 (external, cli)");
+          return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(usageBody)));
         });
-      const read = (
-        login: ClaudeResetCredits.ClaudeLogin,
-        spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
-      ) =>
-        ClaudeResetCredits.readClaudeOAuthUsage(login, "2.1.0").pipe(
-          Effect.provideService(HostProcess.Platform, "darwin"),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(HttpClient.HttpClient, recordTokens(tokens)),
-        );
-      const environment = { USER: "kgriset" };
-      // it.effect's TestClock starts at the epoch.
-      const future = 60 * 60_000;
-      yield* read(
-        { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
-        keychainLogin(future),
-      );
-      yield* read(
-        { configDir: "/Users/kgriset/.claude-work", customConfigDir: true, environment },
-        keychainLogin(future),
-      );
-      const expired = yield* read(
-        { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
-        keychainLogin(0),
-      );
-      yield* read(
-        {
-          configDir: "/Users/kgriset/.claude",
-          customConfigDir: false,
-          environment: { ...environment, CLAUDE_CODE_OAUTH_TOKEN: " env-token " },
-        },
-        refuseSpawns,
-      );
-      // A Keychain without the item reads as signed out.
-      const missing = yield* read(
-        { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
-        keychain(() => ({ stdout: "", code: 44 })),
-      );
-      expect(services).toEqual([
-        "Claude Code-credentials",
-        "Claude Code-credentials-4d256fd0",
-        "Claude Code-credentials",
-      ]);
-      expect(tokens).toEqual([
-        "Bearer keychain-token",
-        "Bearer keychain-token",
-        "Bearer env-token",
-      ]);
-      expect([expired, missing]).toEqual([undefined, undefined]);
-    }),
-  );
-
-  it.effect("reads nothing from failed requests and reports a 429's retry delay", () =>
-    Effect.gen(function* () {
-      const { configDir } = yield* writeLogin;
-      const read = (client: HttpClient.HttpClient) =>
-        ClaudeResetCredits.readClaudeOAuthUsage(linuxLogin(configDir), "2.1.0").pipe(
+        const read = yield* ClaudeResetCredits.readClaudeOAuthUsage(
+          linuxLogin(configDir),
+          "2.1.0",
+        ).pipe(
           Effect.provideService(HostProcess.Platform, "linux"),
           Effect.provideService(HttpClient.HttpClient, client),
-          Effect.result,
         );
-      const limited = (headers: Record<string, string>) =>
-        HttpClient.make((request) =>
-          Effect.succeed(
-            HttpClientResponse.fromWeb(request, new Response(null, { status: 429, headers })),
-          ),
+        expect(read?.resetCredits).toMatchObject({ availableCount: 1, nextCreditId: "grant_a" });
+        const limits = claudeUsageResponseToLimits({
+          response: read!.usage,
+          checkedAt: read!.checkedAt,
+        }).limits;
+        expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([
+          ["five_hour", 28],
+          ["seven_day", 49],
+          ["seven_day_fable", 12],
+        ]);
+      }),
+    );
+
+    it.effect("finds the login where the CLI keeps it, and skips expired ones", () =>
+      Effect.gen(function* () {
+        const tokens: Array<string | undefined> = [];
+        const services: Array<string | undefined> = [];
+        const keychainLogin = (expiresAt: number) =>
+          keychain((args) => {
+            expect(args.slice(0, 1)).toEqual(["find-generic-password"]);
+            expect(args.slice(3)).toEqual(["-a", "kgriset", "-w"]);
+            services.push(args[2]);
+            return {
+              stdout: JSON.stringify({
+                claudeAiOauth: { accessToken: "keychain-token", expiresAt },
+              }),
+              code: 0,
+            };
+          });
+        const read = (
+          login: ClaudeResetCredits.ClaudeLogin,
+          spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+        ) =>
+          ClaudeResetCredits.readClaudeOAuthUsage(login, "2.1.0").pipe(
+            Effect.provideService(HostProcess.Platform, "darwin"),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(HttpClient.HttpClient, recordTokens(tokens)),
+          );
+        const environment = { USER: "kgriset" };
+        // it.effect's TestClock starts at the epoch.
+        const future = 60 * 60_000;
+        yield* read(
+          { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
+          keychainLogin(future),
         );
-      expect(yield* read(respond(401, {}))).toMatchObject({ _tag: "Success", success: undefined });
-      expect(yield* read(respond(500, {}))).toMatchObject({ _tag: "Success", success: undefined });
-      expect(yield* read(limited({ "retry-after": "120" }))).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "ClaudeOAuthUsageRateLimited", retryAfterSeconds: 120 },
-      });
-      expect(yield* read(limited({}))).toMatchObject({
-        failure: { retryAfterSeconds: 300 },
-      });
-    }),
-  );
-});
+        yield* read(
+          { configDir: "/Users/kgriset/.claude-work", customConfigDir: true, environment },
+          keychainLogin(future),
+        );
+        const expired = yield* read(
+          { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
+          keychainLogin(0),
+        );
+        yield* read(
+          {
+            configDir: "/Users/kgriset/.claude",
+            customConfigDir: false,
+            environment: { ...environment, CLAUDE_CODE_OAUTH_TOKEN: " env-token " },
+          },
+          refuseSpawns,
+        );
+        // A Keychain without the item reads as signed out.
+        const missing = yield* read(
+          { configDir: "/Users/kgriset/.claude", customConfigDir: false, environment },
+          keychain(() => ({ stdout: "", code: 44 })),
+        );
+        expect(services).toEqual([
+          "Claude Code-credentials",
+          "Claude Code-credentials-4d256fd0",
+          "Claude Code-credentials",
+        ]);
+        expect(tokens).toEqual([
+          "Bearer keychain-token",
+          "Bearer keychain-token",
+          "Bearer env-token",
+        ]);
+        expect([expired, missing]).toEqual([undefined, undefined]);
+      }),
+    );
+
+    it.effect("reads nothing from failed requests and reports a 429's retry delay", () =>
+      Effect.gen(function* () {
+        const { configDir } = yield* writeLogin;
+        const read = (client: HttpClient.HttpClient) =>
+          ClaudeResetCredits.readClaudeOAuthUsage(linuxLogin(configDir), "2.1.0").pipe(
+            Effect.provideService(HostProcess.Platform, "linux"),
+            Effect.provideService(HttpClient.HttpClient, client),
+            Effect.result,
+          );
+        const limited = (headers: Record<string, string>) =>
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response(null, { status: 429, headers })),
+            ),
+          );
+        expect(yield* read(respond(401, {}))).toMatchObject({
+          _tag: "Success",
+          success: undefined,
+        });
+        expect(yield* read(respond(500, {}))).toMatchObject({
+          _tag: "Success",
+          success: undefined,
+        });
+        expect(yield* read(limited({ "retry-after": "120" }))).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "ClaudeOAuthUsageRateLimited", retryAfterSeconds: 120 },
+        });
+        expect(yield* read(limited({}))).toMatchObject({
+          failure: { retryAfterSeconds: 300 },
+        });
+      }),
+    );
+  },
+);
 
 const ClaimBody = Schema.fromJsonString(
   Schema.Struct({ program: Schema.String, grant_id: Schema.String, request_id: Schema.String }),
@@ -328,70 +341,73 @@ const consume = (client: HttpClient.HttpClient, ids = { grantId: "grant_a", requ
     );
   });
 
-effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
-  it.effect("claims the grant for the organization", () =>
-    Effect.gen(function* () {
-      const client = HttpClient.make((request) =>
-        Effect.gen(function* () {
-          expect(request.method).toBe("POST");
-          expect(request.url).toBe(
-            "https://api.anthropic.com/api/organizations/org-1/reset_rate_limits",
-          );
-          expect(request.headers.authorization).toBe("Bearer oauth-token");
-          const body =
-            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
-          expect(yield* decodeClaimBody(body)).toEqual({
-            program: "cedar_ember",
-            grant_id: "grant_a",
-            request_id: "r-1",
-          });
-          return HttpClientResponse.fromWeb(request, Response.json({ result: "reset" }));
-        }).pipe(Effect.orDie),
-      );
-      expect(yield* consume(client)).toMatchObject({ _tag: "Success", success: "reset" });
-    }),
-  );
+effectIt.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "consumeClaudeResetCredit",
+  (it) => {
+    it.effect("claims the grant for the organization", () =>
+      Effect.gen(function* () {
+        const client = HttpClient.make((request) =>
+          Effect.gen(function* () {
+            expect(request.method).toBe("POST");
+            expect(request.url).toBe(
+              "https://api.anthropic.com/api/organizations/org-1/reset_rate_limits",
+            );
+            expect(request.headers.authorization).toBe("Bearer oauth-token");
+            const body =
+              request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+            expect(yield* decodeClaimBody(body)).toEqual({
+              program: "cedar_ember",
+              grant_id: "grant_a",
+              request_id: "r-1",
+            });
+            return HttpClientResponse.fromWeb(request, Response.json({ result: "reset" }));
+          }).pipe(Effect.orDie),
+        );
+        expect(yield* consume(client)).toMatchObject({ _tag: "Success", success: "reset" });
+      }),
+    );
 
-  it.effect("maps each answer to an outcome or a failure", () =>
-    Effect.gen(function* () {
-      for (const [result, outcome] of [
-        ["not_limited", "nothingToReset"],
-        ["already_used", "alreadyRedeemed"],
-        ["ineligible", "noCredit"],
-      ] as const) {
-        expect(yield* consume(respond(200, { result }))).toMatchObject({ success: outcome });
-      }
-      for (const client of [
-        respond(200, { result: "cooldown" }),
-        respond(429, {}),
-        respond(401, {}),
-      ]) {
-        const result = yield* consume(client);
-        expect(result).toMatchObject({ _tag: "Failure" });
-        if (result._tag === "Failure") {
-          expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(result.failure)).toBe(true);
+    it.effect("maps each answer to an outcome or a failure", () =>
+      Effect.gen(function* () {
+        for (const [result, outcome] of [
+          ["not_limited", "nothingToReset"],
+          ["already_used", "alreadyRedeemed"],
+          ["ineligible", "noCredit"],
+        ] as const) {
+          expect(yield* consume(respond(200, { result }))).toMatchObject({ success: outcome });
         }
-      }
-      for (const client of [respond(500, {}), respond(200, { result: "unavailable" })]) {
-        const unanswered = yield* consume(client);
-        expect(unanswered).toMatchObject({ _tag: "Failure" });
-        if (unanswered._tag === "Failure") {
-          expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(unanswered.failure)).toBe(
-            false,
-          );
+        for (const client of [
+          respond(200, { result: "cooldown" }),
+          respond(429, {}),
+          respond(401, {}),
+        ]) {
+          const result = yield* consume(client);
+          expect(result).toMatchObject({ _tag: "Failure" });
+          if (result._tag === "Failure") {
+            expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(result.failure)).toBe(true);
+          }
         }
-      }
-    }),
-  );
+        for (const client of [respond(500, {}), respond(200, { result: "unavailable" })]) {
+          const unanswered = yield* consume(client);
+          expect(unanswered).toMatchObject({ _tag: "Failure" });
+          if (unanswered._tag === "Failure") {
+            expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(unanswered.failure)).toBe(
+              false,
+            );
+          }
+        }
+      }),
+    );
 
-  it.effect("refuses malformed ids without sending anything", () =>
-    Effect.gen(function* () {
-      for (const ids of [
-        { grantId: "Bad Grant", requestId: "r-1" },
-        { grantId: "grant_a", requestId: "has space" },
-      ]) {
-        expect(yield* consume(refuseRequests, ids)).toMatchObject({ _tag: "Failure" });
-      }
-    }),
-  );
-});
+    it.effect("refuses malformed ids without sending anything", () =>
+      Effect.gen(function* () {
+        for (const ids of [
+          { grantId: "Bad Grant", requestId: "r-1" },
+          { grantId: "grant_a", requestId: "has space" },
+        ]) {
+          expect(yield* consume(refuseRequests, ids)).toMatchObject({ _tag: "Failure" });
+        }
+      }),
+    );
+  },
+);
