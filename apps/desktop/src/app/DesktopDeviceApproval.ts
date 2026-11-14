@@ -10,7 +10,8 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Exit from "effect/Exit";
@@ -161,7 +162,8 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
   const fs = yield* FileSystem.FileSystem;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const path = environment.path;
   const operations = yield* FiberMap.make<string, unknown, DesktopDeviceApprovalError>();
@@ -182,7 +184,7 @@ export const make = Effect.gen(function* () {
       const directory = path.join(yield* identity.resolveUserDataPath, "device-approval");
       yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
       const name = Base64Url.encode(
-        yield* crypto.digest("SHA-256", new TextEncoder().encode(environmentId)),
+        yield* crypto.digest(Digest.sha256, new TextEncoder().encode(environmentId)),
       );
       return path.join(directory, `${name}.json`);
     },
@@ -235,7 +237,7 @@ export const make = Effect.gen(function* () {
       const spki = decodeElevationBase64Url(publicKey);
       return spki === null
         ? null
-        : elevationKeyIdFromSpkiSha256(yield* crypto.digest("SHA-256", spki));
+        : elevationKeyIdFromSpkiSha256(yield* crypto.digest(Digest.sha256, spki));
     },
     Effect.orElseSucceed(() => null),
   );
@@ -298,9 +300,7 @@ export const make = Effect.gen(function* () {
           return yield* fail("Couldn't make a key on this Mac.");
         }
         // Like the phone, setup proves the person here can use the new key before anything changes.
-        const challenge = yield* crypto
-          .randomBytes(32)
-          .pipe(Effect.mapError(() => fail("Couldn't make a key on this Mac.")));
+        const challenge = yield* random.randomBytes(32);
         const signature = yield* confirm(pending, challenge, "setup");
         return signature === null ? null : { publicKey: result.publicKey };
       }),

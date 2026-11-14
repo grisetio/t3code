@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -5,9 +6,10 @@ import {
   elevationKeyIdFromSpkiSha256,
   type ElevationPayload,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -85,9 +87,12 @@ const fakeHelper = (
         const stdin = Stream.isStream(options.stdin)
           ? Option.getOrNull(yield* Stream.runHead(options.stdin).pipe(Effect.orDie))
           : null;
-        const call = { args, stdin: stdin === null ? null : new TextDecoder().decode(stdin) };
+        const call = {
+          args: args.map(String),
+          stdin: stdin === null ? null : new TextDecoder().decode(stdin),
+        };
         calls.push(call);
-        yield* Effect.addFinalizer(() => Effect.sync(() => closed.push(args[0] ?? "")));
+        yield* Effect.addFinalizer(() => Effect.sync(() => closed.push(call.args[0] ?? "")));
         const out = yield* reply(call).pipe(Effect.provideService(FileSystem.FileSystem, fs));
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
@@ -134,8 +139,8 @@ const approvalIn = (helper: ReturnType<typeof fakeHelper>) =>
       } as unknown as DesktopAppIdentity.DesktopAppIdentity["Service"]),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, yield* helper.spawner),
     );
-    const crypto = yield* Crypto.Crypto;
-    const keyId = elevationKeyIdFromSpkiSha256(yield* crypto.digest("SHA-256", SPKI));
+    const crypto = yield* Digest.Digest;
+    const keyId = elevationKeyIdFromSpkiSha256(yield* crypto.digest(Digest.sha256, SPKI));
     const keyDirectory = path.join(userData, "device-approval");
     const keyFiles = fs
       .readDirectory(keyDirectory)
@@ -207,7 +212,7 @@ it("asks to remove this Mac only for the revoke of its own key", () => {
   expect(DesktopDeviceApproval.signingPurpose(payloadFor([own], ["/bin/ls"]), own)).toBe("approve");
 });
 
-it.layer(NodeServices.layer)("DesktopDeviceApproval", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("DesktopDeviceApproval", (it) => {
   it.effect("sets up a key only after Touch ID confirms it, then reports it", () =>
     Effect.gen(function* () {
       const helper = fakeHelper((call) =>
