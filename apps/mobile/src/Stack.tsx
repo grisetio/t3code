@@ -219,7 +219,7 @@ const SETTINGS_SCREENS = {
   SettingsDeviceApproval: createNativeStackScreen({
     screen: SettingsDeviceApprovalRouteScreen,
     linking: "settings/device-approval",
-    options: { ...SETTINGS_PAGE_OPTIONS, title: "Device approval" },
+    options: settingsPage("Device approval"),
   }),
   SettingsNotifications: createNativeStackScreen({
     screen: SettingsNotificationsRouteScreen,

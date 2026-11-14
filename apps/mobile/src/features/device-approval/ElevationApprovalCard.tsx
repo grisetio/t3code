@@ -37,6 +37,7 @@ import {
 } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
@@ -66,7 +67,10 @@ import { rememberDeniedHere } from "./elevationApprovalTarget";
 import { useComparisonCode } from "./ElevationRequestDetails";
 
 /** A request this phone can't sign; the message says why. */
-class BlockedApproval extends Error {}
+class BlockedApproval extends Schema.TaggedError<BlockedApproval>()("BlockedApproval", {
+  message: Schema.String,
+}) {}
+const isBlockedApproval = Schema.is(BlockedApproval);
 
 /** Sends one answer at a time and keeps its failure for display. */
 function useElevationRespond(environmentId: EnvironmentId) {
@@ -96,7 +100,7 @@ function useElevationRespond(environmentId: EnvironmentId) {
     try {
       sent = await send();
     } catch (cause) {
-      if (cause instanceof BlockedApproval) {
+      if (isBlockedApproval(cause)) {
         setError(cause.message);
       } else {
         const code = deviceApprovalSignerErrorCode(cause);
@@ -431,9 +435,9 @@ export function ElevationApprovalCard(props: {
         headline,
       });
       if (!prepared.ok) {
-        throw new BlockedApproval(
-          elevationApprovalBlockerMessage(prepared.blocker, context.machine),
-        );
+        throw new BlockedApproval({
+          message: elevationApprovalBlockerMessage(prepared.blocker, context.machine),
+        });
       }
       const { signing } = prepared;
       try {

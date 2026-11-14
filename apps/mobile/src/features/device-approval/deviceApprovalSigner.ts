@@ -1,20 +1,23 @@
 import { ELEVATION_CANT_APPROVE_HERE } from "@t3tools/client-runtime/elevation";
+import * as Schema from "effect/Schema";
 import { requireOptionalNativeModule } from "expo";
 import { Platform } from "react-native";
 
 // The Android signer module (modules/t3-device-approval). It is optional: builds
 // without it, and iOS, report `unavailable` and the app only shows requests.
 
-export type DeviceApprovalErrorCode =
-  | "unavailable"
-  | "no_biometrics"
-  | "cancelled"
+const DeviceApprovalErrorCode = Schema.Literals([
+  "unavailable",
+  "no_biometrics",
+  "cancelled",
   /** The user backed out of the prompt: its negative button or Back. */
-  | "declined"
-  | "lockout"
-  | "key_invalidated"
-  | "not_found"
-  | "failed";
+  "declined",
+  "lockout",
+  "key_invalidated",
+  "not_found",
+  "failed",
+]);
+export type DeviceApprovalErrorCode = typeof DeviceApprovalErrorCode.Type;
 
 export interface DeviceApprovalAvailability {
   readonly available: boolean;
@@ -59,35 +62,25 @@ const native =
     ? requireOptionalNativeModule<NativeDeviceApproval>("T3DeviceApproval")
     : null;
 
-const ERROR_CODES: ReadonlySet<string> = new Set<DeviceApprovalErrorCode>([
-  "unavailable",
-  "no_biometrics",
-  "cancelled",
-  "declined",
-  "lockout",
-  "key_invalidated",
-  "not_found",
-  "failed",
-]);
+const isErrorCode = Schema.is(DeviceApprovalErrorCode);
 
-export class DeviceApprovalSignerError extends Error {
-  constructor(readonly code: DeviceApprovalErrorCode) {
-    super(`Device approval signer failed: ${code}`);
-    this.name = "DeviceApprovalSignerError";
+export class DeviceApprovalSignerError extends Schema.TaggedError<DeviceApprovalSignerError>()(
+  "DeviceApprovalSignerError",
+  { code: DeviceApprovalErrorCode },
+) {
+  override get message(): string {
+    return `Device approval signer failed: ${this.code}`;
   }
 }
+const isSignerError = Schema.is(DeviceApprovalSignerError);
 
 async function call<A>(run: (module: NativeDeviceApproval) => Promise<A>): Promise<A> {
-  if (native === null) throw new DeviceApprovalSignerError("unavailable");
+  if (native === null) throw new DeviceApprovalSignerError({ code: "unavailable" });
   try {
     return await run(native);
   } catch (error) {
     const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
-    throw new DeviceApprovalSignerError(
-      typeof code === "string" && ERROR_CODES.has(code)
-        ? (code as DeviceApprovalErrorCode)
-        : "failed",
-    );
+    throw new DeviceApprovalSignerError({ code: isErrorCode(code) ? code : "failed" });
   }
 }
 
@@ -109,7 +102,7 @@ export const deviceApprovalSigner = {
 };
 
 export function deviceApprovalSignerErrorCode(error: unknown): DeviceApprovalErrorCode {
-  return error instanceof DeviceApprovalSignerError ? error.code : "failed";
+  return isSignerError(error) ? error.code : "failed";
 }
 
 const SIGNER_ERROR_MESSAGES: Record<DeviceApprovalErrorCode, string> = {

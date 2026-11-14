@@ -34,7 +34,7 @@ export async function createPhoneKey(
   const alias = current?.alias === base ? `${base}~2` : base;
   const key = await deviceApprovalSigner.generateKey(alias, challenge);
   const [leaf, ...rest] = key.attestationChain;
-  if (leaf === undefined) throw new DeviceApprovalSignerError("failed");
+  if (leaf === undefined) throw new DeviceApprovalSignerError({ code: "failed" });
   const label = deviceLabel();
   const publicKey = Base64Url.decode(key.publicKeySpki);
   return {
