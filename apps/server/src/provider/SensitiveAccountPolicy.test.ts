@@ -83,6 +83,13 @@ it.layer(layerTest)("SensitiveAccountPolicy", (it) => {
         instanceId: "claudeAgent",
         parentThreadId: "work-thread",
       });
+      // A side chat forked from the delegated task: the lock passes down every level.
+      yield* insertThread({
+        threadId: "work-side-chat",
+        projectId: "project",
+        instanceId: "claudeAgent",
+        parentThreadId: "work-child",
+      });
       yield* insertThread({
         threadId: "personal-thread",
         projectId: "project",
@@ -97,7 +104,7 @@ it.layer(layerTest)("SensitiveAccountPolicy", (it) => {
       assert.deepStrictEqual([...(yield* unlocked.lockForPath(worktree))], []);
 
       const policy = yield* SensitiveAccountPolicy.make(new Set(["claudeWork"]));
-      for (const threadId of ["work-thread", "work-child"]) {
+      for (const threadId of ["work-thread", "work-child", "work-side-chat"]) {
         assert.deepStrictEqual(
           [...(yield* policy.lockForThread(ThreadId.make(threadId)))],
           ["claudeWork"],

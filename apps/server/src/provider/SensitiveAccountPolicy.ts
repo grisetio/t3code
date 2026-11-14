@@ -4,6 +4,7 @@ import type {
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -134,8 +135,8 @@ export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
 
 export const layer = Layer.effect(
   SensitiveAccountPolicy,
-  Effect.suspend(() =>
-    make(parseSensitiveInstanceIds(process.env[SENSITIVE_PROVIDER_INSTANCES_ENV])),
+  Effect.flatMap(HostProcess.Environment, (env) =>
+    make(parseSensitiveInstanceIds(env[SENSITIVE_PROVIDER_INSTANCES_ENV])),
   ),
 );
 

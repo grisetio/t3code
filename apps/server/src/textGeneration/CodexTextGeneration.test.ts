@@ -563,142 +563,145 @@ const PREFLIGHT_CASES: ReadonlyArray<{
   { primaryState: "ready", locked: "claude_work", lockedBy: "path", textGenerator: true },
 ];
 
-it.effect.each(PREFLIGHT_CASES)("text generation preflight: $primaryState locked=$locked", (preflight) =>
-  Effect.gen(function* () {
-    const { primaryState, locked } = preflight;
-    const lock = new Set(locked === null ? [] : [ProviderInstanceId.make(locked)]);
-    const primary = ProviderInstanceId.make("codex");
-    const fallback = ProviderInstanceId.make("claude_work");
-    const projectId = ProjectId.make("project-a");
-    const selection = {
-      instanceId: primary,
-      model: "chat-model",
-      options: [{ id: "effort", value: "high" }],
-    };
-    const calls: ModelSelection[] = [];
-    const instances: ProviderInstance[] = [primary, fallback].map((instanceId) => {
-      const driver = ProviderDriverKind.make(instanceId === primary ? "codex" : "claudeAgent");
-      const snapshot: ServerProvider = {
-        instanceId,
-        driver,
-        enabled: true,
-        installed: true,
-        status: "ready",
-        auth: { status: "authenticated" },
-        version: null,
-        checkedAt: "1970-01-01T00:00:00Z",
-        models: [],
-        slashCommands: [],
-        skills: [],
-        ...(primaryState === "pending" && instanceId === primary
-          ? { installed: false, status: "warning", auth: { status: "unknown" } }
-          : {}),
-        ...(primaryState.startsWith("not installed") && instanceId === primary
-          ? { installed: false, status: "error", auth: { status: "unknown" } }
-          : {}),
-        ...(primaryState.startsWith("signed out") && instanceId === primary
-          ? { status: "error", auth: { status: "unauthenticated" } }
-          : {}),
-        ...(primaryState === "signed out, fallback failed" && instanceId === fallback
-          ? { status: "error", auth: { status: "unknown" } }
-          : {}),
-        ...(primaryState === "exhausted" && instanceId === primary
-          ? {
-              usageLimits: {
-                checkedAt: "1970-01-01T00:00:00Z",
-                windows: [{ id: "session", kind: "session", label: "Session", usedPercent: 100 }],
-              },
-            }
-          : {}),
+it.effect.each(PREFLIGHT_CASES)(
+  "text generation preflight: $primaryState locked=$locked",
+  (preflight) =>
+    Effect.gen(function* () {
+      const { primaryState, locked } = preflight;
+      const lock = new Set(locked === null ? [] : [ProviderInstanceId.make(locked)]);
+      const primary = ProviderInstanceId.make("codex");
+      const fallback = ProviderInstanceId.make("claude_work");
+      const projectId = ProjectId.make("project-a");
+      const selection = {
+        instanceId: primary,
+        model: "chat-model",
+        options: [{ id: "effort", value: "high" }],
       };
-      return {
-        instanceId,
-        driverKind: driver,
-        continuationIdentity: { driverKind: driver, continuationKey: instanceId },
-        displayName: undefined,
-        enabled: true,
-        snapshot: { getSnapshot: Effect.succeed(snapshot) } as ProviderInstance["snapshot"],
-        orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-        textGeneration: TextGeneration.TextGeneration.of({
-          generateCommitMessage: () => Effect.die("unused"),
-          generatePrContent: () => Effect.die("unused"),
-          generateBranchName: () => Effect.die("unused"),
-          generateReviewGuide: () => Effect.die("unused"),
-          generateTranscriptionPostProcessing: () => Effect.die("unused"),
-          generateThreadTitle: (input) =>
-            Effect.sync(() => {
-              calls.push(input.modelSelection);
-              return { title: "Generated title" };
+      const calls: ModelSelection[] = [];
+      const instances: ProviderInstance[] = [primary, fallback].map((instanceId) => {
+        const driver = ProviderDriverKind.make(instanceId === primary ? "codex" : "claudeAgent");
+        const snapshot: ServerProvider = {
+          instanceId,
+          driver,
+          enabled: true,
+          installed: true,
+          status: "ready",
+          auth: { status: "authenticated" },
+          version: null,
+          checkedAt: "1970-01-01T00:00:00Z",
+          models: [],
+          slashCommands: [],
+          skills: [],
+          ...(primaryState === "pending" && instanceId === primary
+            ? { installed: false, status: "warning", auth: { status: "unknown" } }
+            : {}),
+          ...(primaryState.startsWith("not installed") && instanceId === primary
+            ? { installed: false, status: "error", auth: { status: "unknown" } }
+            : {}),
+          ...(primaryState.startsWith("signed out") && instanceId === primary
+            ? { status: "error", auth: { status: "unauthenticated" } }
+            : {}),
+          ...(primaryState === "signed out, fallback failed" && instanceId === fallback
+            ? { status: "error", auth: { status: "unknown" } }
+            : {}),
+          ...(primaryState === "exhausted" && instanceId === primary
+            ? {
+                usageLimits: {
+                  checkedAt: "1970-01-01T00:00:00Z",
+                  windows: [{ id: "session", kind: "session", label: "Session", usedPercent: 100 }],
+                },
+              }
+            : {}),
+        };
+        return {
+          instanceId,
+          driverKind: driver,
+          continuationIdentity: { driverKind: driver, continuationKey: instanceId },
+          displayName: undefined,
+          enabled: true,
+          snapshot: { getSnapshot: Effect.succeed(snapshot) } as ProviderInstance["snapshot"],
+          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          textGeneration: TextGeneration.TextGeneration.of({
+            generateCommitMessage: () => Effect.die("unused"),
+            generatePrContent: () => Effect.die("unused"),
+            generateBranchName: () => Effect.die("unused"),
+            generateReviewGuide: () => Effect.die("unused"),
+            generateTranscriptionPostProcessing: () => Effect.die("unused"),
+            generateThreadTitle: (input) =>
+              Effect.sync(() => {
+                calls.push(input.modelSelection);
+                return { title: "Generated title" };
+              }),
+          }),
+        };
+      });
+      const service = yield* TextGeneration.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+              listInstances: Effect.succeed(instances),
+              getInstance: (id) =>
+                Effect.succeed(instances.find((instance) => instance.instanceId === id)),
             }),
-        }),
-      };
-    });
-    const service = yield* TextGeneration.make.pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-            listInstances: Effect.succeed(instances),
-            getInstance: (id) =>
-              Effect.succeed(instances.find((instance) => instance.instanceId === id)),
-          }),
-          ServerSettings.layerTest({
-            providerInstances: {
-              [fallback]: { driver: ProviderDriverKind.make("claudeAgent"), config: {} },
-            },
-            ...(primaryState === "not installed, fallback disabled for project"
-              ? {
-                  projectSettingsOverrides: {
-                    [projectId]: { providerInstances: { [fallback]: { enabled: false } } },
-                  },
-                }
-              : {}),
-          }),
-          Layer.mock(TextGenerators.TextGenerators)({
-            runner: () =>
-              Effect.succeed(
-                preflight.textGenerator === true
-                  ? () => Effect.die("a locked thread's text must not reach a model API")
-                  : undefined,
-              ),
-          }),
-          Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
-            resolveLink: () => Effect.die("unused"),
-          }),
-          Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
-            lockForPath: () => Effect.succeed(preflight.lockedBy === "path" ? lock : new Set()),
-            lockForThread: () => Effect.succeed(preflight.lockedBy === "thread" ? lock : new Set()),
-          }),
+            ServerSettings.layerTest({
+              providerInstances: {
+                [fallback]: { driver: ProviderDriverKind.make("claudeAgent"), config: {} },
+              },
+              ...(primaryState === "not installed, fallback disabled for project"
+                ? {
+                    projectSettingsOverrides: {
+                      [projectId]: { providerInstances: { [fallback]: { enabled: false } } },
+                    },
+                  }
+                : {}),
+            }),
+            Layer.mock(TextGenerators.TextGenerators)({
+              runner: () =>
+                Effect.succeed(
+                  preflight.textGenerator === true
+                    ? () => Effect.die("a locked thread's text must not reach a model API")
+                    : undefined,
+                ),
+            }),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => Effect.die("unused"),
+            }),
+            Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
+              lockForPath: () => Effect.succeed(preflight.lockedBy === "path" ? lock : new Set()),
+              lockForThread: () =>
+                Effect.succeed(preflight.lockedBy === "thread" ? lock : new Set()),
+            }),
+          ),
         ),
-      ),
-    );
-    expect(
-      yield* service.generateThreadTitle({
-        cwd: "/tmp",
-        threadId: ThreadId.make("thread-text-generation"),
-        message: "hello",
-        linkedContext: "",
-        modelSelection: selection,
-        projectId,
-      }),
-    ).toEqual({ title: "Generated title" });
-    // A lock moves the text onto its account and keeps it there, whatever the account's state.
-    const staysOnSelection =
-      locked === null
-        ? primaryState === "ready" ||
-          primaryState === "pending" ||
-          primaryState === "not installed, fallback disabled for project" ||
-          primaryState === "signed out, fallback failed"
-        : locked === primary;
-    expect(calls).toEqual([
-      staysOnSelection
-        ? selection
-        : {
-            instanceId: fallback,
-            model:
-              DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[ProviderDriverKind.make("claudeAgent")],
-          },
-    ]);
-  }),
+      );
+      expect(
+        yield* service.generateThreadTitle({
+          cwd: "/tmp",
+          threadId: ThreadId.make("thread-text-generation"),
+          message: "hello",
+          linkedContext: "",
+          modelSelection: selection,
+          projectId,
+        }),
+      ).toEqual({ title: "Generated title" });
+      // A lock moves the text onto its account and keeps it there, whatever the account's state.
+      const staysOnSelection =
+        locked === null
+          ? primaryState === "ready" ||
+            primaryState === "pending" ||
+            primaryState === "not installed, fallback disabled for project" ||
+            primaryState === "signed out, fallback failed"
+          : locked === primary;
+      expect(calls).toEqual([
+        staysOnSelection
+          ? selection
+          : {
+              instanceId: fallback,
+              model:
+                DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[ProviderDriverKind.make("claudeAgent")],
+            },
+      ]);
+    }),
 );
 
 it.effect(
