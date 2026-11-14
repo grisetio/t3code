@@ -128,6 +128,7 @@ function timeline(item: ElevationRequestItem, foldsAfter = false) {
           isCompacting: false,
           isRevertingCheckpoint: false,
           activeTurnInProgress: true,
+          liveAnswerPreview: null,
           awaitingUser: false,
           isPreparingWorktree: false,
           latestRunId: runId,

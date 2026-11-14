@@ -9,6 +9,7 @@ vi.mock("./useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [
     { id: "theme", title: "Theme", to: "/settings/appearance" },
   ],
+  useHasDeviceApprovalEnvironment: () => false,
 }));
 
 it("ignores composing keys in the search", async () => {
