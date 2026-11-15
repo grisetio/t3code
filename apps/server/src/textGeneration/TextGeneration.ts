@@ -110,9 +110,30 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
+    // Without a lock, a thread on a self text generation instance (a local model, say) has its
+    // helper text written there too, the same way a lock would keep it, but only while it runs there.
+    const own =
+      lock.size > 0
+        ? lock
+        : yield* (
+            threadId === undefined
+              ? sensitiveAccounts.textGenerationForPath(cwd)
+              : sensitiveAccounts.textGenerationForThread(threadId)
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new TextGenerationError({
+                  operation,
+                  detail: "Could not check which instance writes this thread's text.",
+                  cause,
+                }),
+            ),
+          );
+    const restricted = lock.size > 0 || own.size > 0;
     // A text generator is a model API outside every account, so a locked thread never uses one.
-    const textGenerator =
-      lock.size > 0 ? undefined : yield* textGenerators.runner(selection.instanceId);
+    const textGenerator = restricted
+      ? undefined
+      : yield* textGenerators.runner(selection.instanceId);
     // A review guide reaches a text generator only through a fallback; it needs an agent instead.
     const textGeneratorId = selection.instanceId;
     const textGeneratorCannotRun =
@@ -128,13 +149,16 @@ export const make = Effect.gen(function* () {
         Effect.forEach(instances, (instance) => instance.snapshot.getSnapshot),
       ),
     );
-    const allowed = SensitiveAccountPolicy.lockedSelection(lock, selection, snapshots, (provider) =>
+    const allowed = SensitiveAccountPolicy.lockedSelection(own, selection, snapshots, (provider) =>
       defaultTextGenerationModel(provider.driver),
     );
     if (allowed === null) {
       return yield* new TextGenerationError({
         operation,
-        detail: `This thread can only run on ${[...lock].join(", ")}, which is not available.`,
+        detail:
+          lock.size > 0
+            ? `This thread can only run on ${[...lock].join(", ")}, which is not available.`
+            : `This thread's text is written on ${[...own].join(", ")}, which is not available.`,
       });
     }
     selection = allowed;
@@ -164,7 +188,7 @@ export const make = Effect.gen(function* () {
             const provider = snapshots.find((candidate) => candidate.instanceId === instanceId);
             return (
               instanceId !== selection.instanceId &&
-              (lock.size === 0 || lock.has(instanceId)) &&
+              (!restricted || own.has(instanceId)) &&
               provider?.enabled === true &&
               resolveProjectProviderInstanceEnabled(settings, projectId ?? null, instanceId) &&
               provider.installed &&

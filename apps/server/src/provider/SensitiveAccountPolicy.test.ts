@@ -129,4 +129,71 @@ it.layer(layerTest)("SensitiveAccountPolicy", (it) => {
       );
     }),
   );
+
+  it.effect(
+    "writes helper text on a self text generation instance only while the thread runs there",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const localTree = path.join(root, "worktrees", "local");
+        const sharedTree = path.join(root, "worktrees", "shared");
+        yield* fs.makeDirectory(path.join(localTree, "src"), { recursive: true });
+        yield* fs.makeDirectory(sharedTree, { recursive: true });
+
+        yield* insertProject("self-project", path.join(root, "self-project"));
+        yield* insertThread({
+          threadId: "local-thread",
+          projectId: "self-project",
+          instanceId: "claudeLocal",
+          worktreePath: localTree,
+        });
+        // Ran on the local model, then switched to the cloud: no lock, its text follows it.
+        yield* insertThread({
+          threadId: "switched-thread",
+          projectId: "self-project",
+          instanceId: "claudeAgent",
+          runInstanceIds: ["claudeLocal"],
+        });
+        yield* insertThread({
+          threadId: "shared-local",
+          projectId: "self-project",
+          instanceId: "claudeLocal",
+          worktreePath: sharedTree,
+        });
+        yield* insertThread({
+          threadId: "shared-cloud",
+          projectId: "self-project",
+          instanceId: "claudeAgent",
+          worktreePath: sharedTree,
+        });
+
+        const off = yield* SensitiveAccountPolicy.make(new Set());
+        assert.deepStrictEqual(
+          [...(yield* off.textGenerationForThread(ThreadId.make("local-thread")))],
+          [],
+        );
+
+        const policy = yield* SensitiveAccountPolicy.make(new Set(), new Set(["claudeLocal"]));
+        assert.deepStrictEqual(
+          [...(yield* policy.textGenerationForThread(ThreadId.make("local-thread")))],
+          ["claudeLocal"],
+        );
+        assert.deepStrictEqual(
+          [...(yield* policy.textGenerationForThread(ThreadId.make("switched-thread")))],
+          [],
+        );
+        assert.deepStrictEqual(
+          [...(yield* policy.lockForThread(ThreadId.make("local-thread")))],
+          [],
+        );
+        assert.deepStrictEqual(
+          [...(yield* policy.textGenerationForPath(path.join(localTree, "src")))],
+          ["claudeLocal"],
+        );
+        assert.deepStrictEqual([...(yield* policy.textGenerationForPath(sharedTree))], []);
+        assert.deepStrictEqual([...(yield* policy.textGenerationForPath(root))], []);
+      }),
+  );
 });

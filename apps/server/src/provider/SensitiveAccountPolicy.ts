@@ -13,6 +13,9 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 const SENSITIVE_PROVIDER_INSTANCES_ENV = "T3CODE_SENSITIVE_PROVIDER_INSTANCES";
+/** Instances that also write their own threads' helper text (titles, commit messages, ...), without a lock. */
+const SELF_TEXT_GENERATION_PROVIDER_INSTANCES_ENV =
+  "T3CODE_SELF_TEXT_GENERATION_PROVIDER_INSTANCES";
 
 export class SensitiveAccountPolicyError extends Schema.TaggedError<SensitiveAccountPolicyError>()(
   "SensitiveAccountPolicyError",
@@ -40,6 +43,20 @@ export interface SensitiveAccountPolicyShape {
   readonly lockForPath: (
     cwd: string,
   ) => Effect.Effect<SensitiveAccountLock, SensitiveAccountPolicyError>;
+  /**
+   * The instance that writes this thread's helper text: the thread's current instance when it is
+   * one of the self text generation instances, else none. It follows the thread when it switches.
+   */
+  readonly textGenerationForThread: (
+    threadId: ThreadId,
+  ) => Effect.Effect<SensitiveAccountLock, SensitiveAccountPolicyError>;
+  /**
+   * The same for a call that names only a directory: the instances of the threads whose worktree
+   * contains `cwd`, when every one of them is a self text generation instance, else none.
+   */
+  readonly textGenerationForPath: (
+    cwd: string,
+  ) => Effect.Effect<SensitiveAccountLock, SensitiveAccountPolicyError>;
 }
 
 export class SensitiveAccountPolicy extends Context.Service<
@@ -61,6 +78,7 @@ const EMPTY_LOCK: SensitiveAccountLock = new Set();
 /** @public */
 export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
   sensitiveInstanceIds: ReadonlySet<string>,
+  selfTextGenerationInstanceIds: ReadonlySet<string> = new Set(),
 ) {
   const sql = yield* SqlClient.SqlClient;
   const path = yield* Path.Path;
@@ -130,13 +148,71 @@ export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
     return lock as SensitiveAccountLock;
   });
 
-  return SensitiveAccountPolicy.of({ lockForThread, lockForPath });
+  const textGenerationForThread = Effect.fn("SensitiveAccountPolicy.textGenerationForThread")(
+    function* (threadId: ThreadId) {
+      if (selfTextGenerationInstanceIds.size === 0) return EMPTY_LOCK;
+      const rows = yield* sql<{ readonly instanceId: string | null }>`
+        SELECT provider_instance_id AS "instanceId"
+        FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
+      `.pipe(
+        Effect.mapError(
+          (cause) => new SensitiveAccountPolicyError({ operation: `thread ${threadId}`, cause }),
+        ),
+      );
+      const instanceId = rows[0]?.instanceId;
+      return instanceId != null && selfTextGenerationInstanceIds.has(instanceId)
+        ? (new Set([instanceId as ProviderInstanceId]) as SensitiveAccountLock)
+        : EMPTY_LOCK;
+    },
+  );
+
+  const textGenerationForPath = Effect.fn("SensitiveAccountPolicy.textGenerationForPath")(
+    function* (cwd: string) {
+      if (selfTextGenerationInstanceIds.size === 0) return EMPTY_LOCK;
+      const rows = yield* sql<{ readonly instanceId: string | null; readonly path: string | null }>`
+        SELECT provider_instance_id AS "instanceId",
+          json_extract(payload_json, '$.worktreePath') AS "path"
+        FROM orchestration_v2_projection_threads
+        WHERE json_extract(payload_json, '$.worktreePath') IS NOT NULL
+      `.pipe(
+        Effect.mapError(
+          (cause) => new SensitiveAccountPolicyError({ operation: `path ${cwd}`, cause }),
+        ),
+      );
+      const target = path.resolve(cwd);
+      const owners = rows.filter(
+        (row) => row.path !== null && row.path !== "" && isInside(target, path.resolve(row.path)),
+      );
+      // A worktree shared with a thread on another instance keeps the configured model.
+      if (
+        owners.length === 0 ||
+        !owners.every(
+          (row) => row.instanceId !== null && selfTextGenerationInstanceIds.has(row.instanceId),
+        )
+      ) {
+        return EMPTY_LOCK;
+      }
+      return new Set(
+        owners.map((row) => row.instanceId as ProviderInstanceId),
+      ) as SensitiveAccountLock;
+    },
+  );
+
+  return SensitiveAccountPolicy.of({
+    lockForThread,
+    lockForPath,
+    textGenerationForThread,
+    textGenerationForPath,
+  });
 });
 
 export const layer = Layer.effect(
   SensitiveAccountPolicy,
   Effect.flatMap(HostProcess.Environment, (env) =>
-    make(parseSensitiveInstanceIds(env[SENSITIVE_PROVIDER_INSTANCES_ENV])),
+    make(
+      parseSensitiveInstanceIds(env[SENSITIVE_PROVIDER_INSTANCES_ENV]),
+      parseSensitiveInstanceIds(env[SELF_TEXT_GENERATION_PROVIDER_INSTANCES_ENV]),
+    ),
   ),
 );
 

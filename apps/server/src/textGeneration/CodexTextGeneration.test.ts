@@ -556,15 +556,26 @@ const PREFLIGHT_CASES: ReadonlyArray<{
   readonly lockedBy?: "thread" | "path";
   /** The selection also names a configured model API. */
   readonly textGenerator?: boolean;
+  /** `locked` is the thread's self text generation instance instead: no lock, the same routing. */
+  readonly self?: boolean;
 }> = [
   ...PREFLIGHT_PRIMARY_STATES.map((primaryState) => ({ primaryState, locked: null })),
   { primaryState: "ready", locked: "claude_work", lockedBy: "thread" },
   { primaryState: "exhausted", locked: "codex", lockedBy: "thread" },
   { primaryState: "ready", locked: "claude_work", lockedBy: "path", textGenerator: true },
+  { primaryState: "ready", locked: "claude_work", lockedBy: "thread", self: true },
+  { primaryState: "exhausted", locked: "codex", lockedBy: "thread", self: true },
+  {
+    primaryState: "ready",
+    locked: "claude_work",
+    lockedBy: "thread",
+    textGenerator: true,
+    self: true,
+  },
 ];
 
 it.effect.each(PREFLIGHT_CASES)(
-  "text generation preflight: $primaryState locked=$locked",
+  "text generation preflight: $primaryState locked=$locked self=$self",
   (preflight) =>
     Effect.gen(function* () {
       const { primaryState, locked } = preflight;
@@ -667,9 +678,18 @@ it.effect.each(PREFLIGHT_CASES)(
               resolveLink: () => Effect.die("unused"),
             }),
             Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
-              lockForPath: () => Effect.succeed(preflight.lockedBy === "path" ? lock : new Set()),
+              lockForPath: () =>
+                Effect.succeed(preflight.lockedBy === "path" && !preflight.self ? lock : new Set()),
               lockForThread: () =>
-                Effect.succeed(preflight.lockedBy === "thread" ? lock : new Set()),
+                Effect.succeed(
+                  preflight.lockedBy === "thread" && !preflight.self ? lock : new Set(),
+                ),
+              textGenerationForPath: () =>
+                Effect.succeed(preflight.lockedBy === "path" && preflight.self ? lock : new Set()),
+              textGenerationForThread: () =>
+                Effect.succeed(
+                  preflight.lockedBy === "thread" && preflight.self ? lock : new Set(),
+                ),
             }),
           ),
         ),
@@ -770,6 +790,8 @@ it.effect(
               Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
                 lockForPath: () => Effect.succeed(new Set()),
                 lockForThread: () => Effect.succeed(new Set()),
+                textGenerationForPath: () => Effect.succeed(new Set()),
+                textGenerationForThread: () => Effect.succeed(new Set()),
               }),
             ),
           ),
