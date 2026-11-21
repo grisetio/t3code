@@ -83,24 +83,40 @@ export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
   const sql = yield* SqlClient.SqlClient;
   const path = yield* Path.Path;
 
-  // A thread stays locked after switching instance, and passes its lock to the forks and
-  // delegated tasks started from it, which carry its context.
+  // A thread stays locked after an agent or the server moves it to another instance, and
+  // passes its lock to the forks and delegated tasks started from it, which carry its context.
+  // A turn the user sends from a client on another instance hands the thread off and releases
+  // it until it runs on a sensitive instance again.
   const lockedThreads = (ids: ReadonlyArray<string>) => sql`
     WITH RECURSIVE used AS (
-      SELECT thread_id, provider_instance_id AS instance_id
+      SELECT thread_id, provider_instance_id AS instance_id, 0 AS ordinal
       FROM orchestration_v2_projection_threads
       WHERE ${sql.in("provider_instance_id", ids)}
       UNION
-      SELECT thread_id, provider_instance_id AS instance_id
+      SELECT thread_id, provider_instance_id AS instance_id, ordinal
       FROM orchestration_v2_projection_runs
       WHERE ${sql.in("provider_instance_id", ids)}
     ),
+    handoff AS (
+      SELECT run.thread_id, MAX(run.ordinal) AS ordinal
+      FROM orchestration_v2_projection_runs run
+      JOIN orchestration_v2_projection_messages message
+        ON message.message_id = json_extract(run.payload_json, '$.userMessageId')
+      WHERE run.provider_instance_id IS NOT NULL
+        AND NOT ${sql.in("run.provider_instance_id", ids)}
+        AND json_extract(message.payload_json, '$.createdBy') = 'user'
+        AND json_extract(message.payload_json, '$.creationSource') IN ('web', 'mobile')
+      GROUP BY run.thread_id
+    ),
     locked AS (
-      SELECT thread_id, instance_id FROM used
+      SELECT used.thread_id, used.instance_id FROM used
+      LEFT JOIN handoff ON handoff.thread_id = used.thread_id
+      WHERE handoff.ordinal IS NULL OR used.ordinal > handoff.ordinal
       UNION
       SELECT child.thread_id, locked.instance_id
       FROM orchestration_v2_projection_threads child
       JOIN locked ON json_extract(child.payload_json, '$.lineage.parentThreadId') = locked.thread_id
+      WHERE child.thread_id NOT IN (SELECT thread_id FROM handoff)
     )
   `;
 
@@ -238,5 +254,5 @@ export function lockedSelection(
 /** Refuses an instance a locked thread does not allow. */
 export function lockRefusal(lock: SensitiveAccountLock, instanceId: string): string | null {
   if (lock.size === 0 || lock.has(instanceId as ProviderInstanceId)) return null;
-  return `This thread, or the thread it was started from, has run on the sensitive account ${[...lock].join(", ")}, so it can only run there, not on ${instanceId}.`;
+  return `This thread, or the thread it was started from, has run on the sensitive account ${[...lock].join(", ")}, so only the user, by sending a turn from the app, can move it to ${instanceId}.`;
 }

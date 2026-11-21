@@ -25,7 +25,10 @@ const insertThread = (input: {
   readonly instanceId: string;
   readonly worktreePath?: string;
   readonly parentThreadId?: string;
-  readonly runInstanceIds?: ReadonlyArray<string>;
+  readonly runInstanceIds?: ReadonlyArray<
+    | string
+    | { readonly instanceId: string; readonly createdBy: string; readonly creationSource: string }
+  >;
 }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -44,17 +47,34 @@ const insertThread = (input: {
         '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z', ${payload}, ${input.instanceId}
       )
     `;
-    for (const [ordinal, instanceId] of (input.runInstanceIds ?? []).entries()) {
+    for (const [index, run] of (input.runInstanceIds ?? []).entries()) {
+      const ordinal = index + 1;
+      const runId = `${input.threadId}-run-${ordinal}`;
+      const instanceId = typeof run === "string" ? run : run.instanceId;
+      const messageId = `${runId}-message`;
       yield* sql`
         INSERT INTO orchestration_v2_projection_runs (
           run_id, thread_id, ordinal, provider, status, requested_at, payload_json, provider_instance_id
         ) VALUES (
-          ${`${input.threadId}-run-${ordinal}`}, ${input.threadId}, ${ordinal}, 'claudeAgent',
-          'completed', '1970-01-01T00:00:00Z', '{}', ${instanceId}
+          ${runId}, ${input.threadId}, ${ordinal}, 'claudeAgent', 'completed', '1970-01-01T00:00:00Z',
+          ${JSON.stringify({ userMessageId: messageId })}, ${instanceId}
+        )
+      `;
+      const sender = typeof run === "string" ? { createdBy: "agent", creationSource: "mcp" } : run;
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_messages (
+          message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json
+        ) VALUES (
+          ${messageId}, ${input.threadId}, ${runId}, 'user', 0, '1970-01-01T00:00:00Z',
+          '1970-01-01T00:00:00Z',
+          ${JSON.stringify({ createdBy: sender.createdBy, creationSource: sender.creationSource })}
         )
       `;
     }
   });
+
+const fromApp = (instanceId: string) =>
+  ({ instanceId, createdBy: "user", creationSource: "mobile" }) as const;
 
 const layerTest = Layer.mergeAll(SqlitePersistence.layerMemory, NodeServices.layer);
 
@@ -127,6 +147,60 @@ it.layer(layerTest)("SensitiveAccountPolicy", (it) => {
         ),
         null,
       );
+    }),
+  );
+
+  it.effect("releases a thread the user moves off the sensitive instance from the app", () =>
+    Effect.gen(function* () {
+      yield* insertProject("handoff-project", "/handoff-project");
+      yield* insertThread({
+        threadId: "handed-off",
+        projectId: "handoff-project",
+        instanceId: "claudeAgent",
+        runInstanceIds: ["claudeWork", fromApp("claudeAgent"), "claudeAgent"],
+      });
+      yield* insertThread({
+        threadId: "handed-off-child",
+        projectId: "handoff-project",
+        instanceId: "claudeAgent",
+        parentThreadId: "handed-off",
+      });
+      yield* insertThread({
+        threadId: "back-on-work",
+        projectId: "handoff-project",
+        instanceId: "claudeWork",
+        runInstanceIds: ["claudeWork", fromApp("claudeAgent"), fromApp("claudeWork")],
+      });
+      // An agent's turn, or the user's own turn on the sensitive instance, is no handoff.
+      yield* insertThread({
+        threadId: "moved-by-agent",
+        projectId: "handoff-project",
+        instanceId: "claudeAgent",
+        runInstanceIds: [fromApp("claudeWork"), "claudeAgent"],
+      });
+      yield* insertThread({
+        threadId: "work-parent",
+        projectId: "handoff-project",
+        instanceId: "claudeWork",
+        runInstanceIds: ["claudeWork"],
+      });
+      yield* insertThread({
+        threadId: "child-handed-off",
+        projectId: "handoff-project",
+        instanceId: "claudeAgent",
+        parentThreadId: "work-parent",
+        runInstanceIds: [fromApp("claudeAgent")],
+      });
+
+      const policy = yield* SensitiveAccountPolicy.make(new Set(["claudeWork"]));
+      const lockOf = (threadId: string) =>
+        policy.lockForThread(ThreadId.make(threadId)).pipe(Effect.map((lock) => [...lock]));
+      assert.deepStrictEqual(yield* lockOf("handed-off"), []);
+      assert.deepStrictEqual(yield* lockOf("handed-off-child"), []);
+      assert.deepStrictEqual(yield* lockOf("back-on-work"), ["claudeWork"]);
+      assert.deepStrictEqual(yield* lockOf("moved-by-agent"), ["claudeWork"]);
+      assert.deepStrictEqual(yield* lockOf("work-parent"), ["claudeWork"]);
+      assert.deepStrictEqual(yield* lockOf("child-handed-off"), []);
     }),
   );
 
