@@ -995,9 +995,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   ...KEYBINDING_SEARCH_ITEMS,
   {
     id: "device-approval",
-    title: "Device approval",
+    title: msg("Device approval"),
     to: "/settings/device-approval",
-    searchTerms: ["sudo root phone fingerprint approve pam elevation administrator password"],
+    searchTerms: [msg("sudo root phone fingerprint approve pam elevation administrator password")],
     deviceApprovalOnly: true,
   },
   {

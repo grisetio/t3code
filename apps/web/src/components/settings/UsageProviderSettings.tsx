@@ -55,11 +55,13 @@ export function UsageProviderSettings({
       >
         <SettingsRow
           id="codex-account-usage"
-          title="Codex account usage"
-          description="Show your Codex plan limits without adding Codex as a provider. Uses the signed-in Codex CLI on this server."
+          title={gt("Codex account usage")}
+          description={gt(
+            "Show your Codex plan limits without adding Codex as a provider. Uses the signed-in Codex CLI on this server.",
+          )}
           control={
             <Switch
-              aria-label="Codex account usage"
+              aria-label={gt("Codex account usage")}
               checked={codexAccountUsageEnabled}
               disabled={readOnly}
               onCheckedChange={(enabled) => updateSettings({ codexAccountUsageEnabled: enabled })}
