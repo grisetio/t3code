@@ -180,6 +180,7 @@ const ROUTE_TITLES: Readonly<Record<string, string>> = {
   SettingsLabs: msg("Labs"),
   SettingsProviderAccounts: msg("Providers"),
   SettingsEnvironmentMaintenance: msg("Maintenance"),
+  SettingsDeviceApproval: msg("Device approval"),
   SettingsNotifications: msg("Notifications"),
   SettingsThreads: msg("Threads"),
   SettingsAbout: msg("About"),
@@ -296,7 +297,7 @@ const SETTINGS_SCREENS = {
   SettingsDeviceApproval: createNativeStackScreen({
     screen: SettingsDeviceApprovalRouteScreen,
     linking: "settings/device-approval",
-    options: settingsPage("Device approval"),
+    options: settingsPage(),
   }),
   SettingsNotifications: createNativeStackScreen({
     screen: SettingsNotificationsRouteScreen,
