@@ -275,6 +275,7 @@ it.effect("keeps an account's last good reading when the hub's next read of it i
         ),
       ),
       NodeCrypto.layer,
+      NodeServices.layer,
     ]),
   );
 });
