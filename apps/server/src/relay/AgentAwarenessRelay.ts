@@ -16,7 +16,8 @@ import {
 import {
   type SubagentRequestAwareness,
   projectThreadAwarenessV2,
-  subagentAwaitsApproval,
+  subagentAwaitsUser,
+  turnItemCanChangeUserWait,
 } from "@t3tools/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -50,6 +51,7 @@ import {
 import { EnvironmentSigningKey } from "../cloud/environmentKeys.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 
@@ -75,12 +77,6 @@ function isTurnItemPayload(
   );
 }
 
-/** Turn items the thread shell folds into its pending request (ProjectionStore). */
-const PENDING_REQUEST_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
-  "secret_request",
-  "elevation_request",
-]);
-
 function shouldPublishAgentAwarenessEvent(
   event: Pick<OrchestrationV2DomainEvent, "type"> & { readonly payload?: unknown },
 ): boolean {
@@ -101,6 +97,7 @@ function shouldPublishAgentAwarenessEvent(
     case "thread.metadata-updated":
     case "thread.pull-request-link-updated":
     case "thread.pull-request-synced":
+    case "thread.issue-synced":
     case "thread.settled":
     case "thread.model-selection-updated":
     case "thread.provider-switched":
@@ -122,6 +119,7 @@ function shouldPublishAgentAwarenessEvent(
     case "thread.active-reordered":
     case "thread.tags-updated":
     case "thread.visited":
+    case "thread.visit-recorded":
     case "thread.marked-unread":
     case "thread.runtime-mode-updated":
     case "thread.interaction-mode-updated":
@@ -137,7 +135,9 @@ function shouldPublishAgentAwarenessEvent(
       return (
         isTurnItemPayload(event.payload) &&
         (turnItemUpdateCanEndBackgroundWork(event.payload) ||
-          PENDING_REQUEST_TURN_ITEM_TYPES.has(event.payload.type))
+          turnItemCanChangeUserWait(event.payload) ||
+          // The thread shell folds a sudo into its pending request (ProjectionStore).
+          event.payload.type === "elevation_request")
       );
     case "message.updated":
     case "plan.updated":
@@ -207,6 +207,8 @@ function resolveAgentActivityPublishingStartupState(input: {
 const RELAY_AGENT_ACTIVITY_DETAIL_MAX_LENGTH = 160;
 const REDACTED_RELAY_AGENT_FAILURE_DETAIL = "The agent run failed.";
 const RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
+// Nothing else re-queues a thread when the network returns, so a lost terminal state is retried until it lands.
+const RELAY_AGENT_ACTIVITY_STEADY_RETRY_DELAY_MS = 60_000;
 
 function sanitizeRelayAgentActivityState(
   state: RelayAgentActivityState | null,
@@ -318,7 +320,7 @@ interface SubagentAlert {
 }
 
 const waitingApprovalId = (thread: AgentAwarenessThread | null) =>
-  thread !== null && thread.archivedAt === null && subagentAwaitsApproval(thread)
+  thread !== null && thread.archivedAt === null && subagentAwaitsUser(thread)
     ? thread.pendingRuntimeRequest?.id
     : undefined;
 
@@ -364,10 +366,25 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
     state?.phase !== projectThreadAwarenessV2(awarenessInput)?.phase;
   return {
     projectId: input.thread.value.projectId,
-    state: sanitizeRelayAgentActivityState(state),
+    state: snoozedCompletion(input.thread.value, state)
+      ? null
+      : sanitizeRelayAgentActivityState(state),
     subagentWait: childDrivesWait ? input.pendingSubagentRequest : null,
     reason: "snapshot",
   };
+}
+
+// Checked at completion time, so a completion processed after the wake stays silent too.
+function snoozedCompletion(
+  thread: AgentAwarenessThread,
+  state: { readonly phase: string } | null,
+): boolean {
+  if (state?.phase !== "completed" || thread.latestRunCompletedAt == null) return false;
+  const completedAt = DateTime.toEpochMillis(thread.latestRunCompletedAt);
+  if (thread.snoozedAt != null && completedAt < DateTime.toEpochMillis(thread.snoozedAt)) {
+    return false;
+  }
+  return isSnoozed(thread, completedAt);
 }
 
 function terminalWorkSinceStart(thread: AgentAwarenessThread, startedAt: number): boolean {
@@ -387,7 +404,7 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
   return input.threads
     .filter((thread) => {
       // Publishing a waiting subagent republishes its top-level thread.
-      if (subagentAwaitsApproval(thread)) return true;
+      if (subagentAwaitsUser(thread)) return true;
       const project = projectById.get(thread.projectId);
       if (!project) {
         return false;
@@ -769,7 +786,11 @@ export const make = Effect.gen(function* () {
       if (requestId !== entry.requestId) subagentRequests.set(childId, { ...entry, requestId });
       // The newest wait is the one to announce.
       if (pending === null || DateTime.isGreaterThan(child.updatedAt, pending.updatedAt)) {
-        pending = { requestId, updatedAt: child.updatedAt };
+        pending = {
+          requestId,
+          updatedAt: child.updatedAt,
+          waitsForInput: child.pendingRuntimeRequest?.kind === "user_input",
+        };
       }
     }
     return pending;
@@ -804,11 +825,15 @@ export const make = Effect.gen(function* () {
 
   schedulePublishRetry = Effect.fnUntraced(function* (threadId: ThreadId) {
     const attempts = publishRetries.get(threadId)?.attempts ?? 0;
-    const delayMs = RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts];
-    if (delayMs === undefined) {
-      // Retain exhausted budgets until activity or success resets them; old timers must not restart retries.
-      yield* Effect.logWarning("agent activity publish retry budget exhausted", { threadId });
-      return;
+    const delayMs =
+      RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts] ?? RELAY_AGENT_ACTIVITY_STEADY_RETRY_DELAY_MS;
+    if (attempts === RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS.length) {
+      yield* Effect.logWarning(
+        "agent activity publish retry budget exhausted; retrying every minute",
+        {
+          threadId,
+        },
+      );
     }
     const retry = {
       attempts: attempts + 1,

@@ -73,6 +73,7 @@ export interface ThreadTitleGenerationInput {
   /** The thread this text is for; a sensitive thread keeps the call on its account. */
   threadId?: ThreadId | undefined;
   message: string;
+  projectTitle?: string | undefined;
   previousTitle?: string | undefined;
   forkSource?: ThreadTitleForkSource | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;

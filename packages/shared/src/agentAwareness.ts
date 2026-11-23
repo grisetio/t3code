@@ -27,10 +27,23 @@ export interface SubagentRequestAwareness {
   readonly requestId: RuntimeRequestId;
   /** The child's own update time, which moves whenever its request changes. */
   readonly updatedAt: DateTime.Utc;
+  /** A card only the user can answer, rather than an approval. */
+  readonly waitsForInput?: boolean;
 }
 
-/** Provider-native subagents ask on their parent; the coordinator answers child questions. */
-export function subagentAwaitsApproval(
+/**
+ * Turn items that can start or end a subagent's user-only wait: its secret or link card,
+ * or a user message that moves past a link card. Filters that drop subagent transcript
+ * updates must keep these, or the parent's "Input needed" never appears or never clears.
+ */
+export const turnItemCanChangeUserWait = (item: { readonly type: string }) =>
+  item.type === "secret_request" || item.type === "link_request" || item.type === "user_message";
+
+/**
+ * Provider-native subagents ask on their parent. The coordinator answers child questions,
+ * but not a card only the user can answer, such as a secret.
+ */
+export function subagentAwaitsUser(
   thread: Pick<
     OrchestrationV2ThreadShell,
     "activityRunStatus" | "creationSource" | "lineage" | "pendingRuntimeRequest"
@@ -40,7 +53,7 @@ export function subagentAwaitsApproval(
   return (
     kind !== undefined &&
     kind !== "auth_refresh" &&
-    kind !== "user_input" &&
+    (kind !== "user_input" || thread.pendingRuntimeRequest?.userOnly === true) &&
     // A sudo publishes its own row, so its phone alert opens the thread that holds the card.
     thread.pendingRuntimeRequest?.elevation !== true &&
     thread.lineage.relationshipToParent === "subagent" &&
@@ -90,7 +103,7 @@ export interface ProjectThreadAwarenessV2Input {
     | "title"
     | "updatedAt"
   >;
-  /** The approval a live subagent below this thread is waiting on. */
+  /** What a live subagent below this thread is waiting on the user for. */
   readonly pendingSubagentRequest?: SubagentRequestAwareness | null;
 }
 
@@ -104,7 +117,7 @@ export function projectThreadAwarenessV2(
     return null;
   }
   const subagentRequest = input.pendingSubagentRequest ?? null;
-  const phase = resolveThreadAwarenessPhaseV2(thread, subagentRequest !== null);
+  const phase = resolveThreadAwarenessPhaseV2(thread, subagentRequest);
   if (phase === null) {
     return null;
   }
@@ -151,7 +164,7 @@ export function projectThreadAwarenessV2(
 
 function resolveThreadAwarenessPhaseV2(
   thread: ProjectThreadAwarenessV2Input["thread"],
-  childAwaitsApproval: boolean,
+  subagentRequest: SubagentRequestAwareness | null,
 ): AgentAwarenessPhase | null {
   if (thread.pendingRuntimeRequest?.kind === "user_input") return "waiting_for_input";
   if (
@@ -162,7 +175,9 @@ function resolveThreadAwarenessPhaseV2(
   }
   // The parent can finish its own turn while a delegated child keeps working,
   // so a child's request outranks the parent's run status.
-  if (childAwaitsApproval) return "waiting_for_approval";
+  if (subagentRequest !== null) {
+    return subagentRequest.waitsForInput === true ? "waiting_for_input" : "waiting_for_approval";
+  }
   switch (thread.activityRunStatus ?? thread.status) {
     case "preparing":
     case "starting":
