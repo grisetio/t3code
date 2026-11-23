@@ -108,7 +108,7 @@ export function fallbackTextGenerationModelSelection(
   return null;
 }
 
-function defaultTextGenerationModel(driver: ProviderDriverKind): string {
+export function defaultTextGenerationModel(driver: ProviderDriverKind): string {
   return (
     DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
     DEFAULT_MODEL_BY_PROVIDER[driver] ??

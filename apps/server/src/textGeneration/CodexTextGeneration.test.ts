@@ -1,6 +1,7 @@
 import {
   ProjectId,
   ProviderDriverKind,
+  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   type ModelSelection,
   type ServerProvider,
 } from "@t3tools/contracts";

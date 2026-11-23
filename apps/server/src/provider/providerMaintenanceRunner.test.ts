@@ -32,6 +32,7 @@ import * as TextGenerators from "../textGeneration/TextGenerators.ts";
 import * as ProviderInstallationGate from "./ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import * as SensitiveAccountPolicy from "./SensitiveAccountPolicy.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
@@ -1052,6 +1053,12 @@ describe("providerMaintenanceRunner", () => {
             Layer.mock(TextGenerators.TextGenerators)({ runner: () => Effect.undefined }),
             Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
               resolveLink: () => Effect.die("unused"),
+            }),
+            Layer.mock(SensitiveAccountPolicy.SensitiveAccountPolicy)({
+              lockForPath: () => Effect.succeed(new Set()),
+              lockForThread: () => Effect.succeed(new Set()),
+              textGenerationForPath: () => Effect.succeed(new Set()),
+              textGenerationForThread: () => Effect.succeed(new Set()),
             }),
           ),
         ),
