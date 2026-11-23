@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- Device approval copy (fork) builds sentences from parts and stays English until it is rewritten for translation. */
 import { useAtomValue } from "@effect/atom-react";
 import type { PendingElevationRequest } from "@t3tools/client-runtime/state/elevation";
 import { StackActions, useNavigation } from "@react-navigation/native";

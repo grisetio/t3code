@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- Device approval copy (fork) builds sentences from parts and stays English until it is rewritten for translation. */
 import type { DecodedElevationPayload } from "@t3tools/client-runtime/elevation";
 import type { ElevationRequestId, ElevationRespondInput } from "@t3tools/contracts";
 import * as Base64Url from "effect/encoding/Base64Url";

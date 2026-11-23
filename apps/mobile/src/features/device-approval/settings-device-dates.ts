@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- Device approval copy (fork) builds sentences from parts and stays English until it is rewritten for translation. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const startOfDay = (epochMilliseconds: number) => {

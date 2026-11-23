@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- Device approval copy (fork) builds sentences from parts and stays English until it is rewritten for translation. */
 import type { ElevationCheck, ElevationStatus } from "@t3tools/contracts";
 
 import type { ElevationPasswordWords } from "./elevation.ts";

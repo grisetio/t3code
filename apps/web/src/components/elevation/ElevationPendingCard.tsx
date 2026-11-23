@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- Device approval copy (fork) builds sentences from parts and stays English until it is rewritten for translation. */
 import { useAtomValue } from "@effect/atom-react";
 import {
   ELEVATION_APPROVE_ON_PHONE,
