@@ -587,15 +587,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return { connection, scope: connectionScope };
         }).pipe(
           Effect.provideService(Scope.Scope, connectionScope),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(AgentScopeThreadId, input.threadId),
+          Effect.provideService(ProviderProcesses, providerProcesses),
           Effect.onExit((exit) =>
             Exit.isFailure(exit) ? Scope.close(connectionScope, exit) : Effect.void,
           ),
         );
       });
       let started = yield* startConnection(initialSessionPath).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(AgentScopeThreadId, input.threadId),
-        Effect.provideService(ProviderProcesses, providerProcesses),
         Effect.mapError(
           (cause) =>
             new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -886,9 +886,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               yield* Queue.fail(connection.events, error);
               yield* Scope.close(started.scope, Exit.void);
               yield* sessionEventPermit.withPermits(1)(cancelPendingPrompts(yield* DateTime.now));
-              started = yield* startConnection().pipe(
-                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-              );
+              started = yield* startConnection();
               connection = started.connection;
               if (closed || stopRequested) {
                 yield* connection.terminate;

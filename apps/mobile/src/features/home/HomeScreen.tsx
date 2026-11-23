@@ -18,7 +18,6 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useIsFocused } from "@react-navigation/native";
 import {
   use,
   useEffect,
@@ -277,11 +276,7 @@ export function HomeScreen(props: HomeScreenProps) {
   };
   const onFabScroll = useFabScroll();
   const listRef = useRef<LegendListRef>(null);
-  const focused = useIsFocused();
-  // A native primary column stays in view while the detail beside it has focus.
-  const listOnScreen =
-    (focused || primaryColumn !== null) &&
-    (workspace?.state.selectedTab ?? "threads") === "threads";
+  const listOnScreen = props.visible && (workspace?.state.selectedTab ?? "threads") === "threads";
   const elevationRequests = (
     <ThreadlessElevationRequests
       onScreen={listOnScreen}
