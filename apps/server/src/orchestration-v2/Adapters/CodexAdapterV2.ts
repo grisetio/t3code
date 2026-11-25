@@ -775,16 +775,10 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
       };
     case "full-access":
       return {
-        // `never` also rejects browser and app access prompts before the client sees them.
-        approvalPolicy: {
-          granular: {
-            mcp_elicitations: true,
-            request_permissions: false,
-            rules: false,
-            sandbox_approval: false,
-            skill_approval: false,
-          },
-        },
+        // Codex 0.170 still sends command approvals (e.g. for `rm`) under a granular policy with
+        // every approval off, which stalls full-access turns. `never` stops those prompts, but it
+        // also rejects browser and app access prompts before the client sees them.
+        approvalPolicy: "never",
         approvalsReviewer: "user",
         sandboxPolicy: {
           type: "dangerFullAccess",
