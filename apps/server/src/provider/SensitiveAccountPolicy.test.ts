@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as TaskFolderStore from "../workspace/TaskFolderStore.ts";
 import * as SensitiveAccountPolicy from "./SensitiveAccountPolicy.ts";
 
 const insertProject = (projectId: string, workspaceRoot: string) =>
@@ -76,7 +77,10 @@ const insertThread = (input: {
 const fromApp = (instanceId: string) =>
   ({ instanceId, createdBy: "user", creationSource: "mobile" }) as const;
 
-const layerTest = Layer.mergeAll(SqlitePersistence.layerMemory, NodeServices.layer);
+const layerTest = Layer.provideMerge(
+  TaskFolderStore.layer,
+  Layer.mergeAll(SqlitePersistence.layerMemory, NodeServices.layer),
+);
 
 it.layer(layerTest)("SensitiveAccountPolicy", (it) => {
   it.effect("locks a thread, its children and its worktree, not its project", () =>
@@ -201,6 +205,54 @@ it.layer(layerTest)("SensitiveAccountPolicy", (it) => {
       assert.deepStrictEqual(yield* lockOf("moved-by-agent"), ["claudeWork"]);
       assert.deepStrictEqual(yield* lockOf("work-parent"), ["claudeWork"]);
       assert.deepStrictEqual(yield* lockOf("child-handed-off"), []);
+    }),
+  );
+
+  it.effect("counts a multi-repository thread's whole task folder as its worktree", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const taskRoot = path.join(root, "worktrees", "task");
+      const projectPath = path.join(taskRoot, "app");
+      const sibling = path.join(taskRoot, "lib");
+      const otherTask = path.join(root, "worktrees", "other", "lib");
+      for (const directory of [projectPath, path.join(sibling, "src"), otherTask]) {
+        yield* fs.makeDirectory(directory, { recursive: true });
+      }
+      yield* (yield* TaskFolderStore.TaskFolderStore).put({
+        root: taskRoot,
+        projectId: ProjectId.make("multi-project"),
+        projectRoot: path.join(root, "projects", "app"),
+        anchor: path.join(root, "projects"),
+        projectPath,
+        projectIsWorktree: true,
+        repositories: [
+          {
+            repositoryPath: path.join(root, "projects", "lib"),
+            worktreePath: sibling,
+            name: "lib",
+          },
+        ],
+      });
+
+      yield* insertProject("multi-project", path.join(root, "projects", "app"));
+      yield* insertThread({
+        threadId: "multi-work",
+        projectId: "multi-project",
+        instanceId: "claudeWork",
+        worktreePath: projectPath,
+      });
+
+      const locked = yield* SensitiveAccountPolicy.make(new Set(["claudeWork"]));
+      for (const cwd of [projectPath, sibling, path.join(sibling, "src")]) {
+        assert.deepStrictEqual([...(yield* locked.lockForPath(cwd))], ["claudeWork"], cwd);
+      }
+      assert.deepStrictEqual([...(yield* locked.lockForPath(otherTask))], []);
+
+      const self = yield* SensitiveAccountPolicy.make(new Set(), new Set(["claudeWork"]));
+      assert.deepStrictEqual([...(yield* self.textGenerationForPath(sibling))], ["claudeWork"]);
+      assert.deepStrictEqual([...(yield* self.textGenerationForPath(otherTask))], []);
     }),
   );
 

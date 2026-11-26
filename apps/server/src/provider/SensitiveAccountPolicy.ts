@@ -12,6 +12,8 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as TaskFolderStore from "../workspace/TaskFolderStore.ts";
+
 const SENSITIVE_PROVIDER_INSTANCES_ENV = "T3CODE_SENSITIVE_PROVIDER_INSTANCES";
 /** Instances that also write their own threads' helper text (titles, commit messages, ...), without a lock. */
 const SELF_TEXT_GENERATION_PROVIDER_INSTANCES_ENV =
@@ -39,7 +41,10 @@ export interface SensitiveAccountPolicyShape {
   readonly lockForThread: (
     threadId: ThreadId,
   ) => Effect.Effect<SensitiveAccountLock, SensitiveAccountPolicyError>;
-  /** The lock of every thread whose worktree contains `cwd`. */
+  /**
+   * The lock of every thread whose worktree contains `cwd`, counting a multi-repository thread's
+   * whole task folder as its worktree.
+   */
   readonly lockForPath: (
     cwd: string,
   ) => Effect.Effect<SensitiveAccountLock, SensitiveAccountPolicyError>;
@@ -52,7 +57,8 @@ export interface SensitiveAccountPolicyShape {
   ) => Effect.Effect<SensitiveAccountLock, SensitiveAccountPolicyError>;
   /**
    * The same for a call that names only a directory: the instances of the threads whose worktree
-   * contains `cwd`, when every one of them is a self text generation instance, else none.
+   * (or task folder) contains `cwd`, when every one of them is a self text generation instance,
+   * else none.
    */
   readonly textGenerationForPath: (
     cwd: string,
@@ -82,6 +88,7 @@ export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
 ) {
   const sql = yield* SqlClient.SqlClient;
   const path = yield* Path.Path;
+  const taskFolders = yield* TaskFolderStore.TaskFolderStore;
 
   // A thread stays locked after an agent or the server moves it to another instance, and
   // passes its lock to the forks and delegated tasks started from it, which carry its context.
@@ -125,6 +132,22 @@ export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
   };
 
+  // A multi-repository thread's `worktreePath` is only the project folder inside its task folder;
+  // the other repositories' worktrees sit beside it, so a path there stands for the project folder.
+  const pathTargets = Effect.fn("SensitiveAccountPolicy.pathTargets")(function* (cwd: string) {
+    const target = path.resolve(cwd);
+    const taskFolder = yield* taskFolders
+      .findContaining(target)
+      .pipe(
+        Effect.mapError(
+          (cause) => new SensitiveAccountPolicyError({ operation: `path ${cwd}`, cause }),
+        ),
+      );
+    return taskFolder === null ? [target] : [target, path.resolve(taskFolder.projectPath)];
+  });
+  const isInsideAny = (targets: ReadonlyArray<string>, worktreePath: string) =>
+    targets.some((target) => isInside(target, path.resolve(worktreePath)));
+
   const lockForThread = Effect.fn("SensitiveAccountPolicy.lockForThread")(function* (
     threadId: ThreadId,
   ) {
@@ -154,10 +177,10 @@ export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
         (cause) => new SensitiveAccountPolicyError({ operation: `path ${cwd}`, cause }),
       ),
     );
-    const target = path.resolve(cwd);
+    const targets = yield* pathTargets(cwd);
     const lock = new Set<ProviderInstanceId>();
     for (const row of rows) {
-      if (row.path !== null && row.path !== "" && isInside(target, path.resolve(row.path))) {
+      if (row.path !== null && row.path !== "" && isInsideAny(targets, row.path)) {
         lock.add(row.instanceId as ProviderInstanceId);
       }
     }
@@ -195,9 +218,9 @@ export const make = Effect.fn("SensitiveAccountPolicy.make")(function* (
           (cause) => new SensitiveAccountPolicyError({ operation: `path ${cwd}`, cause }),
         ),
       );
-      const target = path.resolve(cwd);
+      const targets = yield* pathTargets(cwd);
       const owners = rows.filter(
-        (row) => row.path !== null && row.path !== "" && isInside(target, path.resolve(row.path)),
+        (row) => row.path !== null && row.path !== "" && isInsideAny(targets, row.path),
       );
       // A worktree shared with a thread on another instance keeps the configured model.
       if (
@@ -230,7 +253,7 @@ export const layer = Layer.effect(
       parseSensitiveInstanceIds(env[SELF_TEXT_GENERATION_PROVIDER_INSTANCES_ENV]),
     ),
   ),
-);
+).pipe(Layer.provide(TaskFolderStore.layer));
 
 /**
  * Moves a selection onto the lock's account: the same model when the driver matches,
