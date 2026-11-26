@@ -116,10 +116,12 @@ import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { ElevationCommandRowExit } from "../device-approval/elevationHandover";
 import { startShimmerSteps } from "./work-shimmer-steps";
+import { THREAD_DISCLOSURE_TRANSITION_MS } from "./thread-disclosure-transition";
+
+export { THREAD_DISCLOSURE_TRANSITION_MS };
 
 const SHIMMER_WIDTH = 72;
 const SHIMMER_ICON_AND_GAP_WIDTH = 30;
-export const THREAD_DISCLOSURE_TRANSITION_MS = 180;
 const WORK_LOG_LAYOUT_TRANSITION = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 const WORK_LOG_DETAIL_ENTER_TRANSITION = FadeIn.duration(140);
 const WORK_LOG_DETAIL_EXIT_TRANSITION = FadeOut.duration(120);

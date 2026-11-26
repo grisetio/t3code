@@ -55,7 +55,8 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { REVIEW_WORKING_TREE_SECTION_ID } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
-import { THREAD_DISCLOSURE_TRANSITION_MS } from "../threads/thread-work-log";
+// Not from thread-work-log: the thread sidebar shows this card, and the work log reaches the sidebar.
+import { THREAD_DISCLOSURE_TRANSITION_MS } from "../threads/thread-disclosure-transition";
 import { approvalHaptic } from "./approvalHaptics";
 import { deviceApprovalKeys, useThisPhoneKeyId } from "./deviceApprovalKeys";
 import {
