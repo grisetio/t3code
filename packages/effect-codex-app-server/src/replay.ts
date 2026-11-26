@@ -203,7 +203,7 @@ function normalizeReplayFrame(value: unknown): unknown {
     normalized.params !== null
   ) {
     const params = { ...(normalized.params as Record<string, unknown>) };
-    // Full access sends `never`; recordings from upstream v0.1.11 sent this granular policy instead.
+    // Older recordings used `never` for full access, before MCP prompts were kept interactive.
     if (
       params.approvalPolicy === "never" ||
       stableStringify(params.approvalPolicy) ===

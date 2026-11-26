@@ -226,7 +226,15 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(auto.approvalPolicy, "on-request");
       assert.equal(auto.approvalsReviewer, "auto_review");
       assert.equal(auto.sandboxPolicy?.type, "workspaceWrite");
-      assert.equal(fullAccess.approvalPolicy, "never");
+      assert.deepEqual(fullAccess.approvalPolicy, {
+        granular: {
+          mcp_elicitations: true,
+          request_permissions: false,
+          rules: false,
+          sandbox_approval: false,
+          skill_approval: false,
+        },
+      });
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
     }),
