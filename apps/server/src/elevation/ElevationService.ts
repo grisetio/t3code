@@ -72,6 +72,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProcessLauncher from "../process/ProcessLauncher.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { attribute, type LiveRun, type ServerSudo } from "./attribution.ts";
 import { uncommittedChanges } from "./changes.ts";
@@ -146,6 +147,8 @@ export interface ElevationOptions {
   readonly devicesStatePath: string;
   /** Read when a sudo asks, so servers that never use device approval never load FFI. */
   readonly server: () => { readonly pid: number; readonly startTime: number | null };
+  /** Optional start-time lookup for auxiliary server helpers such as Linux ProcessLauncher. */
+  readonly processStartTime?: (pid: number) => number | null;
   /** The PAM module runs inside setuid sudo, so its connection comes from root. */
   readonly trustedPeerUid: number;
   readonly peerUid: (socket: NodeNet.Socket) => number | null;
@@ -294,6 +297,7 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  const processLauncher = yield* ProcessLauncher.ProcessLauncher;
   const providerProcesses = yield* ProviderProcesses;
   const instructions = yield* DeviceApprovalInstructions;
   const platform = yield* HostProcess.Platform;
@@ -559,10 +563,15 @@ export const make = Effect.fn("ElevationService.make")(function* (options: Eleva
       return;
     }
     if (!options.peerCredentialsSupported() && !options.plausiblePeer(decoded.value)) return;
+    const launcherPid = yield* processLauncher.currentPid;
     const input = {
       hello: decoded.value,
       now: DateTime.toEpochMillis(yield* DateTime.now),
       server: serverProcess(),
+      launcher:
+        launcherPid === undefined
+          ? null
+          : { pid: launcherPid, startTime: options.processStartTime?.(launcherPid) ?? null },
       providerProcesses: providerProcesses.list(),
       serverSudos: [...serverSudos],
     };
@@ -1448,6 +1457,7 @@ export const layer = Layer.effect(
       attestation: elevationAttestation({ env, packaged }),
       devicesStatePath: NodePath.join(config.stateDir, "elevation-devices.json"),
       server: () => ({ pid: process.pid, startTime: processStartTime(host, process.pid) }),
+      processStartTime: (pid) => processStartTime(host, pid),
       trustedPeerUid: 0,
       peerUid: (socket) => socketPeerUid(host, socket),
       peerCredentialsSupported: () => peerCredentialsSupported(host),

@@ -634,4 +634,78 @@ describe("attribute", () => {
       }),
     ).toEqual({ type: "not_mine" });
   });
+
+  it("strips a Linux ProcessLauncher worker below the server for own sudos and shared providers", () => {
+    const launcher = { pid: 101, startTime: 5100 };
+    const launcherEntry = entry(launcher.pid, ["t3", "__process-launcher"], launcher.startTime);
+    const own = { argv: ["sudo", "-n", "true"], explanation: "Test device approval" };
+
+    expect(
+      attribute({
+        hello: { argv: ["/usr/bin/sudo", "-n", "true"], chain: [launcherEntry, serverEntry] },
+        server,
+        launcher,
+        now,
+        liveRuns: [],
+        providerProcesses: [],
+        serverSudos: [own],
+      }),
+    ).toEqual({ type: "mine", run: null, explanation: "Test device approval", serverSudo: own });
+
+    // A reused launcher pid with another start time must not be stripped.
+    expect(
+      attribute({
+        hello: {
+          argv: ["/usr/bin/sudo", "-n", "true"],
+          chain: [entry(launcher.pid, ["bash"], 9999), serverEntry],
+        },
+        server,
+        launcher,
+        now,
+        liveRuns: [],
+        providerProcesses: [],
+        serverSudos: [own],
+      }),
+    ).toEqual({ type: "not_mine" });
+
+    // Multi-thread providers (threadId: null) spawned through ProcessLauncher still claim fallback sudos.
+    const providerProcesses = [
+      { pid: 300, startTime: 6000, threadId: null, driver: "codex" as const },
+    ];
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "ls"],
+          chain: [
+            entry(320, ["bash", "-c", "./script.sh"]),
+            entry(300, ["codex", "app-server"]),
+            launcherEntry,
+            serverEntry,
+          ],
+        },
+        server,
+        launcher,
+        now,
+        liveRuns: [],
+        providerProcesses,
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "mine", run: null, explanation: null, driver: "codex" });
+
+    // Non-provider children under the launcher (such as a terminal shell) stay unclaimed.
+    expect(
+      attribute({
+        hello: {
+          argv: ["sudo", "ls"],
+          chain: [entry(400, ["-zsh"]), launcherEntry, serverEntry],
+        },
+        server,
+        launcher,
+        now,
+        liveRuns: [],
+        providerProcesses,
+        serverSudos: [],
+      }),
+    ).toEqual({ type: "not_mine" });
+  });
 });

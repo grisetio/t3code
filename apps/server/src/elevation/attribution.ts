@@ -138,11 +138,18 @@ const sameArgv = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
   basename(left[0]) === basename(right[0]) &&
   left.every((value, index) => index === 0 || value === right[index]);
 
+interface ProcessIdentity {
+  readonly pid: number;
+  readonly startTime: number | null;
+}
+
 interface AttributionInput {
   readonly hello: Pick<Hello, "argv" | "chain">;
   /** Epoch millis when the sudo asked. */
   readonly now: number;
-  readonly server: { readonly pid: number; readonly startTime: number | null };
+  readonly server: ProcessIdentity;
+  /** On Linux, `ProcessLauncher` spawns commands through a helper worker below the server. */
+  readonly launcher?: ProcessIdentity | null;
   readonly liveRuns: ReadonlyArray<LiveRun>;
   readonly providerProcesses: ReadonlyArray<ProviderProcess>;
   readonly serverSudos: ReadonlyArray<ServerSudo>;
@@ -150,7 +157,7 @@ interface AttributionInput {
 
 const isProcessAt =
   (entry: Hello["chain"][number]) =>
-  (process: Pick<ProviderProcess, "pid" | "startTime">): boolean =>
+  (process: ProcessIdentity): boolean =>
     process.pid === entry.pid &&
     (process.startTime === null || process.startTime === entry.startTime);
 
@@ -167,14 +174,17 @@ export function attribute(input: AttributionInput): Attribution {
 
 function attributeThread(input: AttributionInput): Attribution {
   const { hello, server } = input;
-  const serverIndex = hello.chain.findIndex(
-    (entry) =>
-      entry.pid === server.pid &&
-      (server.startTime === null || entry.startTime === server.startTime),
-  );
+  const serverIndex = hello.chain.findIndex((entry) => isProcessAt(entry)(server));
   // Everything an agent runs descends from this server.
   if (serverIndex === -1) return NOT_MINE;
-  if (serverIndex === 0) {
+  const rawBelowServer = hello.chain.slice(0, serverIndex);
+  const launcher = input.launcher ?? null;
+  const directChild = rawBelowServer.at(-1);
+  const belowServer =
+    launcher !== null && directChild !== undefined && isProcessAt(directChild)(launcher)
+      ? rawBelowServer.slice(0, -1)
+      : rawBelowServer;
+  if (belowServer.length === 0) {
     const own = input.serverSudos.find((sudo) => sameArgv(sudo.argv, hello.argv));
     return own === undefined
       ? NOT_MINE
@@ -184,7 +194,6 @@ function attributeThread(input: AttributionInput): Attribution {
   // A shell execs its last command, so a lone `sudo …` has no shell above it:
   // sudo's own argv is matched inside the command text, and an ancestor's argv
   // (the shell) must contain the command text.
-  const belowServer = hello.chain.slice(0, serverIndex);
   const levels = [hello.argv, ...belowServer.map((entry) => entry.argv)];
   type Command = LiveRun["commands"][number];
   type Level = { readonly level: number; readonly argv: ReadonlyArray<string> };
