@@ -132,6 +132,7 @@ function timeline(item: ElevationRequestItem, foldsAfter = false) {
           awaitingUser: false,
           isPreparingWorktree: false,
           providerStartingLabel: null,
+          providerStarting: null,
           latestRunId: runId,
           backgroundWorktreeSetup: null,
           elevationFoldRunIds: new Set(foldsAfter ? [runId] : []),
