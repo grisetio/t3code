@@ -61,7 +61,7 @@ function ButtonBody(props: ButtonProps & { readonly fill?: string }) {
       onPress={props.onPress}
       className={cn(
         "flex-row items-center justify-center gap-2 rounded-full active:opacity-70",
-        props.size === "compact" ? "min-h-10 px-5" : "min-h-12 px-6",
+        props.size === "compact" ? "min-h-10 px-5" : "min-h-[44px] px-6 android:min-h-[48px]",
         props.fullWidth ? "w-full" : "self-start",
         disabled ? "bg-subtle-strong" : containerClassName,
       )}

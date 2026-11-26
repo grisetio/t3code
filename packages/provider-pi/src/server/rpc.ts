@@ -14,6 +14,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { AgentScopeThreadId } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { ProviderProcesses } from "@t3tools/shared/ProviderProcesses";
+import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   MAX_TOOL_OUTPUT_IMAGES,
@@ -283,7 +284,12 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
   const terminateWindowsTree = Effect.gen(function* () {
     if (hasExited()) return;
     const taskkill = yield* spawner.spawn(
-      ChildProcess.make("taskkill", ["/PID", String(child.pid), "/T", "/F"]),
+      ChildProcess.make(windowsSystem32Path(yield* HostProcess.Environment, "taskkill.exe"), [
+        "/PID",
+        String(child.pid),
+        "/T",
+        "/F",
+      ]),
     );
     yield* taskkill.exitCode;
   }).pipe(Effect.scoped, Effect.ignore);

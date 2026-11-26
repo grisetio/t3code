@@ -13,6 +13,7 @@ import { ChevronDownIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
 import { EnvironmentSubagentAvatar, SubagentElapsed, V2LifecycleRow } from "./V2LifecycleRow";
+import { FeedbackRequestCard } from "./FeedbackRequestCard";
 import { LinkRequestCard } from "./LinkRequestCard";
 import { ElevationRequestCard } from "./ElevationRequestCard";
 import { SecretRequestCard } from "./SecretRequestCard";
@@ -42,6 +43,15 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
         visibility={visibility}
         commandKey={elevationLinkedCommandKey(row.projectedItem)}
         command={row.elevationCommand}
+      />
+    );
+  }
+  if (item.type === "feedback_request") {
+    return (
+      <FeedbackRequestCard
+        environmentId={ctx.activeThreadEnvironmentId}
+        item={item}
+        visibility={visibility}
       />
     );
   }
