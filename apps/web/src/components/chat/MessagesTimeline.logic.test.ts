@@ -537,11 +537,16 @@ describe("deriveMessagesTimelineRows", () => {
 
   it("leaves the live turn to a card that already says what it's doing", () => {
     const fixture = makeStreamingTimelineFixture();
+    // A finished reply: Thinking never shows below one that is still streaming.
     const input = {
       timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
         visibleTurnItems: fixture.visibleTurnItems,
         optimisticMessages: [],
-      }),
+      }).map((entry) =>
+        entry.kind === "message"
+          ? { ...entry, message: { ...entry.message, streaming: false } }
+          : entry,
+      ),
       isWorking: true,
       runningRunId: fixture.runId,
       activeTurnStartedAt: fixture.time(5),
