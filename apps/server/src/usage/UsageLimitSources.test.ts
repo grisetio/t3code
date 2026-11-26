@@ -183,6 +183,7 @@ it.effect("publishes validated HTTP quotas as display-only accounts", () => {
       }),
       Layer.succeed(HttpClient.HttpClient, client),
       NodeCrypto.layer,
+      NodeServices.layer,
     ]),
   );
 });
